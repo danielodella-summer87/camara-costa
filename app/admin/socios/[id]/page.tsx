@@ -1,14 +1,19 @@
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
 import EditSocioForm from "./EditSocioForm";
+import SocioAcciones from "./SocioAcciones";
 
 type Params = { id: string };
 
-export default async function SocioDetailPage({
-  params,
-}: {
-  params: Promise<Params>;
-}) {
+type Accion = {
+  id: string;
+  socio_id: string;
+  tipo: string;
+  nota: string | null;
+  realizada_at: string;
+};
+
+export default async function SocioDetailPage({ params }: { params: Promise<Params> }) {
   const { id } = await params;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -18,7 +23,7 @@ export default async function SocioDetailPage({
     auth: { persistSession: false },
   });
 
-  // ✅ Traemos el socio desde la VIEW (ya viene `alta`, `semaforo`, `proxima_accion`)
+  // Socio desde la VIEW
   const { data: socio, error: socioError } = await supabase
     .from("v_socio_inteligente")
     .select("*")
@@ -28,18 +33,13 @@ export default async function SocioDetailPage({
   if (socioError || !socio) {
     return (
       <div className="p-10">
-        <Link
-          href="/admin/socios"
-          className="text-sm text-slate-600 hover:underline"
-        >
+        <Link href="/admin/socios" className="text-sm text-slate-600 hover:underline">
           ← Volver a socios
         </Link>
 
         <div className="mt-6 rounded-xl border bg-white p-6">
-          <div className="font-semibold text-red-600">
-            No pude cargar el socio.
-          </div>
-          <div className="mt-2 text-sm text-slate-600">
+          <div className="text-red-600 font-semibold">No pude cargar el socio.</div>
+          <div className="text-sm text-slate-600 mt-2">
             {socioError?.message ?? "No se encontró el socio."}
           </div>
         </div>
@@ -47,12 +47,19 @@ export default async function SocioDetailPage({
     );
   }
 
+  // Acciones (últimas 25)
+  const { data: accionesRows } = await supabase
+    .from("socio_acciones")
+    .select("id,socio_id,tipo,nota,realizada_at")
+    .eq("socio_id", id)
+    .order("realizada_at", { ascending: false })
+    .limit(25);
+
+  const acciones: Accion[] = Array.isArray(accionesRows) ? (accionesRows as any) : [];
+
   return (
     <div className="p-10">
-      <Link
-        href="/admin/socios"
-        className="text-sm text-slate-600 hover:underline"
-      >
+      <Link href="/admin/socios" className="text-sm text-slate-600 hover:underline">
         ← Volver a socios
       </Link>
 
@@ -61,25 +68,20 @@ export default async function SocioDetailPage({
           <h1 className="text-2xl font-semibold">{socio.nombre}</h1>
 
           <div className="text-sm text-slate-600">
-            ID: <span className="font-mono">{socio.id}</span> · Plan:{" "}
-            {socio.plan ?? "—"} · Estado: {socio.estado ?? "—"}
+            ID: <span className="font-mono">{socio.id}</span> · Plan: {socio.plan} · Estado: {socio.estado}
           </div>
 
           <div className="text-sm text-slate-600">
-            Alta: {socio.alta ?? "—"} · Semáforo: {socio.semaforo ?? "—"} ·
-            Próxima acción: {socio.proxima_accion ?? "—"}
+            Alta: {socio.alta ?? "—"} · Semáforo: {socio.semaforo ?? "—"} · Próxima acción:{" "}
+            {socio.proxima_accion ?? "—"}
           </div>
         </div>
 
-        <div className="mt-6">
-          {/* ✅ CLAVE: props simples + key por socio para evitar estado “pegado” */}
-          <EditSocioForm
-            key={socio.id}
-            id={socio.id}
-            initialPlan={socio.plan ?? ""}
-            initialEstado={socio.estado ?? ""}
-          />
-        </div>
+        {/* Edición rápida */}
+        <EditSocioForm id={socio.id} initialPlan={socio.plan} initialEstado={socio.estado} />
+
+        {/* Acciones */}
+        <SocioAcciones socioId={socio.id} initialAcciones={acciones} />
       </div>
     </div>
   );
