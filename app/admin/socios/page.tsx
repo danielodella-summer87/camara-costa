@@ -1,117 +1,130 @@
-"use client";
-import { useEffect } from "react";
-import { supabase } from "@/lib/supabase/client";
-
 import Link from "next/link";
-export default function SociosPage() {
-  const socios = [
-    { id: "S-001", nombre: "InnovCorp", plan: "Oro", estado: "Activo", alta: "2025-10-12" },
-    { id: "S-002", nombre: "Pérez & Asociados", plan: "Plata", estado: "Pendiente", alta: "2025-11-03" },
-    { id: "S-003", nombre: "Delta Logistics", plan: "Bronce", estado: "Vencido", alta: "2025-08-21" },
-  ];
-  useEffect(() => {
-    supabase.from("socios").select("*").then(console.log);
-  }, []);
+import { supabaseServer } from "@/lib/supabase/server";
+
+// ✅ Evita cache estático
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+function semaforoColor(raw: unknown) {
+  const accion = (raw ?? "").toString().trim().toLowerCase();
+
+  if (!accion) return "bg-slate-300";
+
+  // 🔴 Rojo: urgente / activar / retomar
+  if (
+    accion.includes("urgente") ||
+    accion.includes("activar") ||
+    accion.includes("retomar")
+  ) {
+    return "bg-red-500";
+  }
+
+  // 🟡 Amarillo: recuperación / seguimiento / propuesta
+  if (
+    accion.includes("recuper") ||
+    accion.includes("seguimiento") ||
+    accion.includes("propuesta")
+  ) {
+    return "bg-yellow-400";
+  }
+
+  // 🟢 Verde: ok / mantener / cadencia
+  if (
+    accion.includes("ok") ||
+    accion.includes("mantener") ||
+    accion.includes("cadencia")
+  ) {
+    return "bg-green-500";
+  }
+
+  return "bg-slate-400";
+}
+
+export default async function SociosPage() {
+  const { data: socios, error } = await supabaseServer
+    .from("v_socio_inteligente")
+    .select("id,nombre,plan,estado,proxima_accion")
+    .order("id");
+
+  if (error) {
+    return (
+      <div className="p-10 text-red-600">
+        Error cargando socios: {error.message}
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-[1200px]">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Socios</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Gestioná socios, estados y planes.
-          </p>
+          <p className="text-slate-600">Gestión con inteligencia comercial</p>
         </div>
-
-        <button className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
-          + Nuevo socio
-        </button>
       </div>
 
-      {/* Filters */}
-      <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-4">
-        <input
-          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400"
-          placeholder="Buscar por nombre…"
-        />
-        <select className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
-          <option>Todos los estados</option>
-          <option>Activo</option>
-          <option>Pendiente</option>
-          <option>Vencido</option>
-        </select>
-        <select className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400">
-          <option>Todos los planes</option>
-          <option>Oro</option>
-          <option>Plata</option>
-          <option>Bronce</option>
-        </select>
-        <button className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
-          Limpiar
-        </button>
-      </div>
+      <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+        <table className="w-full text-sm">
+          <thead className="border-b bg-slate-50">
+            <tr>
+              <th className="p-3 text-left">ID</th>
+              <th className="p-3 text-left">Empresa</th>
+              <th className="p-3 text-left">Plan</th>
+              <th className="p-3 text-left">Estado</th>
+              <th className="p-3 text-left">Alta</th>
+              <th className="p-3 text-left">Próxima acción</th>
+              <th className="p-3"></th>
+            </tr>
+          </thead>
 
-      {/* Table */}
-      <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="px-5 py-3 font-medium">ID</th>
-                <th className="px-5 py-3 font-medium">Empresa</th>
-                <th className="px-5 py-3 font-medium">Plan</th>
-                <th className="px-5 py-3 font-medium">Estado</th>
-                <th className="px-5 py-3 font-medium">Alta</th>
-                <th className="px-5 py-3 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {socios.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50">
-                  <td className="px-5 py-3 font-mono text-xs text-slate-600">{s.id}</td>
-                  <td className="px-5 py-3 font-medium text-slate-900">{s.nombre}</td>
-                  <td className="px-5 py-3 text-slate-700">{s.plan}</td>
-                  <td className="px-5 py-3">
+          <tbody>
+            {(socios ?? []).map((socio) => (
+              <tr
+                key={socio.id}
+                className="border-b transition hover:bg-slate-50"
+              >
+                <td className="p-3 font-mono">{socio.id}</td>
+                <td className="p-3 font-medium">{socio.nombre}</td>
+                <td className="p-3">{socio.plan}</td>
+                <td className="p-3">{socio.estado}</td>
+
+                {/* Si tu vista no devuelve "alta", dejalo fuera (como está ahora en tu UI) */}
+                <td className="p-3 text-slate-500">—</td>
+
+                <td className="p-3">
+                  <div className="flex items-center gap-2">
                     <span
-                      className={[
-                        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
-                        s.estado === "Activo" && "bg-emerald-50 text-emerald-700",
-                        s.estado === "Pendiente" && "bg-amber-50 text-amber-700",
-                        s.estado === "Vencido" && "bg-rose-50 text-rose-700",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    >
-                      {s.estado}
+                      className={`h-3 w-3 rounded-full ${semaforoColor(
+                        socio.proxima_accion
+                      )} ring-1 ring-black/10`}
+                      title={socio.proxima_accion ?? ""}
+                    />
+                    <span className="text-xs text-slate-600">
+                      {socio.proxima_accion ?? "—"}
                     </span>
-                  </td>
-                  <td className="px-5 py-3 text-slate-700">{s.alta}</td>
-                  <td className="px-5 py-3 text-right">
-  <Link
-    href={`/admin/socios/${s.id}`}
-    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-900"
-  >
-    Ver
-  </Link>
-</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                </td>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3 text-sm text-slate-600">
-          <span>Mostrando 3 socios</span>
-          <div className="flex items-center gap-2">
-            <button className="rounded-lg border border-slate-200 px-3 py-1.5 hover:bg-slate-50">
-              ←
-            </button>
-            <button className="rounded-lg border border-slate-200 px-3 py-1.5 hover:bg-slate-50">
-              →
-            </button>
-          </div>
-        </div>
+                <td className="p-3 text-right">
+                  <Link
+                    href={`/admin/socios/${socio.id}`}
+                    className="rounded-lg border px-3 py-1 text-sm hover:bg-slate-100"
+                  >
+                    Ver
+                  </Link>
+                </td>
+              </tr>
+            ))}
+
+            {(!socios || socios.length === 0) && (
+              <tr>
+                <td className="p-6 text-slate-500" colSpan={7}>
+                  No hay socios para mostrar.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

@@ -3,26 +3,27 @@ import { Topbar } from "./Topbar";
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="h-screen w-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white flex">
-      
+    <div className="min-h-screen w-full bg-slate-100 text-slate-900 flex">
       {/* Sidebar */}
       <div className="w-64 shrink-0">
         <Sidebar />
       </div>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        
+      <div className="flex-1 flex flex-col min-h-screen">
         {/* Topbar */}
-        <div className="h-16 shrink-0 border-b border-white/10">
+        <div className="h-16 shrink-0 bg-white border-b border-slate-200">
           <Topbar />
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-8 bg-slate-100 text-slate-900">
-          {children}
-        </div>
-
+        <main className="flex-1 overflow-auto p-8">
+          <div className="mx-auto w-full max-w-6xl">
+            <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-8">
+              {children}
+            </div>
+          </div>
+        </main>
       </div>
     </div>
   );

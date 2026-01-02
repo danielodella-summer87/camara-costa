@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { updateSocio } from "../actions";
+import { updateSocio } from "@/app/admin/socios/actions";
+
+function cls(...xs: Array<string | false | undefined | null>) {
+  return xs.filter(Boolean).join(" ");
+}
 
 export default function EditSocioForm({
   id,
@@ -18,8 +22,7 @@ export default function EditSocioForm({
   const [plan, setPlan] = useState(initialPlan);
   const [estado, setEstado] = useState(initialEstado);
 
-  // ✅ cuando el server refresca y cambia initialPlan/initialEstado,
-  // sincronizamos el form con los nuevos valores
+  // ✅ sync cuando se refresca la page server-side
   useEffect(() => setPlan(initialPlan), [initialPlan]);
   useEffect(() => setEstado(initialEstado), [initialEstado]);
 
@@ -31,36 +34,137 @@ export default function EditSocioForm({
     [plan, estado, initialPlan, initialEstado]
   );
 
+  function toastSaved() {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1400);
+  }
+
+  async function quickSet(next: { plan?: string; estado?: string }) {
+    startTransition(async () => {
+      await updateSocio({ id, ...next });
+      router.refresh();
+      toastSaved();
+    });
+  }
+
   function onSave() {
     setSaved(false);
     startTransition(async () => {
       await updateSocio({ id, plan, estado });
-      router.refresh(); // ✅ fuerza refetch del socio en server
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      router.refresh();
+      toastSaved();
     });
   }
 
+  const estadoBtn = (value: "Activo" | "Pendiente" | "Vencido") =>
+    cls(
+      "h-10 px-4 rounded-lg text-sm font-medium transition border",
+      "disabled:opacity-60 disabled:cursor-not-allowed",
+      estado === value
+        ? "bg-slate-900 text-white border-slate-900"
+        : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50"
+    );
+
+  const planBtn = (value: "Oro" | "Plata" | "Bronce") =>
+    cls(
+      "h-10 px-4 rounded-lg text-sm font-medium transition border",
+      "disabled:opacity-60 disabled:cursor-not-allowed",
+      plan === value
+        ? "bg-slate-900 text-white border-slate-900"
+        : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50"
+    );
+
   return (
     <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm text-slate-600">Edición rápida</div>
-          <div className="text-xs text-slate-500">Plan y estado</div>
+          <div className="text-xs text-slate-500">Acciones 1-click + edición manual</div>
         </div>
 
         <button
           onClick={onSave}
           disabled={isPending || !dirty}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+          className={cls(
+            "h-10 px-4 rounded-lg text-sm font-medium text-white transition",
+            "bg-slate-900 hover:bg-slate-800",
+            "disabled:opacity-60 disabled:cursor-not-allowed"
+          )}
         >
-          {isPending ? "Guardando..." : "Guardar"}
+          {isPending ? "Guardando..." : "Guardar cambios"}
         </button>
       </div>
 
+      {/* Quick actions */}
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        {/* Estado */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="text-xs font-medium text-slate-600">Estado</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={isPending}
+              className={estadoBtn("Activo")}
+              onClick={() => quickSet({ estado: "Activo" })}
+            >
+              Activo
+            </button>
+            <button
+              disabled={isPending}
+              className={estadoBtn("Pendiente")}
+              onClick={() => quickSet({ estado: "Pendiente" })}
+            >
+              Pendiente
+            </button>
+            <button
+              disabled={isPending}
+              className={estadoBtn("Vencido")}
+              onClick={() => quickSet({ estado: "Vencido" })}
+            >
+              Vencido
+            </button>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            Click guarda y refresca la ficha.
+          </div>
+        </div>
+
+        {/* Plan */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="text-xs font-medium text-slate-600">Plan</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={isPending}
+              className={planBtn("Oro")}
+              onClick={() => quickSet({ plan: "Oro" })}
+            >
+              Oro
+            </button>
+            <button
+              disabled={isPending}
+              className={planBtn("Plata")}
+              onClick={() => quickSet({ plan: "Plata" })}
+            >
+              Plata
+            </button>
+            <button
+              disabled={isPending}
+              className={planBtn("Bronce")}
+              onClick={() => quickSet({ plan: "Bronce" })}
+            >
+              Bronce
+            </button>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            Ideal para cambios rápidos en atención.
+          </div>
+        </div>
+      </div>
+
+      {/* Manual selects (fallback) */}
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
-          <label className="text-xs font-medium text-slate-600">Plan</label>
+          <label className="text-xs font-medium text-slate-600">Plan (manual)</label>
           <select
             value={plan}
             onChange={(e) => setPlan(e.target.value)}
@@ -74,7 +178,7 @@ export default function EditSocioForm({
         </div>
 
         <div>
-          <label className="text-xs font-medium text-slate-600">Estado</label>
+          <label className="text-xs font-medium text-slate-600">Estado (manual)</label>
           <select
             value={estado}
             onChange={(e) => setEstado(e.target.value)}
@@ -88,12 +192,10 @@ export default function EditSocioForm({
         </div>
       </div>
 
+      {/* Footer */}
       {saved && <div className="mt-3 text-sm text-emerald-700">✅ Guardado</div>}
-
       {!dirty && !isPending && (
-        <div className="mt-2 text-xs text-slate-500">
-          Sin cambios pendientes.
-        </div>
+        <div className="mt-2 text-xs text-slate-500">Sin cambios pendientes.</div>
       )}
     </div>
   );
