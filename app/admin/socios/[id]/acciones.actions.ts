@@ -9,17 +9,20 @@ type CreateAccionInput = {
   realizada_at?: string; // ISO (opcional)
 };
 
-function supabaseServer() {
+function supabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!; // ✅ server-only
 
-  return createClient(supabaseUrl, supabaseAnonKey, {
+  if (!supabaseUrl) throw new Error("Falta NEXT_PUBLIC_SUPABASE_URL");
+  if (!serviceRoleKey) throw new Error("Falta SUPABASE_SERVICE_ROLE_KEY");
+
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
 }
 
 export async function createSocioAccion(input: CreateAccionInput) {
-  const supabase = supabaseServer();
+  const supabase = supabaseAdmin();
 
   const payload = {
     socio_id: input.socio_id,
@@ -29,12 +32,12 @@ export async function createSocioAccion(input: CreateAccionInput) {
   };
 
   const { error } = await supabase.from("socio_acciones").insert(payload);
-
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(`Supabase insert socio_acciones: ${error.message}`);
 }
 
 export async function deleteSocioAccion(id: string) {
-  const supabase = supabaseServer();
+  const supabase = supabaseAdmin();
+
   const { error } = await supabase.from("socio_acciones").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(`Supabase delete socio_acciones: ${error.message}`);
 }
