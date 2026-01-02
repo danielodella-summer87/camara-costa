@@ -4,8 +4,28 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateSocio } from "@/app/admin/socios/actions";
 
+type Estado = "Activo" | "Pendiente" | "Vencido";
+type Plan = "Oro" | "Plata" | "Bronce";
+
 function cls(...xs: Array<string | false | undefined | null>) {
   return xs.filter(Boolean).join(" ");
+}
+
+function normalizeEstado(v: string): Estado {
+  const s = (v ?? "").trim().toLowerCase();
+  if (s === "activo") return "Activo";
+  if (s === "pendiente") return "Pendiente";
+  if (s === "vencido") return "Vencido";
+  // fallback seguro
+  return "Pendiente";
+}
+
+function normalizePlan(v: string): Plan {
+  const s = (v ?? "").trim().toLowerCase();
+  if (s === "oro") return "Oro";
+  if (s === "plata") return "Plata";
+  if (s === "bronce") return "Bronce";
+  return "Oro";
 }
 
 export default function EditSocioForm({
@@ -19,19 +39,23 @@ export default function EditSocioForm({
 }) {
   const router = useRouter();
 
-  const [plan, setPlan] = useState(initialPlan);
-  const [estado, setEstado] = useState(initialEstado);
+  const initialPlanN = useMemo(() => normalizePlan(initialPlan), [initialPlan]);
+  const initialEstadoN = useMemo(() => normalizeEstado(initialEstado), [initialEstado]);
+
+  const [plan, setPlan] = useState<Plan>(initialPlanN);
+  const [estado, setEstado] = useState<Estado>(initialEstadoN);
 
   // ✅ sync cuando se refresca la page server-side
-  useEffect(() => setPlan(initialPlan), [initialPlan]);
-  useEffect(() => setEstado(initialEstado), [initialEstado]);
+  useEffect(() => setPlan(initialPlanN), [initialPlanN]);
+  useEffect(() => setEstado(initialEstadoN), [initialEstadoN]);
 
   const [isPending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const dirty = useMemo(
-    () => plan !== initialPlan || estado !== initialEstado,
-    [plan, estado, initialPlan, initialEstado]
+    () => plan !== initialPlanN || estado !== initialEstadoN,
+    [plan, estado, initialPlanN, initialEstadoN]
   );
 
   function toastSaved() {
@@ -39,24 +63,35 @@ export default function EditSocioForm({
     setTimeout(() => setSaved(false), 1400);
   }
 
-  async function quickSet(next: { plan?: string; estado?: string }) {
+  async function safeUpdate(next: { plan?: Plan; estado?: Estado }) {
+    setErrMsg(null);
+    await updateSocio({ id, ...next });
+    router.refresh();
+    toastSaved();
+  }
+
+  async function quickSet(next: { plan?: Plan; estado?: Estado }) {
     startTransition(async () => {
-      await updateSocio({ id, ...next });
-      router.refresh();
-      toastSaved();
+      try {
+        await safeUpdate(next);
+      } catch (e: any) {
+        setErrMsg(e?.message ?? "Error guardando cambios");
+      }
     });
   }
 
   function onSave() {
     setSaved(false);
     startTransition(async () => {
-      await updateSocio({ id, plan, estado });
-      router.refresh();
-      toastSaved();
+      try {
+        await safeUpdate({ id, plan, estado } as any); // (id ya está, pero lo dejo igual para tu action)
+      } catch (e: any) {
+        setErrMsg(e?.message ?? "Error guardando cambios");
+      }
     });
   }
 
-  const estadoBtn = (value: "Activo" | "Pendiente" | "Vencido") =>
+  const estadoBtn = (value: Estado) =>
     cls(
       "h-10 px-4 rounded-lg text-sm font-medium transition border",
       "disabled:opacity-60 disabled:cursor-not-allowed",
@@ -65,7 +100,7 @@ export default function EditSocioForm({
         : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50"
     );
 
-  const planBtn = (value: "Oro" | "Plata" | "Bronce") =>
+  const planBtn = (value: Plan) =>
     cls(
       "h-10 px-4 rounded-lg text-sm font-medium transition border",
       "disabled:opacity-60 disabled:cursor-not-allowed",
@@ -102,62 +137,34 @@ export default function EditSocioForm({
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <div className="text-xs font-medium text-slate-600">Estado</div>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              disabled={isPending}
-              className={estadoBtn("Activo")}
-              onClick={() => quickSet({ estado: "Activo" })}
-            >
+            <button disabled={isPending} className={estadoBtn("Activo")} onClick={() => quickSet({ estado: "Activo" })}>
               Activo
             </button>
-            <button
-              disabled={isPending}
-              className={estadoBtn("Pendiente")}
-              onClick={() => quickSet({ estado: "Pendiente" })}
-            >
+            <button disabled={isPending} className={estadoBtn("Pendiente")} onClick={() => quickSet({ estado: "Pendiente" })}>
               Pendiente
             </button>
-            <button
-              disabled={isPending}
-              className={estadoBtn("Vencido")}
-              onClick={() => quickSet({ estado: "Vencido" })}
-            >
+            <button disabled={isPending} className={estadoBtn("Vencido")} onClick={() => quickSet({ estado: "Vencido" })}>
               Vencido
             </button>
           </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Click guarda y refresca la ficha.
-          </div>
+          <div className="mt-2 text-xs text-slate-500">Click guarda y refresca la ficha.</div>
         </div>
 
         {/* Plan */}
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <div className="text-xs font-medium text-slate-600">Plan</div>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              disabled={isPending}
-              className={planBtn("Oro")}
-              onClick={() => quickSet({ plan: "Oro" })}
-            >
+            <button disabled={isPending} className={planBtn("Oro")} onClick={() => quickSet({ plan: "Oro" })}>
               Oro
             </button>
-            <button
-              disabled={isPending}
-              className={planBtn("Plata")}
-              onClick={() => quickSet({ plan: "Plata" })}
-            >
+            <button disabled={isPending} className={planBtn("Plata")} onClick={() => quickSet({ plan: "Plata" })}>
               Plata
             </button>
-            <button
-              disabled={isPending}
-              className={planBtn("Bronce")}
-              onClick={() => quickSet({ plan: "Bronce" })}
-            >
+            <button disabled={isPending} className={planBtn("Bronce")} onClick={() => quickSet({ plan: "Bronce" })}>
               Bronce
             </button>
           </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Ideal para cambios rápidos en atención.
-          </div>
+          <div className="mt-2 text-xs text-slate-500">Ideal para cambios rápidos en atención.</div>
         </div>
       </div>
 
@@ -167,13 +174,13 @@ export default function EditSocioForm({
           <label className="text-xs font-medium text-slate-600">Plan (manual)</label>
           <select
             value={plan}
-            onChange={(e) => setPlan(e.target.value)}
+            onChange={(e) => setPlan(e.target.value as Plan)}
             disabled={isPending}
             className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 disabled:opacity-60"
           >
-            <option>Oro</option>
-            <option>Plata</option>
-            <option>Bronce</option>
+            <option value="Oro">Oro</option>
+            <option value="Plata">Plata</option>
+            <option value="Bronce">Bronce</option>
           </select>
         </div>
 
@@ -181,22 +188,21 @@ export default function EditSocioForm({
           <label className="text-xs font-medium text-slate-600">Estado (manual)</label>
           <select
             value={estado}
-            onChange={(e) => setEstado(e.target.value)}
+            onChange={(e) => setEstado(e.target.value as Estado)}
             disabled={isPending}
             className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 disabled:opacity-60"
           >
-            <option>Activo</option>
-            <option>Pendiente</option>
-            <option>Vencido</option>
+            <option value="Activo">Activo</option>
+            <option value="Pendiente">Pendiente</option>
+            <option value="Vencido">Vencido</option>
           </select>
         </div>
       </div>
 
       {/* Footer */}
+      {errMsg && <div className="mt-3 text-sm text-red-600">❌ {errMsg}</div>}
       {saved && <div className="mt-3 text-sm text-emerald-700">✅ Guardado</div>}
-      {!dirty && !isPending && (
-        <div className="mt-2 text-xs text-slate-500">Sin cambios pendientes.</div>
-      )}
+      {!dirty && !isPending && <div className="mt-2 text-xs text-slate-500">Sin cambios pendientes.</div>}
     </div>
   );
 }
