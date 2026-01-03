@@ -2,17 +2,21 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import RubroSelect from "./RubroSelect";
 
 type Empresa = {
   id: string;
   nombre: string;
-  rubro: string | null;
-  rubro_id?: string | null;
+  rubro: string | null; // nombre rubro (para mostrar)
+  rubro_id?: string | null; // UUID (para editar)
   estado: string | null;
   aprobada: boolean | null;
   telefono: string | null;
   email: string | null;
   web: string | null;
+  instagram?: string | null;
+  direccion?: string | null;
+  descripcion?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -27,48 +31,19 @@ type EmpresaApiResponse = {
   error?: string | null;
 };
 
-function normalize(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .trim();
-}
-
-function badgeClasses(kind: "ok" | "warn" | "bad" | "muted") {
-  switch (kind) {
-    case "ok":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "warn":
-      return "border-amber-200 bg-amber-50 text-amber-800";
-    case "bad":
-      return "border-rose-200 bg-rose-50 text-rose-700";
-    default:
-      return "border-slate-200 bg-slate-50 text-slate-700";
-  }
-}
-
-function aprobacionLabel(e: Empresa) {
-  if (e.aprobada) return "Aprobada";
-  if (e.estado?.toLowerCase() === "rechazada") return "Rechazada";
-  return "Pendiente";
-}
-
-function aprobacionKind(e: Empresa): "ok" | "warn" | "bad" | "muted" {
-  if (e.aprobada) return "ok";
-  if (e.estado?.toLowerCase() === "rechazada") return "bad";
-  return "warn";
-}
-
 export default function EmpresasTable() {
   const [loading, setLoading] = useState(true);
   const [mutatingId, setMutatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<Empresa[]>([]);
 
-  // UX: búsqueda + filtro estado
+  // filtros UI
   const [q, setQ] = useState("");
-  const [estado, setEstado] = useState<"all" | "pendiente" | "aprobada" | "rechazada">("all");
+  const [estadoFilter, setEstadoFilter] = useState<"Todos" | "Pendiente" | "Aprobada" | "Rechazada">("Todos");
+
+  // edición inline rubro
+  const [editingRubroForId, setEditingRubroForId] = useState<string | null>(null);
+  const [pendingRubroId, setPendingRubroId] = useState<string | null>(null);
 
   async function fetchEmpresas() {
     setError(null);
@@ -93,10 +68,7 @@ export default function EmpresasTable() {
     }
   }
 
-  async function patchEmpresa(
-    id: string,
-    payload: Partial<Pick<Empresa, "aprobada" | "estado">>
-  ) {
+  async function patchEmpresa(id: string, payload: Partial<Empresa>) {
     setError(null);
     setMutatingId(id);
 
@@ -114,7 +86,6 @@ export default function EmpresasTable() {
       const json = (await res.json()) as EmpresaApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error actualizando empresa");
 
-      // Refresco para consistencia
       await fetchEmpresas();
     } catch (e: any) {
       setError(e?.message ?? "Error actualizando empresa");
@@ -127,43 +98,87 @@ export default function EmpresasTable() {
     fetchEmpresas();
   }, []);
 
-  const visible = useMemo(() => {
-    const nq = normalize(q);
+  function aprobacionLabel(e: Empresa) {
+    if (e.aprobada) return "Aprobada";
+    if ((e.estado ?? "").toLowerCase() === "rechazada") return "Rechazada";
+    return "Pendiente";
+  }
 
-    return [...rows]
-      .filter((e) => {
-        // filtro estado
-        if (estado === "aprobada") return e.aprobada === true;
-        if (estado === "rechazada") return e.estado?.toLowerCase() === "rechazada";
-        if (estado === "pendiente")
-          return !e.aprobada && e.estado?.toLowerCase() !== "rechazada";
-        return true;
-      })
-      .filter((e) => {
-        if (!nq) return true;
-        const hay =
-          normalize(e.nombre ?? "").includes(nq) ||
-          normalize(e.rubro ?? "").includes(nq) ||
-          normalize(e.estado ?? "").includes(nq) ||
-          normalize(e.telefono ?? "").includes(nq);
-        return hay;
-      })
-      .sort((a, b) => (a.nombre ?? "").localeCompare(b.nombre ?? ""));
-  }, [rows, q, estado]);
+  function badgeClassEstado(v: string) {
+    const s = v.toLowerCase();
+    if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
+    return "border-slate-200 bg-slate-50 text-slate-700"; // pendiente/default
+  }
+
+  function badgeClassAprobacion(v: string) {
+    const s = v.toLowerCase();
+    if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
+    return "border-amber-200 bg-amber-50 text-amber-800"; // pendiente
+  }
+
+  const empresasFiltradas = useMemo(() => {
+    const term = q.trim().toLowerCase();
+
+    let list = [...rows];
+
+    if (estadoFilter !== "Todos") {
+      list = list.filter((e) => (e.estado ?? "").toLowerCase() === estadoFilter.toLowerCase());
+    }
+
+    if (term.length) {
+      list = list.filter((e) => {
+        const haystack = [
+          e.nombre ?? "",
+          e.rubro ?? "",
+          e.estado ?? "",
+          e.telefono ?? "",
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return haystack.includes(term);
+      });
+    }
+
+    // orden por nombre
+    list.sort((a, b) => (a.nombre ?? "").localeCompare(b.nombre ?? ""));
+    return list;
+  }, [rows, q, estadoFilter]);
+
+  function startEditRubro(e: Empresa) {
+    setEditingRubroForId(e.id);
+    setPendingRubroId(e.rubro_id ?? null);
+  }
+
+  function cancelEditRubro() {
+    setEditingRubroForId(null);
+    setPendingRubroId(null);
+  }
+
+  async function saveEditRubro(e: Empresa) {
+    // rubro_id es requerido para el rubro (si querés permitir null, lo habilitamos)
+    if (!pendingRubroId) {
+      setError("Elegí un rubro antes de guardar.");
+      return;
+    }
+    await patchEmpresa(e.id, { rubro_id: pendingRubroId });
+    setEditingRubroForId(null);
+    setPendingRubroId(null);
+  }
 
   return (
     <div className="rounded-2xl border bg-white p-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-slate-900">Listado</h2>
           <p className="text-sm text-slate-600">
-            Directorio de empresas. Podés <span className="font-medium">ver</span>,{" "}
-            <span className="font-medium">aprobar</span> o{" "}
-            <span className="font-medium">rechazar</span>.
+            Directorio de empresas. Podés ver, aprobar o rechazar.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center justify-start gap-2 md:justify-end">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/admin/empresas/nueva"
             className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
@@ -182,39 +197,39 @@ export default function EmpresasTable() {
         </div>
       </div>
 
-      <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="w-full md:max-w-sm">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por nombre, rubro, estado o teléfono…"
-            className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="text-xs font-semibold text-slate-600">Estado</div>
-          <select
-            value={estado}
-            onChange={(e) => setEstado(e.target.value as any)}
-            className="rounded-xl border px-3 py-2 text-sm"
-          >
-            <option value="all">Todos</option>
-            <option value="pendiente">Pendiente</option>
-            <option value="aprobada">Aprobada</option>
-            <option value="rechazada">Rechazada</option>
-          </select>
-        </div>
-      </div>
-
       {error && (
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
+      {/* filtros */}
+      <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar por nombre, rubro, estado o teléfono..."
+          className="w-full rounded-xl border px-4 py-2 text-sm md:max-w-xl"
+        />
+
+        <div className="flex items-center gap-2 self-end md:self-auto">
+          <div className="text-xs font-semibold text-slate-600">Estado</div>
+          <select
+            value={estadoFilter}
+            onChange={(e) => setEstadoFilter(e.target.value as any)}
+            className="rounded-xl border px-3 py-2 text-sm"
+          >
+            <option>Todos</option>
+            <option>Pendiente</option>
+            <option>Aprobada</option>
+            <option>Rechazada</option>
+          </select>
+        </div>
+      </div>
+
+      {/* tabla */}
       <div className="mt-5 overflow-hidden rounded-2xl border">
-        <div className="grid grid-cols-[1.2fr_0.9fr_0.7fr_0.7fr_260px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+        <div className="grid grid-cols-[1.2fr_1.1fr_0.7fr_0.7fr_300px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
           <div>Empresa</div>
           <div>Rubro</div>
           <div>Estado</div>
@@ -224,52 +239,98 @@ export default function EmpresasTable() {
 
         {loading ? (
           <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
-        ) : visible.length === 0 ? (
+        ) : empresasFiltradas.length === 0 ? (
           <div className="px-4 py-6 text-sm text-slate-500">
-            No hay resultados para tu búsqueda/filtro.
+            No hay empresas para mostrar con esos filtros.
           </div>
         ) : (
           <div className="divide-y">
-            {visible.map((e) => {
+            {empresasFiltradas.map((e) => {
               const busy = mutatingId === e.id;
+              const aprob = aprobacionLabel(e);
+              const estadoTxt = e.estado ?? "Pendiente";
+              const isEditingRubro = editingRubroForId === e.id;
 
               return (
                 <div
                   key={e.id}
-                  className="grid grid-cols-[1.2fr_0.9fr_0.7fr_0.7fr_260px] items-center px-4 py-3 text-sm"
+                  className="grid grid-cols-[1.2fr_1.1fr_0.7fr_0.7fr_300px] items-center px-4 py-3 text-sm"
                 >
+                  {/* Empresa */}
                   <div className="font-medium text-slate-900">{e.nombre}</div>
 
-                  <div className="text-slate-700">{e.rubro ?? "—"}</div>
-
+                  {/* Rubro (editable inline) */}
                   <div className="text-slate-700">
+                    {!isEditingRubro ? (
+                      <div className="flex items-center gap-2">
+                        <span>{e.rubro ?? "—"}</span>
+                        <button
+                          type="button"
+                          onClick={() => startEditRubro(e)}
+                          className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                          disabled={busy || loading}
+                          title="Cambiar rubro"
+                        >
+                          Cambiar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-[220px]">
+                          <RubroSelect
+                            value={pendingRubroId}
+                            onChange={(next) => setPendingRubroId(next)}
+                            disabled={busy || loading}
+                            placeholder="Seleccionar rubro…"
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => saveEditRubro(e)}
+                          className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                          disabled={busy || loading || !pendingRubroId || pendingRubroId === (e.rubro_id ?? null)}
+                          title="Guardar rubro"
+                        >
+                          Guardar
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={cancelEditRubro}
+                          className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                          disabled={busy || loading}
+                          title="Cancelar"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Estado */}
+                  <div>
                     <span
-                      className={[
-                        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
-                        badgeClasses(
-                          e.estado?.toLowerCase() === "rechazada"
-                            ? "bad"
-                            : e.aprobada
-                            ? "ok"
-                            : "muted"
-                        ),
-                      ].join(" ")}
+                      className={`inline-flex rounded-full border px-3 py-1 text-xs ${badgeClassEstado(
+                        estadoTxt
+                      )}`}
                     >
-                      {e.estado ?? "—"}
+                      {estadoTxt}
                     </span>
                   </div>
 
-                  <div className="text-slate-700">
+                  {/* Aprobación */}
+                  <div>
                     <span
-                      className={[
-                        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
-                        badgeClasses(aprobacionKind(e)),
-                      ].join(" ")}
+                      className={`inline-flex rounded-full border px-3 py-1 text-xs ${badgeClassAprobacion(
+                        aprob
+                      )}`}
                     >
-                      {aprobacionLabel(e)}
+                      {aprob}
                     </span>
                   </div>
 
+                  {/* Acciones */}
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
@@ -285,12 +346,8 @@ export default function EmpresasTable() {
                       type="button"
                       onClick={() => patchEmpresa(e.id, { aprobada: false, estado: "Rechazada" })}
                       className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      disabled={busy || loading || e.estado?.toLowerCase() === "rechazada"}
-                      title={
-                        e.estado?.toLowerCase() === "rechazada"
-                          ? "Ya está rechazada"
-                          : "Rechazar empresa"
-                      }
+                      disabled={busy || loading || (e.estado ?? "").toLowerCase() === "rechazada"}
+                      title={(e.estado ?? "").toLowerCase() === "rechazada" ? "Ya está rechazada" : "Rechazar empresa"}
                     >
                       {busy ? "…" : "Rechazar"}
                     </button>
@@ -309,9 +366,9 @@ export default function EmpresasTable() {
         )}
       </div>
 
-      <div className="mt-3 text-xs text-slate-500">
-        Tip: usá <span className="font-semibold">Ver</span> para entrar al detalle y editar campos como
-        descripción, dirección, web e instagram.
+      <div className="mt-4 text-xs text-slate-500">
+        Tip: usá <span className="font-semibold">Ver</span> para entrar al detalle y editar campos como descripción,
+        dirección, web e instagram.
       </div>
     </div>
   );
