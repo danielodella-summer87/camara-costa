@@ -19,12 +19,14 @@ export default function RubroSelect({
   disabled,
   placeholder = "Seleccionar rubro…",
   className = "",
+  allowAll = false,
 }: {
-  value: string | null | undefined;
-  onChange: (next: string) => void;
+  value: string | null | undefined; // rubro_id (UUID) o null
+  onChange: (next: string | null) => void; // devuelve rubro_id o null
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  allowAll?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,13 +67,22 @@ export default function RubroSelect({
       <div className="flex items-center gap-2">
         <select
           value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.target.value ? e.target.value : null)}
           disabled={isDisabled}
           className="w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
         >
-          <option value="">{loading ? "Cargando…" : placeholder}</option>
+          {allowAll ? (
+            <option value="">
+              {loading ? "Cargando…" : "Todos los rubros"}
+            </option>
+          ) : (
+            <option value="">
+              {loading ? "Cargando…" : placeholder}
+            </option>
+          )}
+
           {rubros.map((r) => (
-            <option key={r.id} value={r.nombre}>
+            <option key={r.id} value={r.id}>
               {r.nombre}
             </option>
           ))}
