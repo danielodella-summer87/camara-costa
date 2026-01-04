@@ -8,7 +8,8 @@ import RubroSelect from "../RubroSelect";
 type Empresa = {
   id: string;
   nombre: string;
-  rubro: string | null;
+  rubro: string | null; // nombre (display)
+  rubro_id: string | null; // UUID real
   estado: string | null;
   aprobada: boolean | null;
   descripcion?: string | null;
@@ -26,12 +27,28 @@ type EmpresaApiResponse = {
   error?: string | null;
 };
 
+// lo que mandamos al PATCH (usa rubro_id, no rubro nombre)
 type PatchPayload = Partial<
   Pick<
     Empresa,
-    "nombre" | "rubro" | "telefono" | "email" | "web" | "instagram" | "direccion" | "descripcion" | "aprobada" | "estado"
+    | "nombre"
+    | "rubro_id"
+    | "telefono"
+    | "email"
+    | "web"
+    | "instagram"
+    | "direccion"
+    | "descripcion"
+    | "aprobada"
+    | "estado"
   >
 >;
+
+function normalizeStr(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s.length ? s : null;
+}
 
 export default function EmpresaDetailPage() {
   const params = useParams();
@@ -48,14 +65,15 @@ export default function EmpresaDetailPage() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PatchPayload>({});
 
-  async function fetchEmpresa() {
-    if (!id) return;
+  async function fetchEmpresa(targetId?: string) {
+    const finalId = targetId ?? id;
+    if (!finalId) return;
 
     setError(null);
     setLoading(true);
 
     try {
-      const res = await fetch(`/api/admin/empresas/${id}`, {
+      const res = await fetch(`/api/admin/empresas/${finalId}`, {
         method: "GET",
         cache: "no-store",
         headers: { "Cache-Control": "no-store" },
@@ -64,12 +82,19 @@ export default function EmpresaDetailPage() {
       const json = (await res.json()) as EmpresaApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error cargando empresa");
 
-      setEmpresa(json?.data ?? null);
+      const next = (json?.data ?? null) as Empresa | null;
 
-      // si estoy editando y refresco, NO piso el draft
-      if (!editing) {
-        setDraft({});
-      }
+      setEmpresa(
+        next
+          ? {
+              ...next,
+              rubro_id: (next as any).rubro_id ?? null,
+            }
+          : null
+      );
+
+      // si NO estoy editando, limpio draft
+      if (!editing) setDraft({});
     } catch (e: any) {
       setError(e?.message ?? "Error cargando empresa");
       setEmpresa(null);
@@ -98,7 +123,7 @@ export default function EmpresaDetailPage() {
       const json = (await res.json()) as EmpresaApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error actualizando empresa");
 
-      await fetchEmpresa();
+      await fetchEmpresa(id);
     } catch (e: any) {
       setError(e?.message ?? "Error actualizando empresa");
     } finally {
@@ -106,8 +131,12 @@ export default function EmpresaDetailPage() {
     }
   }
 
+  // ✅ CLAVE: cuando cambia el ID (navegás a otra empresa), reseteamos edición y draft
   useEffect(() => {
-    fetchEmpresa();
+    setEditing(false);
+    setDraft({});
+    setError(null);
+    fetchEmpresa(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -123,7 +152,7 @@ export default function EmpresaDetailPage() {
     setEditing(true);
     setDraft({
       nombre: empresa.nombre ?? "",
-      rubro: empresa.rubro ?? "",
+      rubro_id: empresa.rubro_id ?? null, // ✅ IMPORTANTE
       telefono: empresa.telefono ?? "",
       email: empresa.email ?? "",
       web: empresa.web ?? "",
@@ -140,16 +169,15 @@ export default function EmpresaDetailPage() {
   }
 
   async function saveEdit() {
-    // limpiamos strings vacíos a null para que quede prolijo en DB
     const normalized: PatchPayload = {
-      nombre: (draft.nombre ?? "").trim() || null,
-      rubro: (draft.rubro ?? "").trim() || null,
-      telefono: (draft.telefono ?? "").trim() || null,
-      email: (draft.email ?? "").trim() || null,
-      web: (draft.web ?? "").trim() || null,
-      instagram: (draft.instagram ?? "").trim() || null,
-      direccion: (draft.direccion ?? "").trim() || null,
-      descripcion: (draft.descripcion ?? "").trim() || null,
+      nombre: normalizeStr(draft.nombre),
+      rubro_id: draft.rubro_id ?? null,
+      telefono: normalizeStr(draft.telefono),
+      email: normalizeStr(draft.email),
+      web: normalizeStr(draft.web),
+      instagram: normalizeStr(draft.instagram),
+      direccion: normalizeStr(draft.direccion),
+      descripcion: normalizeStr(draft.descripcion),
     };
 
     await patchEmpresa(normalized);
@@ -174,7 +202,7 @@ export default function EmpresaDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={fetchEmpresa}
+              onClick={() => fetchEmpresa(id)}
               className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
               disabled={disabled}
             >
@@ -282,8 +310,9 @@ export default function EmpresaDetailPage() {
                     <div className="text-xs font-semibold text-slate-600">Rubro</div>
                     <div className="mt-2">
                       <RubroSelect
-                        value={(draft.rubro as any) ?? ""}
-                        onChange={(v) => setDraft((d) => ({ ...d, rubro: v }))}
+                        // ✅ CLAVE: si draft aún no tiene rubro_id, usamos el actual de empresa
+                        value={(draft.rubro_id ?? empresa.rubro_id) ?? null}
+                        onChange={(nextId) => setDraft((d) => ({ ...d, rubro_id: nextId }))}
                         disabled={disabled}
                       />
                     </div>

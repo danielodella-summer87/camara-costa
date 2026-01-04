@@ -1,41 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type Rubro = {
-  id: string;
-  nombre: string;
-  created_at?: string;
-};
+type Rubro = { id: string; nombre: string };
+type RubrosApiResponse = { data?: Rubro[]; error?: string | null };
 
-type RubrosApiResponse = {
-  data?: Rubro[];
-  error?: string | null;
-};
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export default function RubroSelect({
   value,
   onChange,
   disabled,
   placeholder = "Seleccionar rubro…",
-  className = "",
-  allowAll = false,
 }: {
-  value: string | null | undefined; // rubro_id (UUID) o null
-  onChange: (next: string | null) => void; // devuelve rubro_id o null
+  value: string | null; // ideal: UUID. si viene nombre, lo resolvemos.
+  onChange: (nextId: string | null) => void;
   disabled?: boolean;
   placeholder?: string;
-  className?: string;
-  allowAll?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<Rubro[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [rubros, setRubros] = useState<Rubro[]>([]);
 
   async function fetchRubros() {
     setError(null);
     setLoading(true);
-
     try {
       const res = await fetch("/api/admin/rubros", {
         method: "GET",
@@ -44,13 +34,12 @@ export default function RubroSelect({
       });
 
       const json = (await res.json()) as RubrosApiResponse;
-
       if (!res.ok) throw new Error(json?.error ?? "Error cargando rubros");
 
-      setRubros(Array.isArray(json?.data) ? json.data : []);
+      setRows(Array.isArray(json?.data) ? json.data : []);
     } catch (e: any) {
       setError(e?.message ?? "Error cargando rubros");
-      setRubros([]);
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -60,50 +49,39 @@ export default function RubroSelect({
     fetchRubros();
   }, []);
 
-  const isDisabled = disabled || loading;
+  // Normalizamos:
+  // - si nos pasan UUID, lo usamos tal cual (aunque rows aún no cargó)
+  // - si nos pasan nombre, lo resolvemos a UUID cuando rows esté disponible
+  const normalizedValue = useMemo(() => {
+    const v = (value ?? "").trim();
+    if (!v) return "";
+
+    if (UUID_RE.test(v)) return v;
+
+    const byName = rows.find((r) => r.nombre === v);
+    if (byName) return byName.id;
+
+    // si todavía no cargaron rubros o no lo encontramos, no forzamos a ""
+    return "";
+  }, [value, rows]);
 
   return (
-    <div className={className}>
-      <div className="flex items-center gap-2">
-        <select
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value ? e.target.value : null)}
-          disabled={isDisabled}
-          className="w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
-        >
-          {allowAll ? (
-            <option value="">
-              {loading ? "Cargando…" : "Todos los rubros"}
-            </option>
-          ) : (
-            <option value="">
-              {loading ? "Cargando…" : placeholder}
-            </option>
-          )}
+    <div className="space-y-2">
+      <select
+        value={normalizedValue}
+        onChange={(e) => onChange(e.target.value ? e.target.value : null)}
+        disabled={disabled || loading}
+        className="w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
+      >
+        <option value="">{loading ? "Cargando rubros…" : placeholder}</option>
+        {rows.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.nombre}
+          </option>
+        ))}
+      </select>
 
-          {rubros.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.nombre}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="button"
-          onClick={fetchRubros}
-          className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-          disabled={isDisabled}
-          title="Refrescar rubros"
-        >
-          ↻
-        </button>
-      </div>
-
-      {error ? (
-        <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className="text-xs text-red-600">{error}</div> : null}
     </div>
   );
 }

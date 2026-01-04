@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import RubroSelect from "./RubroSelect";
 
 type Empresa = {
   id: string;
   nombre: string;
-  rubro: string | null; // nombre rubro (para mostrar)
-  rubro_id?: string | null; // UUID (para editar)
+  rubro: string | null; // display (nombre)
+  rubro_id: string | null; // UUID real
   estado: string | null;
   aprobada: boolean | null;
   telefono: string | null;
@@ -31,19 +31,59 @@ type EmpresaApiResponse = {
   error?: string | null;
 };
 
+type Rubro = { id: string; nombre: string };
+type RubrosApiResponse = { data?: Rubro[]; error?: string | null };
+
 export default function EmpresasTable() {
   const [loading, setLoading] = useState(true);
   const [mutatingId, setMutatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [rows, setRows] = useState<Empresa[]>([]);
 
   // filtros UI
   const [q, setQ] = useState("");
-  const [estadoFilter, setEstadoFilter] = useState<"Todos" | "Pendiente" | "Aprobada" | "Rechazada">("Todos");
+  const [estadoFilter, setEstadoFilter] = useState<
+    "Todos" | "Pendiente" | "Aprobada" | "Rechazada"
+  >("Todos");
 
   // edición inline rubro
   const [editingRubroForId, setEditingRubroForId] = useState<string | null>(null);
   const [pendingRubroId, setPendingRubroId] = useState<string | null>(null);
+
+  // cache en memoria: nombre -> id (solo para legacy donde viene rubro pero no rubro_id)
+  const rubroNombreToIdRef = useRef<Map<string, string> | null>(null);
+  const rubroMapLoadingRef = useRef<Promise<Map<string, string>> | null>(null);
+
+  function flash(msg: string) {
+    setNotice(msg);
+    window.setTimeout(() => setNotice(null), 2500);
+  }
+
+  async function ensureRubroNombreToIdMap(): Promise<Map<string, string>> {
+    if (rubroNombreToIdRef.current) return rubroNombreToIdRef.current;
+    if (rubroMapLoadingRef.current) return rubroMapLoadingRef.current;
+
+    rubroMapLoadingRef.current = (async () => {
+      const res = await fetch("/api/admin/rubros", {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      const json = (await res.json()) as RubrosApiResponse;
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando rubros");
+
+      const map = new Map<string, string>();
+      (json?.data ?? []).forEach((r) => map.set(r.nombre, r.id));
+
+      rubroNombreToIdRef.current = map;
+      rubroMapLoadingRef.current = null;
+      return map;
+    })();
+
+    return rubroMapLoadingRef.current;
+  }
 
   async function fetchEmpresas() {
     setError(null);
@@ -59,7 +99,13 @@ export default function EmpresasTable() {
       const json = (await res.json()) as EmpresasApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error cargando empresas");
 
-      setRows(Array.isArray(json?.data) ? json.data : []);
+      const list = Array.isArray(json?.data) ? json.data : [];
+      setRows(
+        list.map((e: any) => ({
+          ...e,
+          rubro_id: e?.rubro_id ?? null,
+        }))
+      );
     } catch (e: any) {
       setError(e?.message ?? "Error cargando empresas");
       setRows([]);
@@ -68,7 +114,11 @@ export default function EmpresasTable() {
     }
   }
 
-  async function patchEmpresa(id: string, payload: Partial<Empresa>) {
+  // PATCH que devuelve la empresa actualizada y actualiza SOLO la fila local
+  async function patchEmpresa(
+    id: string,
+    payload: Partial<Pick<Empresa, "rubro_id" | "aprobada" | "estado">>
+  ) {
     setError(null);
     setMutatingId(id);
 
@@ -86,9 +136,21 @@ export default function EmpresasTable() {
       const json = (await res.json()) as EmpresaApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error actualizando empresa");
 
-      await fetchEmpresas();
+      const updated = json?.data ?? null;
+      if (!updated) throw new Error("No se recibió la empresa actualizada");
+
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === id
+            ? { ...r, ...updated, rubro_id: (updated as any).rubro_id ?? null }
+            : r
+        )
+      );
+
+      return updated;
     } catch (e: any) {
       setError(e?.message ?? "Error actualizando empresa");
+      throw e;
     } finally {
       setMutatingId(null);
     }
@@ -108,48 +170,61 @@ export default function EmpresasTable() {
     const s = v.toLowerCase();
     if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
     if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
-    return "border-slate-200 bg-slate-50 text-slate-700"; // pendiente/default
+    return "border-slate-200 bg-slate-50 text-slate-700";
   }
 
   function badgeClassAprobacion(v: string) {
     const s = v.toLowerCase();
     if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
     if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
-    return "border-amber-200 bg-amber-50 text-amber-800"; // pendiente
+    return "border-amber-200 bg-amber-50 text-amber-800";
   }
 
   const empresasFiltradas = useMemo(() => {
     const term = q.trim().toLowerCase();
-
     let list = [...rows];
 
     if (estadoFilter !== "Todos") {
-      list = list.filter((e) => (e.estado ?? "").toLowerCase() === estadoFilter.toLowerCase());
+      list = list.filter(
+        (e) => (e.estado ?? "").toLowerCase() === estadoFilter.toLowerCase()
+      );
     }
 
     if (term.length) {
       list = list.filter((e) => {
-        const haystack = [
-          e.nombre ?? "",
-          e.rubro ?? "",
-          e.estado ?? "",
-          e.telefono ?? "",
-        ]
+        const haystack = [e.nombre ?? "", e.rubro ?? "", e.estado ?? "", e.telefono ?? ""]
           .join(" ")
           .toLowerCase();
-
         return haystack.includes(term);
       });
     }
 
-    // orden por nombre
     list.sort((a, b) => (a.nombre ?? "").localeCompare(b.nombre ?? ""));
     return list;
   }, [rows, q, estadoFilter]);
 
-  function startEditRubro(e: Empresa) {
+  async function startEditRubro(e: Empresa) {
+    setError(null);
     setEditingRubroForId(e.id);
-    setPendingRubroId(e.rubro_id ?? null);
+
+    if (e.rubro_id) {
+      setPendingRubroId(e.rubro_id);
+      return;
+    }
+
+    if (e.rubro) {
+      setPendingRubroId(null);
+      try {
+        const map = await ensureRubroNombreToIdMap();
+        const resolved = map.get(e.rubro);
+        setPendingRubroId(resolved ?? null);
+      } catch (err: any) {
+        setError(err?.message ?? "No pude cargar rubros para resolver rubro_id.");
+      }
+      return;
+    }
+
+    setPendingRubroId(null);
   }
 
   function cancelEditRubro() {
@@ -158,14 +233,36 @@ export default function EmpresasTable() {
   }
 
   async function saveEditRubro(e: Empresa) {
-    // rubro_id es requerido para el rubro (si querés permitir null, lo habilitamos)
     if (!pendingRubroId) {
       setError("Elegí un rubro antes de guardar.");
       return;
     }
-    await patchEmpresa(e.id, { rubro_id: pendingRubroId });
-    setEditingRubroForId(null);
-    setPendingRubroId(null);
+
+    const prevRubroId = e.rubro_id;
+    const prevRubro = e.rubro;
+
+    // Optimistic UI: reflejamos rubro_id (el nombre lo completa el backend)
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === e.id ? { ...r, rubro_id: pendingRubroId } : r
+      )
+    );
+
+    try {
+      const updated = await patchEmpresa(e.id, { rubro_id: pendingRubroId });
+      flash(`Rubro guardado: ${updated.rubro ?? "OK"}`);
+      setEditingRubroForId(null);
+      setPendingRubroId(null);
+    } catch {
+      // revert
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === e.id
+            ? { ...r, rubro_id: prevRubroId ?? null, rubro: prevRubro ?? null }
+            : r
+        )
+      );
+    }
   }
 
   return (
@@ -196,6 +293,12 @@ export default function EmpresasTable() {
           </button>
         </div>
       </div>
+
+      {notice && (
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          {notice}
+        </div>
+      )}
 
       {error && (
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -259,7 +362,7 @@ export default function EmpresasTable() {
                   {/* Empresa */}
                   <div className="font-medium text-slate-900">{e.nombre}</div>
 
-                  {/* Rubro (editable inline) */}
+                  {/* Rubro */}
                   <div className="text-slate-700">
                     {!isEditingRubro ? (
                       <div className="flex items-center gap-2">
@@ -289,7 +392,12 @@ export default function EmpresasTable() {
                           type="button"
                           onClick={() => saveEditRubro(e)}
                           className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-                          disabled={busy || loading || !pendingRubroId || pendingRubroId === (e.rubro_id ?? null)}
+                          disabled={
+                            busy ||
+                            loading ||
+                            !pendingRubroId ||
+                            pendingRubroId === (e.rubro_id ?? null)
+                          }
                           title="Guardar rubro"
                         >
                           Guardar
@@ -344,10 +452,20 @@ export default function EmpresasTable() {
 
                     <button
                       type="button"
-                      onClick={() => patchEmpresa(e.id, { aprobada: false, estado: "Rechazada" })}
+                      onClick={() =>
+                        patchEmpresa(e.id, { aprobada: false, estado: "Rechazada" })
+                      }
                       className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      disabled={busy || loading || (e.estado ?? "").toLowerCase() === "rechazada"}
-                      title={(e.estado ?? "").toLowerCase() === "rechazada" ? "Ya está rechazada" : "Rechazar empresa"}
+                      disabled={
+                        busy ||
+                        loading ||
+                        (e.estado ?? "").toLowerCase() === "rechazada"
+                      }
+                      title={
+                        (e.estado ?? "").toLowerCase() === "rechazada"
+                          ? "Ya está rechazada"
+                          : "Rechazar empresa"
+                      }
                     >
                       {busy ? "…" : "Rechazar"}
                     </button>
@@ -367,8 +485,8 @@ export default function EmpresasTable() {
       </div>
 
       <div className="mt-4 text-xs text-slate-500">
-        Tip: usá <span className="font-semibold">Ver</span> para entrar al detalle y editar campos como descripción,
-        dirección, web e instagram.
+        Tip: se guarda <span className="font-semibold">rubro_id</span> y el backend completa{" "}
+        <span className="font-semibold">rubro</span> (nombre) para mostrar.
       </div>
     </div>
   );
