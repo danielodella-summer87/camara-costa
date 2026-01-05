@@ -21,12 +21,12 @@ function safeTab(v: string | null): TabKey {
 }
 
 const TAB_PASTEL_BG: Record<TabKey, string> = {
-  resumen: "bg-sky-50 border-sky-100",
-  direccion: "bg-indigo-50 border-indigo-100",
-  comercial: "bg-amber-50 border-amber-100",
-  marketing: "bg-pink-50 border-pink-100",
-  administracion: "bg-emerald-50 border-emerald-100",
-  tecnico: "bg-violet-50 border-violet-100",
+  resumen: "bg-sky-100 border-sky-200",
+  direccion: "bg-indigo-100 border-indigo-200",
+  comercial: "bg-amber-100 border-amber-200",
+  marketing: "bg-pink-100 border-pink-200",
+  administracion: "bg-emerald-100 border-emerald-200",
+  tecnico: "bg-violet-100 border-violet-200",
 };
 
 function KpiCard({
