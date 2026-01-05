@@ -22,12 +22,6 @@ type Lead = {
 
 type LeadsApiResponse = { data: Lead[] | null; error: string | null };
 
-function toISODateOnly(v: string) {
-  // input: "YYYY-MM-DD" -> ISO start of that day local-ish
-  // para demo: suficiente
-  return new Date(v + "T00:00:00").toISOString();
-}
-
 function fmtDate(v?: string | null) {
   if (!v) return "—";
   const d = new Date(v);
@@ -68,6 +62,12 @@ function downloadCSV(filename: string, rows: Record<string, unknown>[]) {
   URL.revokeObjectURL(url);
 }
 
+function isoFromDateInput(dateYYYYMMDD: string, endOfDay = false) {
+  // "YYYY-MM-DD" -> ISO (inicio o fin de día)
+  const t = endOfDay ? "T23:59:59.999" : "T00:00:00.000";
+  return new Date(dateYYYYMMDD + t).toISOString();
+}
+
 export default function ReporteComercialLeadsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -93,18 +93,15 @@ export default function ReporteComercialLeadsPage() {
     try {
       const res = await fetch("/api/admin/leads", { cache: "no-store" });
       const json = (await res.json()) as LeadsApiResponse;
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       if (json.error) throw new Error(json.error);
-      setLeads(json.data ?? concludeEmpty(json.data));
+      setLeads(json.data ?? []);
     } catch (e: any) {
       setLeads([]);
       setError(e?.message ?? "Error inesperado");
     } finally {
       setLoading(false);
     }
-  }
-
-  function concludeEmpty(v: unknown) {
-    return [] as Lead[];
   }
 
   useEffect(() => {
@@ -129,8 +126,8 @@ export default function ReporteComercialLeadsPage() {
     const qNorm = q.trim().toLowerCase();
     const ratingN = ratingMin ? Number(ratingMin) : null;
 
-    const fromISO = from ? toISODateOnly(from) : null;
-    const toISO = to ? toISODateOnly(to) : null;
+    const fromISO = from ? isoFromDateInput(from, false) : null;
+    const toISO = to ? isoFromDateInput(to, true) : null;
 
     return leads.filter((l) => {
       // búsqueda libre
@@ -176,19 +173,14 @@ export default function ReporteComercialLeadsPage() {
 
   function setParam(next: Record<string, string>) {
     const params = new URLSearchParams(sp.toString());
-    // aseguramos tab=comercial para mantener el contexto
-    params.set("tab", "comercial");
+    params.set("tab", "comercial"); // mantenemos contexto
 
     Object.entries(next).forEach(([k, v]) => {
-      if (!v) rememberDelete(params, k);
+      if (!v) params.delete(k);
       else params.set(k, v);
     });
 
     router.push(`${pathname}?${params.toString()}`);
-  }
-
-  function rememberDelete(params: URLSearchParams, k: string) {
-    params.delete(k);
   }
 
   function clearFilters() {
@@ -225,8 +217,7 @@ export default function ReporteComercialLeadsPage() {
                 Reporte · Comercial · Leads
               </h1>
               <p className="mt-1 text-sm text-slate-700">
-                Listado con filtros + export a CSV (por ahora filtra en pantalla,
-                luego lo bajamos a API cuando sumemos datos).
+                Listado con filtros + export a CSV.
               </p>
 
               <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
@@ -258,9 +249,7 @@ export default function ReporteComercialLeadsPage() {
                 onClick={exportCSV}
                 className="rounded-xl border bg-white px-4 py-2 text-sm hover:bg-slate-50"
                 disabled={loading || filtered.length === 0}
-                title={
-                  filtered.length === 0 ? "No hay filas para exportar" : "Exportar"
-                }
+                title={filtered.length === 0 ? "No hay filas para exportar" : "Exportar"}
               >
                 Exportar CSV
               </button>
@@ -375,8 +364,8 @@ export default function ReporteComercialLeadsPage() {
             </div>
 
             <div className="mt-3 text-xs text-slate-600">
-              Filas:{" "}
-              <span className="font-semibold">{filtered.length}</span> / {leads.length}
+              Filas: <span className="font-semibold">{filtered.length}</span> /{" "}
+              {leads.length}
             </div>
           </div>
 
@@ -425,9 +414,7 @@ export default function ReporteComercialLeadsPage() {
                           >
                             {l.nombre ?? "—"}
                           </Link>
-                          <div className="text-xs text-slate-500">
-                            {l.contacto ?? ""}
-                          </div>
+                          <div className="text-xs text-slate-500">{l.contacto ?? ""}</div>
                         </td>
                         <td className="px-4 py-3">{l.email ?? "—"}</td>
                         <td className="px-4 py-3">{l.telefono ?? "—"}</td>
@@ -447,8 +434,7 @@ export default function ReporteComercialLeadsPage() {
           </div>
 
           <div className="mt-4 text-xs text-slate-600">
-            Definición que estamos usando: <span className="font-semibold">Dashboard</span> = KPIs/alertas.
-            <span className="mx-2">·</span>
+            <span className="font-semibold">Dashboard</span> = KPIs/alertas ·{" "}
             <span className="font-semibold">Reportes</span> = listados con filtros + export.
           </div>
         </div>
