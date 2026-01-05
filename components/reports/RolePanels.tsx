@@ -20,13 +20,20 @@ function safeTab(v: string | null): TabKey {
   return TAB_LABEL[k] ? k : "resumen";
 }
 
-const TAB_PASTEL_BG: Record<TabKey, string> = {
-  resumen: "bg-sky-100 border-sky-200",
-  direccion: "bg-indigo-100 border-indigo-200",
-  comercial: "bg-amber-100 border-amber-200",
-  marketing: "bg-pink-100 border-pink-200",
-  administracion: "bg-emerald-100 border-emerald-200",
-  tecnico: "bg-violet-100 border-violet-200",
+/**
+ * ✅ Banner “Área: …” con HEX (igual que los tabs) => nunca queda blanco
+ * Usamos bgActive y borderActive equivalentes a RoleTabs.
+ */
+const BANNER_THEME: Record<
+  TabKey,
+  { bg: string; border: string; text: string }
+> = {
+  resumen: { bg: "#D6ECFF", border: "#7BBEFF", text: "#0B3B73" },
+  direccion: { bg: "#E0E7FF", border: "#A5B4FC", text: "#2C2C7A" },
+  comercial: { bg: "#FFEAB0", border: "#F0C14B", text: "#5B3A00" },
+  marketing: { bg: "#FFD6E8", border: "#FF87B9", text: "#7A1E45" },
+  administracion: { bg: "#D6F7E3", border: "#6ED39B", text: "#0F5132" },
+  tecnico: { bg: "#E7DCFF", border: "#B08CFF", text: "#3B1F72" }, // ✅ violeta, no blanco
 };
 
 function KpiCard({
@@ -62,13 +69,7 @@ function Box({
   );
 }
 
-function PillLink({
-  href,
-  label,
-}: {
-  href: string;
-  label: string;
-}) {
+function PillLink({ href, label }: { href: string; label: string }) {
   return (
     <Link
       href={href}
@@ -80,7 +81,6 @@ function PillLink({
 }
 
 function DashboardResumen() {
-  // Demo (luego lo conectamos a datos reales)
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -93,7 +93,9 @@ function DashboardResumen() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Box title="Alertas rápidas (demo)">
           <ul className="list-disc space-y-2 pl-5">
-            <li>9 socios con riesgo de baja (rating alto + 30 días sin actualización)</li>
+            <li>
+              9 socios con riesgo de baja (rating alto + 30 días sin actualización)
+            </li>
             <li>3 oportunidades comerciales listas para propuesta</li>
             <li>2 eventos próximos con cupos críticos</li>
           </ul>
@@ -162,13 +164,23 @@ function DashboardComercial() {
       <Box title="Pipeline (listado + aging) (demo)">
         <div className="flex flex-wrap gap-2">
           <PillLink href="/admin/leads?pipeline=Nuevo" label="Ver “Nuevo” (demo)" />
-          <PillLink href="/admin/leads?pipeline=En%20seguimiento" label="Ver “En seguimiento” (demo)" />
-          <PillLink href="/admin/leads?pipeline=Calificado" label="Ver “Calificado” (demo)" />
-          <PillLink href="/admin/leads?pipeline=Cerrado" label="Ver “Cerrado” (demo)" />
+          <PillLink
+            href="/admin/leads?pipeline=En%20seguimiento"
+            label="Ver “En seguimiento” (demo)"
+          />
+          <PillLink
+            href="/admin/leads?pipeline=Calificado"
+            label="Ver “Calificado” (demo)"
+          />
+          <PillLink
+            href="/admin/leads?pipeline=Cerrado"
+            label="Ver “Cerrado” (demo)"
+          />
         </div>
 
         <div className="mt-3 text-xs text-slate-500">
-          Nota: estos links abren Leads filtrados (por ahora). Más adelante armamos tabla/aging real dentro del dashboard.
+          Nota: estos links abren Leads filtrados (por ahora). Más adelante armamos
+          tabla/aging real dentro del dashboard.
         </div>
       </Box>
 
@@ -251,7 +263,8 @@ function ReportesPlaceholder() {
     <div className="space-y-4">
       <Box title="Reportes (demo)">
         <div className="text-sm text-slate-700">
-          Acá van los <span className="font-semibold">listados</span> con filtros (fecha, rubro, país, etc.).
+          Acá van los <span className="font-semibold">listados</span> con filtros
+          (fecha, rubro, país, etc.).
           <div className="mt-3 flex flex-wrap gap-2">
             <span className="rounded-full border bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
               Exportar CSV (demo)
@@ -271,12 +284,19 @@ export function RolePanels({ variant }: { variant: Variant }) {
   const tab = safeTab(sp.get("tab"));
   const area = TAB_LABEL[tab];
 
-  const headerCls = TAB_PASTEL_BG[tab];
+  const theme = BANNER_THEME[tab];
 
   return (
     <div className="space-y-4">
-      <div className={`rounded-2xl border p-4 ${headerCls}`}>
-        <div className="text-sm text-slate-700">
+      {/* ✅ Banner área: ahora SIEMPRE pastel por HEX (no depende de Tailwind) */}
+      <div
+        className="rounded-2xl border p-4"
+        style={{
+          backgroundColor: theme.bg,
+          borderColor: theme.border,
+        }}
+      >
+        <div className="text-sm" style={{ color: theme.text }}>
           <span className="font-semibold">Área: {area}</span>
           {variant === "dashboard" ? (
             <span> · KPIs + alertas ejecutivas (demo)</span>

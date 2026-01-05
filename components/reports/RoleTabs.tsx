@@ -15,51 +15,51 @@ type Theme = {
   bg: string;
   bgActive: string;
   border: string;
-  borderActive: string;
+  borderActive: string; // lo usamos también como “underline”
   text: string;
 };
 
 const THEME: Record<TabKey, Theme> = {
   resumen: {
-    bg: "#EAF5FF", // sky
+    bg: "#EAF5FF",
     bgActive: "#D6ECFF",
     border: "#A9D6FF",
-    borderActive: "#7BBEFF",
+    borderActive: "#2E7DDC",
     text: "#0B3B73",
   },
   direccion: {
-    bg: "#EEF2FF", // indigo
+    bg: "#EEF2FF",
     bgActive: "#E0E7FF",
     border: "#C7D2FE",
-    borderActive: "#A5B4FC",
+    borderActive: "#3A36B1",
     text: "#2C2C7A",
   },
   comercial: {
-    bg: "#FFF6DB", // amber
+    bg: "#FFF6DB",
     bgActive: "#FFEAB0",
     border: "#F7D57A",
-    borderActive: "#F0C14B",
+    borderActive: "#B77900",
     text: "#5B3A00",
   },
   marketing: {
-    bg: "#FFEAF3", // pink
+    bg: "#FFEAF3",
     bgActive: "#FFD6E8",
     border: "#FFB3D2",
-    borderActive: "#FF87B9",
+    borderActive: "#A51E52",
     text: "#7A1E45",
   },
   administracion: {
-    bg: "#E9FBF0", // emerald
+    bg: "#E9FBF0",
     bgActive: "#D6F7E3",
     border: "#9FE3B9",
-    borderActive: "#6ED39B",
+    borderActive: "#1B6B45",
     text: "#0F5132",
   },
   tecnico: {
-    bg: "#F3EEFF", // violet
+    bg: "#F3EEFF",
     bgActive: "#E7DCFF",
     border: "#CDB7FF",
-    borderActive: "#B08CFF",
+    borderActive: "#4B2AA6",
     text: "#3B1F72",
   },
 };
@@ -109,6 +109,11 @@ export function RoleTabs({
         const isActive = t.key === activeKey;
         const theme = THEME[t.key];
 
+        // ✅ underline consistente (inset) para TODOS los tabs activos
+        const boxShadow = isActive
+          ? `0 1px 2px rgba(0,0,0,0.06), inset 0 -4px 0 ${theme.borderActive}`
+          : `0 1px 2px rgba(0,0,0,0.04)`;
+
         return (
           <button
             key={t.key}
@@ -119,13 +124,13 @@ export function RoleTabs({
             className={[
               "rounded-full border px-4 py-2 text-sm transition",
               "hover:opacity-95",
-              "shadow-sm",
-              isActive ? "font-semibold ring-1 ring-black/5" : "opacity-95",
+              isActive ? "font-semibold" : "opacity-95",
             ].join(" ")}
             style={{
               backgroundColor: isActive ? theme.bgActive : theme.bg,
               borderColor: isActive ? theme.borderActive : theme.border,
               color: theme.text,
+              boxShadow,
             }}
           >
             {t.label}
