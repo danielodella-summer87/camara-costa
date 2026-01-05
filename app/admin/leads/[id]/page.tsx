@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 
 type Lead = {
@@ -17,6 +17,10 @@ type Lead = {
   estado?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+
+  rating?: number | null;
+  next_activity_type?: string | null;
+  next_activity_at?: string | null;
 };
 
 type LeadApiResponse = {
@@ -28,10 +32,102 @@ type PatchPayload = Partial<
   Pick<Lead, "nombre" | "contacto" | "telefono" | "email" | "origen" | "pipeline" | "notas">
 >;
 
+type Proposal = {
+  id: string;
+  lead_id: string;
+
+  title?: string | null;
+  notes?: string | null;
+
+  file_bucket?: string | null;
+  file_path?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+
+  file_size?: number | null; // bytes
+  signed_url?: string | null; // puede venir en list (si lo devolvés)
+  url?: string | null; // compat
+
+  created_at?: string | null;
+  sent_at?: string | null;
+};
+
+type ApiResp<T> = {
+  data?: T | null;
+  error?: string | null;
+};
+
 function norm(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
   return s.length ? s : null;
+}
+
+function formatDateTime(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  try {
+    return new Intl.DateTimeFormat("es-UY", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
+  } catch {
+    return d.toLocaleString();
+  }
+}
+
+function bytes(n?: number | null) {
+  if (!n || !Number.isFinite(n)) return null;
+  const kb = n / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function Modal({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-3xl rounded-2xl border bg-white shadow-xl">
+        <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-slate-900">{title}</div>
+            <div className="text-xs text-slate-500">Historial de PDFs enviados.</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+          >
+            Cerrar
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function LeadDetailPage() {
@@ -50,6 +146,19 @@ export default function LeadDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PatchPayload>({});
+
+  // ✅ propuestas
+  const [proposalsOpen, setProposalsOpen] = useState(false);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadSentAt, setUploadSentAt] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const [openingProposalId, setOpeningProposalId] = useState<string | null>(null);
+  const [mailingProposalId, setMailingProposalId] = useState<string | null>(null);
 
   function flash(msg: string) {
     setNotice(msg);
@@ -132,13 +241,156 @@ export default function LeadDetailPage() {
       const json = (await res.json()) as LeadApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error eliminando lead");
 
-      // ✅ volvemos al listado y refrescamos
       router.push("/admin/leads");
       router.refresh();
     } catch (e: any) {
       setError(e?.message ?? "Error eliminando lead");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // ✅ propuestas (GET list)
+  async function fetchProposals() {
+    if (!id) return;
+    setProposalsError(null);
+    setProposalsLoading(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/proposals`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      const json = (await res.json()) as ApiResp<Proposal[]>;
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando propuestas");
+
+      const rows = Array.isArray(json?.data) ? json.data : [];
+      setProposals(rows);
+    } catch (e: any) {
+      setProposalsError(e?.message ?? "Error cargando propuestas");
+      setProposals([]);
+    } finally {
+      setProposalsLoading(false);
+    }
+  }
+
+  // ✅ traer URL firmada fresca por proposalId (a prueba de expiración / campos)
+  async function getFreshSignedUrl(proposalId: string): Promise<string | null> {
+    if (!id) return null;
+
+    const res = await fetch(`/api/admin/leads/${id}/proposals/${proposalId}`, {
+      method: "GET",
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store" },
+    });
+
+    const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
+    if (!res.ok) throw new Error((json as any)?.error ?? "No se pudo obtener la URL del PDF");
+
+    const row = (json as any)?.data ?? null;
+    const url =
+      (row?.signed_url && String(row.signed_url).trim()) ||
+      (row?.url && String(row.url).trim()) ||
+      null;
+
+    return url;
+  }
+
+  async function openProposal(proposalId: string) {
+    if (!proposalId) return;
+    setOpeningProposalId(proposalId);
+    setProposalsError(null);
+    try {
+      const url = await getFreshSignedUrl(proposalId);
+      if (!url) throw new Error("La API no devolvió signed_url/url para este PDF.");
+
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e: any) {
+      setProposalsError(e?.message ?? "No se pudo abrir el PDF");
+    } finally {
+      setOpeningProposalId(null);
+    }
+  }
+
+  async function emailProposal(p: Proposal) {
+    const to = lead?.email?.trim() ?? "";
+    if (!to) {
+      setProposalsError("Este lead no tiene email cargado.");
+      return;
+    }
+
+    setMailingProposalId(p.id);
+    setProposalsError(null);
+    try {
+      const url = await getFreshSignedUrl(p.id);
+      if (!url) throw new Error("No hay URL disponible para enviar.");
+
+      const name =
+        (p.title && p.title.trim()) ||
+        (p.file_name && p.file_name.trim()) ||
+        "Propuesta";
+
+      const subject = `Propuesta: ${name}`;
+      const body = `Hola,\n\nTe comparto la propuesta en PDF:\n${url}\n\nSaludos.`;
+
+      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(
+        subject
+      )}&body=${encodeURIComponent(body)}`;
+
+      window.location.href = mailto;
+    } catch (e: any) {
+      setProposalsError(e?.message ?? "No se pudo preparar el email");
+    } finally {
+      setMailingProposalId(null);
+    }
+  }
+
+  // ✅ propuestas (POST multipart)
+  async function uploadProposal() {
+    if (!id) return;
+    const file = fileRef.current?.files?.[0] ?? null;
+    if (!file) {
+      setProposalsError("Seleccioná un PDF primero.");
+      return;
+    }
+    if (file.type !== "application/pdf") {
+      setProposalsError("El archivo debe ser PDF.");
+      return;
+    }
+
+    setUploading(true);
+    setProposalsError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const t = uploadTitle.trim();
+      if (t) fd.append("title", t);
+
+      const sentAt = uploadSentAt.trim();
+      if (sentAt) fd.append("sent_at", sentAt);
+
+      const res = await fetch(`/api/admin/leads/${id}/proposals`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+        body: fd,
+      });
+
+      const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
+      if (!res.ok) throw new Error((json as any)?.error ?? "Error subiendo propuesta");
+
+      if (fileRef.current) fileRef.current.value = "";
+      setUploadTitle("");
+      setUploadSentAt("");
+      flash("Propuesta subida.");
+
+      await fetchProposals();
+    } catch (e: any) {
+      setProposalsError(e?.message ?? "Error subiendo propuesta");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -189,16 +441,26 @@ export default function LeadDetailPage() {
     return lead?.pipeline ?? "—";
   }, [editing, draft.pipeline, lead?.pipeline]);
 
+  const title = loading ? "Cargando…" : lead?.nombre ?? "Lead";
+
   return (
     <PageContainer>
       <div className="mx-auto w-full max-w-4xl space-y-6">
         <div className="rounded-2xl border bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">
-                {loading ? "Cargando…" : lead?.nombre ?? "Lead"}
-              </h1>
-              <p className="mt-1 text-sm text-slate-600">Detalle, edición y eliminación.</p>
+              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+              <p className="mt-1 text-sm text-slate-600">Detalle, edición, propuestas e eliminación.</p>
+
+              <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
+                <Link href="/admin/leads" className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700">
+                  Lista
+                </Link>
+                <Link href="/admin/leads/kanban" className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700">
+                  Kanban
+                </Link>
+                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">Ficha</span>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -209,6 +471,19 @@ export default function LeadDetailPage() {
                 disabled={disabled}
               >
                 Refrescar
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  setProposalsOpen(true);
+                  await fetchProposals();
+                }}
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                disabled={disabled || !lead}
+                title="Historial de propuestas (PDF)"
+              >
+                Propuestas
               </button>
 
               {!editing ? (
@@ -224,20 +499,19 @@ export default function LeadDetailPage() {
                 <>
                   <button
                     type="button"
-                    onClick={saveEdit}
-                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                    disabled={disabled}
-                  >
-                    {mutating ? "Guardando…" : "Guardar"}
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={cancelEdit}
                     className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
                     disabled={disabled}
                   >
                     Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveEdit}
+                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    disabled={disabled}
+                  >
+                    Guardar
                   </button>
                 </>
               )}
@@ -245,19 +519,12 @@ export default function LeadDetailPage() {
               <button
                 type="button"
                 onClick={deleteLead}
-                className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-                disabled={disabled || editing || !lead}
-                title={editing ? "Guardá o cancelá la edición antes de eliminar" : "Eliminar lead"}
+                className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
+                disabled={disabled || !lead}
+                title="Eliminar lead"
               >
-                {deleting ? "Eliminando…" : "Eliminar"}
+                Eliminar
               </button>
-
-              <Link
-                href="/admin/leads"
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
-              >
-                Volver
-              </Link>
             </div>
           </div>
 
@@ -272,170 +539,277 @@ export default function LeadDetailPage() {
               {error}
             </div>
           )}
-        </div>
 
-        <div className="rounded-2xl border bg-white p-6">
-          {loading ? (
-            <div className="text-sm text-slate-500">Cargando datos…</div>
-          ) : !lead ? (
-            <div className="text-sm text-slate-500">No se encontró el lead.</div>
-          ) : (
-            <div className="space-y-5">
-              <div className="grid gap-3 md:grid-cols-2">
-                {!editing ? (
-                  <>
-                    <Field label="Contacto" value={lead.contacto ?? "—"} />
-                    <Field label="Pipeline" value={lead.pipeline ?? "—"} />
-                    <Field label="Teléfono" value={lead.telefono ?? "—"} />
-                    <Field label="Email" value={lead.email ?? "—"} />
-                    <Field label="Origen" value={lead.origen ?? "—"} />
-                    <Field label="Estado" value={lead.estado ?? "—"} />
-                  </>
-                ) : (
-                  <>
-                    <InputField
-                      label="Nombre *"
-                      value={(draft.nombre as any) ?? ""}
-                      onChange={(v) => setDraft((d) => ({ ...d, nombre: v }))}
-                      disabled={disabled}
-                    />
-                    <InputField
-                      label="Contacto"
-                      value={(draft.contacto as any) ?? ""}
-                      onChange={(v) => setDraft((d) => ({ ...d, contacto: v }))}
-                      disabled={disabled}
-                    />
-                    <InputField
-                      label="Teléfono"
-                      value={(draft.telefono as any) ?? ""}
-                      onChange={(v) => setDraft((d) => ({ ...d, telefono: v }))}
-                      disabled={disabled}
-                    />
-                    <InputField
-                      label="Email"
-                      value={(draft.email as any) ?? ""}
-                      onChange={(v) => setDraft((d) => ({ ...d, email: v }))}
-                      disabled={disabled}
-                    />
-                    <InputField
-                      label="Origen"
-                      value={(draft.origen as any) ?? ""}
-                      onChange={(v) => setDraft((d) => ({ ...d, origen: v }))}
-                      disabled={disabled}
-                    />
+          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border bg-white p-4">
+              <div className="text-xs font-semibold text-slate-500">Contacto</div>
 
-                    <div className="rounded-xl border p-4">
-                      <div className="text-xs font-semibold text-slate-600">Pipeline</div>
-                      <select
-                        value={(draft.pipeline as any) ?? "Nuevo"}
-                        onChange={(e) => setDraft((d) => ({ ...d, pipeline: e.target.value }))}
-                        disabled={disabled}
-                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
-                      >
-                        <option>Nuevo</option>
-                        <option>Contactado</option>
-                        <option>En seguimiento</option>
-                        <option>Calificado</option>
-                        <option>No interesado</option>
-                        <option>Cerrado</option>
-                      </select>
-                      <div className="mt-2 text-xs text-slate-500">
-                        (En A es texto. En B lo conectamos a opciones configurables.)
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {!editing ? (
-                lead.notas ? (
-                  <div className="rounded-xl border bg-slate-50 p-4">
-                    <div className="text-xs font-semibold text-slate-600">Notas</div>
-                    <div className="mt-1 text-sm text-slate-800">{lead.notas}</div>
-                  </div>
-                ) : null
-              ) : (
-                <TextareaField
-                  label="Notas"
-                  value={(draft.notas as any) ?? ""}
-                  onChange={(v) => setDraft((d) => ({ ...d, notas: v }))}
-                  disabled={disabled}
+              <div className="mt-3 space-y-3">
+                <Field
+                  label="Nombre"
+                  editing={editing}
+                  value={editing ? (draft.nombre as any) ?? "" : lead?.nombre ?? "—"}
+                  onChange={(v) => setDraft((p) => ({ ...p, nombre: v }))}
                 />
-              )}
-
-              <div className="grid gap-2 md:grid-cols-2">
-                <Field label="Creado" value={lead.created_at ?? "—"} />
-                <Field label="Actualizado" value={lead.updated_at ?? "—"} />
+                <Field
+                  label="Contacto"
+                  editing={editing}
+                  value={editing ? (draft.contacto as any) ?? "" : lead?.contacto ?? "—"}
+                  onChange={(v) => setDraft((p) => ({ ...p, contacto: v }))}
+                />
+                <Field
+                  label="Teléfono"
+                  editing={editing}
+                  value={editing ? (draft.telefono as any) ?? "" : lead?.telefono ?? "—"}
+                  onChange={(v) => setDraft((p) => ({ ...p, telefono: v }))}
+                />
+                <Field
+                  label="Email"
+                  editing={editing}
+                  value={editing ? (draft.email as any) ?? "" : lead?.email ?? "—"}
+                  onChange={(v) => setDraft((p) => ({ ...p, email: v }))}
+                />
               </div>
+            </div>
 
-              <div className="mt-2 text-xs text-slate-500">
-                Pipeline actual: <span className="font-semibold">{pipelineValue}</span>
+            <div className="rounded-2xl border bg-white p-4">
+              <div className="text-xs font-semibold text-slate-500">Estado</div>
+
+              <div className="mt-3 space-y-3">
+                <Field
+                  label="Origen"
+                  editing={editing}
+                  value={editing ? (draft.origen as any) ?? "" : lead?.origen ?? "—"}
+                  onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
+                />
+                <Field
+                  label="Pipeline"
+                  editing={editing}
+                  value={editing ? (draft.pipeline as any) ?? "Nuevo" : pipelineValue}
+                  onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
+                  placeholder="Nuevo"
+                />
+                <div>
+                  <div className="text-xs text-slate-500">Notas</div>
+                  {editing ? (
+                    <textarea
+                      value={(draft.notas as any) ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, notas: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                      rows={5}
+                      placeholder="Notas internas…"
+                    />
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {lead?.notas ?? "—"}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
+                  <div className="rounded-xl border bg-white px-3 py-2">
+                    <div className="font-semibold">Creado</div>
+                    <div className="mt-1">{formatDateTime(lead?.created_at ?? null)}</div>
+                  </div>
+                  <div className="rounded-xl border bg-white px-3 py-2">
+                    <div className="font-semibold">Actualizado</div>
+                    <div className="mt-1">{formatDateTime(lead?.updated_at ?? null)}</div>
+                  </div>
+                </div>
               </div>
+            </div>
+          </div>
+
+          {!loading && !lead && (
+            <div className="mt-5 rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
+              No se encontró el lead.
             </div>
           )}
         </div>
+
+        <Modal
+          open={proposalsOpen}
+          title={`Propuestas · ${lead?.nombre ?? "Lead"}`}
+          onClose={() => setProposalsOpen(false)}
+        >
+          {proposalsError && (
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {proposalsError}
+            </div>
+          )}
+
+          <div className="rounded-2xl border bg-white p-4">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="grow">
+                <div className="text-xs text-slate-500">Título (opcional)</div>
+                <input
+                  value={uploadTitle}
+                  onChange={(e) => setUploadTitle(e.target.value)}
+                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Ej: Propuesta Growth Q1"
+                  disabled={proposalsLoading || uploading}
+                />
+              </div>
+
+              <div className="w-full sm:w-56">
+                <div className="text-xs text-slate-500">Fecha envío (opcional)</div>
+                <input
+                  value={uploadSentAt}
+                  onChange={(e) => setUploadSentAt(e.target.value)}
+                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="2026-01-05T14:00:00-03:00"
+                  disabled={proposalsLoading || uploading}
+                />
+              </div>
+
+              <div className="w-full sm:w-auto">
+                <div className="text-xs text-slate-500">PDF</div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf"
+                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                  disabled={proposalsLoading || uploading}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={uploadProposal}
+                disabled={proposalsLoading || uploading}
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {uploading ? "Subiendo…" : "Subir"}
+              </button>
+
+              <button
+                type="button"
+                onClick={fetchProposals}
+                disabled={proposalsLoading || uploading}
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {proposalsLoading ? "Cargando…" : "Refrescar"}
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {proposalsLoading ? (
+                <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
+                  Cargando propuestas…
+                </div>
+              ) : proposals.length === 0 ? (
+                <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
+                  No hay propuestas cargadas todavía.
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border">
+                  <div className="grid grid-cols-12 gap-0 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                    <div className="col-span-5">Documento</div>
+                    <div className="col-span-3">Creado</div>
+                    <div className="col-span-2">Enviado</div>
+                    <div className="col-span-2 text-right">Acciones</div>
+                  </div>
+
+                  <div className="divide-y">
+                    {proposals.map((p) => {
+                      const name =
+                        (p.title && p.title.trim()) ||
+                        (p.file_name && p.file_name.trim()) ||
+                        p.id;
+
+                      const isOpening = openingProposalId === p.id;
+                      const isMailing = mailingProposalId === p.id;
+
+                      return (
+                        <div key={p.id} className="grid grid-cols-12 items-center px-3 py-2 text-sm">
+                          <div className="col-span-5 min-w-0">
+                            <div className="truncate font-medium text-slate-900">{name}</div>
+                            <div className="mt-0.5 text-xs text-slate-500">
+                              {p.file_name ? <span className="truncate">{p.file_name}</span> : null}
+                              {p.file_size ? (
+                                <span className="ml-2 rounded-full border bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                                  {bytes(p.file_size)}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="col-span-3 text-xs text-slate-600">
+                            {formatDateTime(p.created_at ?? null)}
+                          </div>
+
+                          <div className="col-span-2 text-xs text-slate-600">
+                            {formatDateTime(p.sent_at ?? null)}
+                          </div>
+
+                          <div className="col-span-2 flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openProposal(p.id)}
+                              disabled={isOpening || proposalsLoading || uploading}
+                              className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                              title="Abrir PDF"
+                            >
+                              {isOpening ? "Abriendo…" : "Abrir"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => emailProposal(p)}
+                              disabled={isMailing || proposalsLoading || uploading}
+                              className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                              title={lead?.email ? `Enviar a ${lead.email}` : "Este lead no tiene email"}
+                            >
+                              {isMailing ? "Preparando…" : "Mail"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3 text-xs text-slate-500">
+                “Abrir” siempre pide una <span className="font-semibold">signed_url fresca</span> al endpoint del proposal,
+                así evitamos expiración o campos faltantes.
+              </div>
+            </div>
+          </div>
+        </Modal>
       </div>
     </PageContainer>
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border p-4">
-      <div className="text-xs font-semibold text-slate-600">{label}</div>
-      <div className="mt-1 text-sm text-slate-900 break-words">{value}</div>
-    </div>
-  );
-}
-
-function InputField({
+function Field({
   label,
+  editing,
   value,
   onChange,
-  disabled,
   placeholder,
 }: {
   label: string;
+  editing: boolean;
   value: string;
   onChange: (v: string) => void;
-  disabled?: boolean;
   placeholder?: string;
 }) {
   return (
-    <div className="rounded-xl border p-4">
-      <div className="text-xs font-semibold text-slate-600">{label}</div>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        placeholder={placeholder}
-        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
-      />
-    </div>
-  );
-}
-
-function TextareaField({
-  label,
-  value,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="rounded-2xl border p-4">
-      <div className="text-xs font-semibold text-slate-600">{label}</div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        rows={4}
-        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
-      />
+    <div>
+      <div className="text-xs text-slate-500">{label}</div>
+      {editing ? (
+        <input
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+          placeholder={placeholder}
+        />
+      ) : (
+        <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          {value ?? "—"}
+        </div>
+      )}
     </div>
   );
 }

@@ -18,7 +18,7 @@ type ReportCard = {
   desc: string;
   href?: string;
   disabled?: boolean;
-  tag?: string; // opcional (demo / próximo)
+  tag?: string;
 };
 
 function SectionBadge({ text }: { text: string }) {
@@ -63,9 +63,6 @@ export default function AdminReportesHome() {
   const sp = useSearchParams();
   const tab = (sp.get("tab") as TabKey | null) ?? "resumen";
 
-  const title = "Reportes";
-  const subtitle = "Catálogo de reportes (listados con filtros + export). Elegí un rol.";
-
   const byTab: Record<TabKey, ReportCard[]> = {
     resumen: [
       {
@@ -90,10 +87,10 @@ export default function AdminReportesHome() {
         href: "/admin/reportes/comercial/leads?tab=comercial",
       },
       {
-        title: "Pipeline (listado + aging) (demo)",
-        desc: "Etapas, tiempo en etapa, oportunidades calientes/frías.",
-        disabled: true,
-        tag: "próximo",
+        title: "Pipeline + Aging (stale 30 días)",
+        desc: "Tabla por pipeline + Top stale + export. Riesgo = rating ≤ 2 + sin actualización.",
+        href: "/admin/reportes/comercial/pipeline?tab=comercial",
+        tag: "nuevo",
       },
       {
         title: "Propuestas (historial) (demo)",
@@ -130,7 +127,6 @@ export default function AdminReportesHome() {
 
   const cards = byTab[tab] ?? [];
 
-  // fondo pastel por rol (para que sea obvio dónde estás)
   const bgByTab: Record<TabKey, string> = {
     resumen: "bg-sky-50 border-sky-100",
     direccion: "bg-indigo-50 border-indigo-100",
@@ -146,8 +142,10 @@ export default function AdminReportesHome() {
         <div className={`rounded-2xl border p-6 ${bgByTab[tab]}`}>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
-              <p className="mt-1 text-sm text-slate-700">{subtitle}</p>
+              <h1 className="text-2xl font-semibold text-slate-900">Reportes</h1>
+              <p className="mt-1 text-sm text-slate-700">
+                Catálogo de reportes (listados con filtros + export). Elegí un rol.
+              </p>
 
               <div className="mt-4">
                 <RoleTabs basePath="/admin/reportes" defaultTab="resumen" />
