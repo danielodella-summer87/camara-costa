@@ -1,9 +1,11 @@
 "use client";
 
+import { AiLeadReport } from "@/components/leads/AiLeadReport";
+import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PageContainer } from "@/components/layout/PageContainer";
 
 type Lead = {
   id: string;
@@ -18,6 +20,13 @@ type Lead = {
   created_at?: string | null;
   updated_at?: string | null;
 
+  // ✅ nuevos campos (DB: website text, objetivos/audiencia jsonb, tamano text, oferta text)
+  website?: string | null;
+  objetivos?: string[] | null; // multi
+  audiencia?: string[] | null; // multi
+  tamano?: string | null; // single
+  oferta?: string | null; // texto
+
   rating?: number | null;
   next_activity_type?: string | null;
   next_activity_at?: string | null;
@@ -29,7 +38,21 @@ type LeadApiResponse = {
 };
 
 type PatchPayload = Partial<
-  Pick<Lead, "nombre" | "contacto" | "telefono" | "email" | "origen" | "pipeline" | "notas">
+  Pick<
+    Lead,
+    | "nombre"
+    | "contacto"
+    | "telefono"
+    | "email"
+    | "origen"
+    | "pipeline"
+    | "notas"
+    | "website"
+    | "objetivos"
+    | "audiencia"
+    | "tamano"
+    | "oferta"
+  >
 >;
 
 type Proposal = {
@@ -57,10 +80,37 @@ type ApiResp<T> = {
   error?: string | null;
 };
 
+const OBJETIVOS_OPTS = [
+  "Networking y alianzas",
+  "Nuevas oportunidades comerciales",
+  "Visibilidad y posicionamiento",
+  "Acceso a eventos y rondas",
+  "Beneficios y partners",
+  "Aprendizaje / capacitación",
+];
+
+const AUDIENCIA_OPTS = [
+  "B2B",
+  "B2C",
+  "Gobierno",
+  "Educación",
+  "Industria",
+  "Servicios",
+  "Retail/eCommerce",
+];
+
+const TAMANO_OPTS = ["1–5", "6–20", "21–50", "51–200", "200+"];
+
 function norm(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
   return s.length ? s : null;
+}
+
+function normArr(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const cleaned = v.map((x) => String(x).trim()).filter(Boolean);
+  return cleaned.length ? cleaned : null;
 }
 
 function formatDateTime(iso?: string | null) {
@@ -97,7 +147,7 @@ function Modal({
   open: boolean;
   title: string;
   onClose: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   if (!open) return null;
 
@@ -113,8 +163,12 @@ function Modal({
       <div className="w-full max-w-3xl rounded-2xl border bg-white shadow-xl">
         <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
           <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-slate-900">{title}</div>
-            <div className="text-xs text-slate-500">Historial de PDFs enviados.</div>
+            <div className="truncate text-base font-semibold text-slate-900">
+              {title}
+            </div>
+            <div className="text-xs text-slate-500">
+              Historial de PDFs enviados.
+            </div>
           </div>
           <button
             type="button"
@@ -126,6 +180,75 @@ function Modal({
         </div>
         <div className="p-5">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function PillMulti({
+  label,
+  editing,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  editing: boolean;
+  value: string[] | null | undefined;
+  options: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const current = Array.isArray(value) ? value : [];
+
+  const toggle = (opt: string) => {
+    const has = current.includes(opt);
+    const next = has ? current.filter((x) => x !== opt) : [...current, opt];
+    onChange(next);
+  };
+
+  return (
+    <div>
+      <div className="text-xs text-slate-500">{label}</div>
+
+      {editing ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {options.map((opt) => {
+            const active = current.includes(opt);
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => toggle(opt)}
+                className={[
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                  active
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-white text-slate-700 hover:bg-slate-50",
+                ].join(" ")}
+                aria-pressed={active}
+              >
+                {opt}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {current.length ? (
+            current.map((opt) => (
+              <span
+                key={opt}
+                className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-xs font-semibold text-slate-700"
+              >
+                {opt}
+              </span>
+            ))
+          ) : (
+            <div className="rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              —
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -157,8 +280,12 @@ export default function LeadDetailPage() {
   const [uploadSentAt, setUploadSentAt] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const [openingProposalId, setOpeningProposalId] = useState<string | null>(null);
-  const [mailingProposalId, setMailingProposalId] = useState<string | null>(null);
+  const [openingProposalId, setOpeningProposalId] = useState<string | null>(
+    null
+  );
+  const [mailingProposalId, setMailingProposalId] = useState<string | null>(
+    null
+  );
 
   function flash(msg: string) {
     setNotice(msg);
@@ -226,7 +353,9 @@ export default function LeadDetailPage() {
   async function deleteLead() {
     if (!id) return;
 
-    const ok = window.confirm("¿Eliminar este lead? Esta acción no se puede deshacer.");
+    const ok = window.confirm(
+      "¿Eliminar este lead? Esta acción no se puede deshacer."
+    );
     if (!ok) return;
 
     setError(null);
@@ -286,7 +415,8 @@ export default function LeadDetailPage() {
     });
 
     const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
-    if (!res.ok) throw new Error((json as any)?.error ?? "No se pudo obtener la URL del PDF");
+    if (!res.ok)
+      throw new Error((json as any)?.error ?? "No se pudo obtener la URL del PDF");
 
     const row = (json as any)?.data ?? null;
     const url =
@@ -412,6 +542,12 @@ export default function LeadDetailPage() {
       origen: lead.origen ?? "",
       pipeline: lead.pipeline ?? "Nuevo",
       notas: lead.notas ?? "",
+
+      website: lead.website ?? "",
+      objetivos: Array.isArray(lead.objetivos) ? lead.objetivos : [],
+      audiencia: Array.isArray(lead.audiencia) ? lead.audiencia : [],
+      tamano: lead.tamano ?? "",
+      oferta: lead.oferta ?? "",
     });
   }
 
@@ -430,6 +566,12 @@ export default function LeadDetailPage() {
       origen: norm(draft.origen),
       pipeline: norm(draft.pipeline),
       notas: norm(draft.notas),
+
+      website: norm(draft.website),
+      objetivos: normArr(draft.objetivos),
+      audiencia: normArr(draft.audiencia),
+      tamano: norm(draft.tamano),
+      oferta: norm(draft.oferta),
     };
 
     await patchLead(normalized);
@@ -442,6 +584,7 @@ export default function LeadDetailPage() {
   }, [editing, draft.pipeline, lead?.pipeline]);
 
   const title = loading ? "Cargando…" : lead?.nombre ?? "Lead";
+  const leadIdSafe = (lead?.id ?? id ?? "").trim();
 
   return (
     <PageContainer>
@@ -450,16 +593,26 @@ export default function LeadDetailPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
-              <p className="mt-1 text-sm text-slate-600">Detalle, edición, propuestas e eliminación.</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Detalle, edición, propuestas e informe IA.
+              </p>
 
               <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
-                <Link href="/admin/leads" className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700">
+                <Link
+                  href="/admin/leads"
+                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
+                >
                   Lista
                 </Link>
-                <Link href="/admin/leads/kanban" className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700">
+                <Link
+                  href="/admin/leads/kanban"
+                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
+                >
                   Kanban
                 </Link>
-                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">Ficha</span>
+                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
+                  Ficha
+                </span>
               </div>
             </div>
 
@@ -548,49 +701,132 @@ export default function LeadDetailPage() {
                 <Field
                   label="Nombre"
                   editing={editing}
-                  value={editing ? (draft.nombre as any) ?? "" : lead?.nombre ?? "—"}
+                  value={(editing ? (draft.nombre as any) : lead?.nombre) ?? ""}
                   onChange={(v) => setDraft((p) => ({ ...p, nombre: v }))}
                 />
                 <Field
                   label="Contacto"
                   editing={editing}
-                  value={editing ? (draft.contacto as any) ?? "" : lead?.contacto ?? "—"}
+                  value={(editing ? (draft.contacto as any) : lead?.contacto) ?? ""}
                   onChange={(v) => setDraft((p) => ({ ...p, contacto: v }))}
                 />
                 <Field
                   label="Teléfono"
                   editing={editing}
-                  value={editing ? (draft.telefono as any) ?? "" : lead?.telefono ?? "—"}
+                  value={(editing ? (draft.telefono as any) : lead?.telefono) ?? ""}
                   onChange={(v) => setDraft((p) => ({ ...p, telefono: v }))}
                 />
                 <Field
                   label="Email"
                   editing={editing}
-                  value={editing ? (draft.email as any) ?? "" : lead?.email ?? "—"}
+                  value={(editing ? (draft.email as any) : lead?.email) ?? ""}
                   onChange={(v) => setDraft((p) => ({ ...p, email: v }))}
                 />
               </div>
             </div>
 
             <div className="rounded-2xl border bg-white p-4">
-              <div className="text-xs font-semibold text-slate-500">Estado</div>
+              <div className="text-xs font-semibold text-slate-500">
+                Perfil / Afiliación
+              </div>
 
               <div className="mt-3 space-y-3">
                 <Field
                   label="Origen"
                   editing={editing}
-                  value={editing ? (draft.origen as any) ?? "" : lead?.origen ?? "—"}
+                  value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
                   onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
                 />
                 <Field
                   label="Pipeline"
                   editing={editing}
-                  value={editing ? (draft.pipeline as any) ?? "Nuevo" : pipelineValue}
+                  value={
+                    editing
+                      ? ((draft.pipeline as any) ?? "Nuevo")
+                      : (pipelineValue ?? "")
+                  }
                   onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
                   placeholder="Nuevo"
                 />
+
+                <Field
+                  label="Website"
+                  editing={editing}
+                  value={(editing ? (draft.website as any) : lead?.website) ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, website: v }))}
+                  placeholder="https://..."
+                />
+
+                <PillMulti
+                  label="Objetivo(s) (checkbox)"
+                  editing={editing}
+                  value={editing ? (draft.objetivos as any) : lead?.objetivos}
+                  options={OBJETIVOS_OPTS}
+                  onChange={(next) => setDraft((p) => ({ ...p, objetivos: next }))}
+                />
+
+                <PillMulti
+                  label="A quién le vende (checkbox)"
+                  editing={editing}
+                  value={editing ? (draft.audiencia as any) : lead?.audiencia}
+                  options={AUDIENCIA_OPTS}
+                  onChange={(next) => setDraft((p) => ({ ...p, audiencia: next }))}
+                />
+
                 <div>
-                  <div className="text-xs text-slate-500">Notas</div>
+                  <div className="text-xs text-slate-500">Tamaño (checkbox único)</div>
+                  {editing ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {TAMANO_OPTS.map((opt) => {
+                        const active = ((draft.tamano as any) ?? "") === opt;
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() =>
+                              setDraft((p) => ({ ...p, tamano: active ? "" : opt }))
+                            }
+                            className={[
+                              "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                              active
+                                ? "bg-slate-900 text-white border-slate-900"
+                                : "bg-white text-slate-700 hover:bg-slate-50",
+                            ].join(" ")}
+                            aria-pressed={active}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {lead?.tamano ?? "—"}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-xs text-slate-500">
+                    Qué ofrece a la Cámara / comunidad
+                  </div>
+                  {editing ? (
+                    <textarea
+                      value={(draft.oferta as any) ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, oferta: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                      rows={3}
+                      placeholder="Ej: descuentos, expertise, charlas, referrals, partnership…"
+                    />
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {lead?.oferta ?? "—"}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-xs text-slate-500">Notas (memo)</div>
                   {editing ? (
                     <textarea
                       value={(draft.notas as any) ?? ""}
@@ -609,11 +845,15 @@ export default function LeadDetailPage() {
                 <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
                   <div className="rounded-xl border bg-white px-3 py-2">
                     <div className="font-semibold">Creado</div>
-                    <div className="mt-1">{formatDateTime(lead?.created_at ?? null)}</div>
+                    <div className="mt-1">
+                      {formatDateTime(lead?.created_at ?? null)}
+                    </div>
                   </div>
                   <div className="rounded-xl border bg-white px-3 py-2">
                     <div className="font-semibold">Actualizado</div>
-                    <div className="mt-1">{formatDateTime(lead?.updated_at ?? null)}</div>
+                    <div className="mt-1">
+                      {formatDateTime(lead?.updated_at ?? null)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -626,6 +866,9 @@ export default function LeadDetailPage() {
             </div>
           )}
         </div>
+
+        {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
+        <AiLeadReport key={`ai-${leadIdSafe}`} leadId={leadIdSafe} lead={lead} />
 
         <Modal
           open={proposalsOpen}
@@ -721,11 +964,16 @@ export default function LeadDetailPage() {
                       const isMailing = mailingProposalId === p.id;
 
                       return (
-                        <div key={p.id} className="grid grid-cols-12 items-center px-3 py-2 text-sm">
+                        <div
+                          key={p.id}
+                          className="grid grid-cols-12 items-center px-3 py-2 text-sm"
+                        >
                           <div className="col-span-5 min-w-0">
                             <div className="truncate font-medium text-slate-900">{name}</div>
                             <div className="mt-0.5 text-xs text-slate-500">
-                              {p.file_name ? <span className="truncate">{p.file_name}</span> : null}
+                              {p.file_name ? (
+                                <span className="truncate">{p.file_name}</span>
+                              ) : null}
                               {p.file_size ? (
                                 <span className="ml-2 rounded-full border bg-white px-2 py-0.5 text-[11px] text-slate-600">
                                   {bytes(p.file_size)}
@@ -807,7 +1055,7 @@ function Field({
         />
       ) : (
         <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          {value ?? "—"}
+          {value?.trim?.() ? value : "—"}
         </div>
       )}
     </div>
