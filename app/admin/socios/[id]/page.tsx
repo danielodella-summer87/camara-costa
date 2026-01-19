@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { createClient } from "@supabase/supabase-js";
+import { supabaseServer } from "@/lib/supabase/server";
 import EditSocioForm from "./EditSocioForm";
 import SocioAcciones from "./SocioAcciones";
 
@@ -16,17 +16,10 @@ type Accion = {
 export default async function SocioDetailPage({ params }: { params: Promise<Params> }) {
   const { id } = await params;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    auth: { persistSession: false },
-  });
-
   // Socio con join a empresas
-  const { data: socio, error: socioError } = await supabase
+  const { data: socio, error: socioError } = await supabaseServer
     .from("socios")
-    .select("id, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre,email,telefono,web,direccion)")
+    .select("id, codigo, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre,email,telefono,web,direccion)")
     .eq("id", id)
     .maybeSingle();
 
@@ -48,7 +41,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
   }
 
   // Acciones (últimas 25)
-  const { data: accionesRows } = await supabase
+  const { data: accionesRows } = await supabaseServer
     .from("socio_acciones")
     .select("id,socio_id,tipo,nota,realizada_at")
     .eq("socio_id", id)
@@ -68,7 +61,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
           <h1 className="text-2xl font-semibold">{(socio.empresas as any)?.nombre ?? "—"}</h1>
 
           <div className="text-sm text-slate-600">
-            ID: <span className="font-mono">{socio.id}</span> · Plan: {socio.plan ?? "—"} · Estado: {socio.estado ?? "—"}
+            Código: <span className="font-mono">{socio.codigo ?? "—"}</span> · ID: <span className="font-mono">{socio.id}</span> · Plan: {socio.plan ?? "—"} · Estado: {socio.estado ?? "—"}
           </div>
 
           <div className="text-sm text-slate-600">

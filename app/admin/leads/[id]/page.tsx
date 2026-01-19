@@ -19,6 +19,10 @@ type Empresa = {
   pais?: string | null;
   web?: string | null;
   instagram?: string | null;
+  contacto_nombre?: string | null;
+  contacto_celular?: string | null;
+  contacto_email?: string | null;
+  etiquetas?: string | null;
   rubro_id?: string | null;
   rubros?: {
     id: string;
@@ -55,6 +59,7 @@ type Lead = {
   member_since?: string | null;
   empresa_id?: string | null;
   empresas?: Empresa | null;
+  score?: number | null;
 };
 
 type LeadApiResponse = {
@@ -80,6 +85,8 @@ type PatchPayload = Partial<
     | "linkedin_empresa"
     | "linkedin_director"
     | "empresa_id"
+    | "score"
+    | "score_categoria"
   >
 >;
 
@@ -457,6 +464,8 @@ export default function LeadDetailPage() {
       linkedin_empresa: norm(draft.linkedin_empresa),
       linkedin_director: norm(draft.linkedin_director),
       empresa_id: draft.empresa_id ?? null,
+      score: draft.score ?? null,
+      score_categoria: draft.score_categoria ?? null,
     };
 
     await patchLead(normalized);
@@ -741,6 +750,8 @@ export default function LeadDetailPage() {
     setDraft({
       nombre: lead.nombre ?? "",
       contacto: lead.contacto ?? "",
+      score: lead.score ?? 0,
+      score_categoria: lead.score_categoria ?? null,
       telefono: lead.telefono ?? "",
       email: lead.email ?? "",
       empresa_id: lead.empresa_id ?? null,
@@ -784,7 +795,7 @@ export default function LeadDetailPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
                 {lead?.is_member && (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                     <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
@@ -955,10 +966,10 @@ export default function LeadDetailPage() {
           )}
 
           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {/* Sección: Datos de la empresa (solo lectura) */}
+            {/* Sección: Datos de Empresa (base) - solo lectura */}
             {lead?.empresas && (
-              <div className="rounded-2xl border bg-white p-4">
-                <div className="text-xs font-semibold text-slate-500">Datos de la empresa</div>
+            <div className="rounded-2xl border bg-white p-4">
+                <div className="text-xs font-semibold text-slate-500">Datos de Empresa (base)</div>
                 <div className="mt-3 space-y-3">
                   <Field
                     label="Nombre"
@@ -1042,6 +1053,38 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
+                  {lead.empresas.contacto_nombre && (
+                    <Field
+                      label="Contacto (nombre)"
+                      editing={false}
+                      value={lead.empresas.contacto_nombre ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.contacto_celular && (
+                    <Field
+                      label="Contacto (celular)"
+                      editing={false}
+                      value={lead.empresas.contacto_celular ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.contacto_email && (
+                    <Field
+                      label="Contacto (email)"
+                      editing={false}
+                      value={lead.empresas.contacto_email ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.etiquetas && (
+                    <Field
+                      label="Etiquetas"
+                      editing={false}
+                      value={lead.empresas.etiquetas ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -1084,6 +1127,41 @@ export default function LeadDetailPage() {
               </div>
 
               <div className="mt-3 space-y-3">
+                {/* Score (0-10 estrellas) */}
+                <div className="rounded-xl border p-4">
+                  <div className="text-xs font-semibold text-slate-600 mb-2">
+                    Calidad del lead
+                  </div>
+                  {editing ? (
+                    <StarRating
+                      value={draft.score ?? null}
+                      onChange={(v) => setDraft((p) => ({ ...p, score: v }))}
+                      disabled={disabled}
+                    />
+                  ) : (
+                    <>
+                      {lead?.score !== null && lead?.score !== undefined ? (
+                        <>
+                          <StarRating
+                            value={lead.score}
+                            onChange={() => {}}
+                            disabled={true}
+                          />
+                          {lead?.score_categoria && (
+                            <div className="mt-1 text-xs text-slate-500">
+                              Categoría IA: {lead.score_categoria}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="text-xs text-slate-500">
+                          Sin score IA
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
                 <Field
                   label="Origen"
                   editing={editing}
@@ -1454,6 +1532,69 @@ function Field({
         <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
           {value?.trim?.() ? value : "—"}
         </div>
+      )}
+    </div>
+  );
+}
+
+function StarRating({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  disabled?: boolean;
+}) {
+  const handleClick = (star: number) => {
+    if (disabled) return;
+    // Si clickeamos la misma estrella que ya está seleccionada, la deseleccionamos (null)
+    if (value === star) {
+      onChange(null);
+    } else {
+      onChange(star);
+    }
+  };
+
+  // Si value es null, no mostrar estrellas (solo en modo lectura)
+  if (value === null && disabled) {
+    return null;
+  }
+
+  // Normalizar: null se trata como 0 solo para mostrar estrellas (en modo edición)
+  const normalizedValue = value ?? 0;
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((star) => (
+          <button
+            key={star}
+            type="button"
+            onClick={() => handleClick(star)}
+            disabled={disabled}
+            className={`text-xl transition-all ${
+              star <= normalizedValue
+                ? "text-yellow-400"
+                : "text-slate-300"
+            } ${
+              disabled
+                ? "cursor-not-allowed opacity-50"
+                : "cursor-pointer hover:scale-110"
+            }`}
+            title={normalizedValue === star ? "Quitar score" : `Calificar ${star}/10`}
+          >
+            ★
+          </button>
+        ))}
+      </div>
+      {normalizedValue === 0 && !disabled && (
+        <span className="text-xs text-slate-500">Sin calificar</span>
+      )}
+      {normalizedValue > 0 && (
+        <span className="text-xs text-slate-600">
+          {normalizedValue}/10
+        </span>
       )}
     </div>
   );

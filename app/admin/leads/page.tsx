@@ -18,6 +18,7 @@ type Lead = {
   estado?: string | null;
   is_member?: boolean | null;
   member_since?: string | null;
+  score?: number | null;
 };
 
 type PipelineRow = {
@@ -71,6 +72,219 @@ function formatLocalFilenameDate(d = new Date()) {
 
 function norm(s: string | null | undefined) {
   return (s ?? "").trim().toLowerCase();
+}
+
+// Componente para botón "Nuevo lead" con opciones
+function NewLeadButton() {
+  const [showMenu, setShowMenu] = useState(false);
+  const [showEmpresaSelector, setShowEmpresaSelector] = useState(false);
+
+  return (
+    <>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setShowMenu(!showMenu)}
+          className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 flex items-center gap-2"
+        >
+          Nuevo lead
+          <span className="text-xs">▼</span>
+        </button>
+
+        {showMenu && (
+          <>
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setShowMenu(false)}
+            />
+            <div className="absolute top-full left-0 mt-1 z-20 rounded-xl border bg-white shadow-lg min-w-[180px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenu(false);
+                  setShowEmpresaSelector(true);
+                }}
+                className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 rounded-t-xl"
+              >
+                Desde empresa
+              </button>
+              <Link
+                href="/admin/leads/nuevo"
+                onClick={() => setShowMenu(false)}
+                className="block w-full text-left px-4 py-2 text-sm hover:bg-slate-50 rounded-b-xl"
+              >
+                Manual
+              </Link>
+            </div>
+          </>
+        )}
+      </div>
+
+      {showEmpresaSelector && (
+        <EmpresaSelectorModal
+          onClose={() => setShowEmpresaSelector(false)}
+          onSelect={async (empresaId: string) => {
+            setShowEmpresaSelector(false);
+            // Crear lead desde empresa
+            try {
+              const res = await fetch("/api/admin/empresas", {
+                method: "GET",
+                cache: "no-store",
+                headers: { "Cache-Control": "no-store" },
+              });
+              const empresasJson = await res.json();
+              const empresa = empresasJson?.data?.find((e: any) => e.id === empresaId);
+              
+              if (!empresa) {
+                alert("Empresa no encontrada");
+                return;
+              }
+
+              // Crear lead con datos de empresa
+              const leadRes = await fetch("/api/admin/leads", {
+                method: "POST",
+                cache: "no-store",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Cache-Control": "no-store",
+                },
+                body: JSON.stringify({
+                  nombre: empresa.nombre ?? "",
+                  email: empresa.email,
+                  telefono: empresa.telefono,
+                  website: empresa.web,
+                  empresa_id: empresa.id,
+                  pipeline: "Nuevo",
+                }),
+              });
+
+              const leadJson = await leadRes.json();
+              if (!leadRes.ok) {
+                throw new Error(leadJson?.error ?? "Error creando lead");
+              }
+
+              // Redirigir a la ficha del lead
+              if (leadJson?.data?.id) {
+                window.location.href = `/admin/leads/${leadJson.data.id}`;
+              }
+            } catch (e: any) {
+              alert(e?.message ?? "Error creando lead desde empresa");
+            }
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Modal selector de empresas
+function EmpresaSelectorModal({
+  onClose,
+  onSelect,
+}: {
+  onClose: () => void;
+  onSelect: (empresaId: string) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchEmpresas() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/admin/empresas", {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store" },
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "Error cargando empresas");
+        setEmpresas(Array.isArray(json?.data) ? json.data : []);
+      } catch (e: any) {
+        setError(e?.message ?? "Error cargando empresas");
+        setEmpresas([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchEmpresas();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return empresas;
+    return empresas.filter((e) => {
+      const haystack = [
+        e.nombre ?? "",
+        e.email ?? "",
+        e.telefono ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [empresas, search]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-lg font-semibold text-slate-900">Seleccionar empresa</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border px-3 py-1 text-sm hover:bg-slate-50"
+          >
+            Cerrar
+          </button>
+        </div>
+
+        <div className="p-6 border-b">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por nombre, email o teléfono..."
+            className="w-full rounded-xl border px-4 py-2 text-sm"
+            autoFocus
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="text-sm text-slate-500">Cargando empresas...</div>
+          ) : error ? (
+            <div className="text-sm text-red-600">{error}</div>
+          ) : filtered.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              {search ? "No se encontraron empresas con ese criterio." : "No hay empresas disponibles."}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filtered.map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => onSelect(e.id)}
+                  className="w-full text-left rounded-xl border p-4 hover:bg-slate-50 transition-colors"
+                >
+                  <div className="font-semibold text-slate-900">{e.nombre ?? "—"}</div>
+                  <div className="mt-1 text-sm text-slate-600">
+                    {e.email && <span>{e.email}</span>}
+                    {e.email && e.telefono && <span> · </span>}
+                    {e.telefono && <span>{e.telefono}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function LeadsPage() {
@@ -411,15 +625,15 @@ export default function LeadsPage() {
             {/* ✅ Switch en modo LISTA */}
             <div className="mt-3 flex items-center gap-3">
               <div className="inline-flex overflow-hidden rounded-xl border bg-white">
-                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
-                  Lista
-                </span>
-                <Link
-                  href="/admin/leads/kanban"
-                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
-                >
-                  Kanban
-                </Link>
+              <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
+                Lista
+              </span>
+              <Link
+                href="/admin/leads/kanban"
+                className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
+              >
+                Kanban
+              </Link>
               </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -434,12 +648,7 @@ export default function LeadsPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href="/admin/leads/nuevo"
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
-            >
-              Nuevo lead
-            </Link>
+            <NewLeadButton />
 
             <Link
               href="/admin/leads/importar"
@@ -567,20 +776,20 @@ export default function LeadsPage() {
               {selectedCount > 0 && ` · ${selectedCount} seleccionado${selectedCount > 1 ? "s" : ""}`}
             </span>
           </div>
-          
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            {loading ? (
-              <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
-            ) : filtered.length === 0 ? (
-              <div className="px-4 py-6 text-sm text-slate-500">No hay leads para mostrar.</div>
-            ) : (
-              <div className="divide-y divide-slate-200">
-                {filtered.map((l) => {
-                  const checked = selectedIds.has(l.id);
 
-                  return (
-                    <div
-                      key={l.id}
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          {loading ? (
+            <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
+          ) : filtered.length === 0 ? (
+            <div className="px-4 py-6 text-sm text-slate-500">No hay leads para mostrar.</div>
+          ) : (
+              <div className="divide-y divide-slate-200">
+              {filtered.map((l) => {
+                const checked = selectedIds.has(l.id);
+
+                return (
+                  <div
+                    key={l.id}
                       className="group relative flex items-center gap-4 border-b border-slate-100 px-4 py-3 transition-colors hover:bg-slate-50 focus-within:bg-slate-50 md:min-h-[56px]"
                     >
                       {/* Checkbox - no navega */}
@@ -588,14 +797,14 @@ export default function LeadsPage() {
                         className="flex items-center justify-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleOne(l.id)}
-                          disabled={disabled}
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOne(l.id)}
+                        disabled={disabled}
                           className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
-                        />
-                      </div>
+                      />
+                    </div>
 
                       {/* Fila clickeable - navega al lead */}
                       <Link
@@ -642,6 +851,23 @@ export default function LeadsPage() {
 
                           {/* Derecha: Chips + Botón */}
                           <div className="flex items-center gap-2 flex-shrink-0">
+                            {/* Score (estrellas) */}
+                            {l.score !== null && l.score !== undefined && (
+                              <div className="flex items-center gap-0.5" title={`Score: ${l.score} de 5`}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <span
+                                    key={star}
+                                    className={`text-sm ${
+                                      star <= l.score!
+                                        ? "text-yellow-400"
+                                        : "text-slate-300"
+                                    }`}
+                                  >
+                                    ★
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                             {l.origen && (
                               <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700">
                                 {l.origen}
@@ -667,6 +893,23 @@ export default function LeadsPage() {
                                 <div className="truncate text-xs text-slate-500">{l.contacto}</div>
                               )}
                             </div>
+                            {/* Score en mobile */}
+                            {l.score !== null && l.score !== undefined && (
+                              <div className="flex items-center gap-0.5 flex-shrink-0" title={`Score: ${l.score} de 5`}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <span
+                                    key={star}
+                                    className={`text-xs ${
+                                      star <= l.score!
+                                        ? "text-yellow-400"
+                                        : "text-slate-300"
+                                    }`}
+                                  >
+                                    ★
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           {/* Línea 2: Email/Teléfono + Chips */}
                           <div className="flex items-center justify-between gap-2">
@@ -707,15 +950,15 @@ export default function LeadsPage() {
                         <Link
                           href={`/admin/leads/${l.id}`}
                           className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
-                        >
-                          Ver
-                        </Link>
-                      </div>
+                      >
+                        Ver
+                      </Link>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           </div>
         </div>
 

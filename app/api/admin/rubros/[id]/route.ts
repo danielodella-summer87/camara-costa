@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 type Rubro = {
   id: string;
   nombre: string;
+  activo: boolean;
   created_at?: string;
 };
 
@@ -55,19 +56,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     const supabase = supabaseAdmin();
     const body = await req.json().catch(() => ({}));
-    const nombre = cleanNombre(body?.nombre);
-
-    if (!nombre) {
-      return NextResponse.json<ApiResponse<Rubro>>(
-        { data: null, error: "Falta 'nombre' (string)" },
-        { status: 400, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    const nombre = body?.nombre !== undefined ? cleanNombre(body.nombre) : null;
 
     // Traer rubro actual (para rollback si falla la actualización en empresas)
     const current = await supabase
       .from("rubros")
-      .select("id,nombre,created_at")
+      .select("id,nombre,activo,created_at")
       .eq("id", id)
       .single();
 
@@ -78,27 +72,43 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
 
-    // Duplicado (excluyendo este id)
-    const dup = await supabase
-      .from("rubros")
-      .select("id")
-      .eq("nombre", nombre)
-      .neq("id", id)
-      .maybeSingle();
+    // Si viene nombre, validar duplicado (excluyendo este id)
+    if (nombre) {
+      const dup = await supabase
+        .from("rubros")
+        .select("id")
+        .ilike("nombre", nombre)
+        .neq("id", id)
+        .maybeSingle();
 
-    if (dup?.data?.id) {
+      if (dup?.data?.id) {
+        return NextResponse.json<ApiResponse<Rubro>>(
+          { data: null, error: "Ya existe otro rubro con ese nombre" },
+          { status: 409, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+    }
+
+    // Construir update payload
+    const updateData: any = {};
+    if (nombre !== null) updateData.nombre = nombre;
+    if (body.activo !== undefined && body.activo !== null) {
+      updateData.activo = Boolean(body.activo);
+    }
+
+    if (Object.keys(updateData).length === 0) {
       return NextResponse.json<ApiResponse<Rubro>>(
-        { data: null, error: "Ya existe otro rubro con ese nombre" },
-        { status: 409, headers: { "Cache-Control": "no-store" } }
+        { data: null, error: "No hay campos para actualizar" },
+        { status: 400, headers: { "Cache-Control": "no-store" } }
       );
     }
 
     // 1) actualizar rubro
     const upd = await supabase
       .from("rubros")
-      .update({ nombre })
+      .update(updateData)
       .eq("id", id)
-      .select("id,nombre,created_at")
+      .select("id,nombre,activo,created_at")
       .single();
 
     if (upd.error) {
@@ -108,25 +118,27 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
 
-    // 2) mantener consistencia en empresas (si guardás rubro como texto también)
-    const updEmp = await supabase
-      .from("empresas")
-      .update({ rubro: nombre })
-      .eq("rubro_id", id);
+    // 2) Si se actualizó el nombre, mantener consistencia en empresas (si guardás rubro como texto también)
+    if (nombre && nombre !== current.data.nombre) {
+      const updEmp = await supabase
+        .from("empresas")
+        .update({ rubro: nombre })
+        .eq("rubro_id", id);
 
-    if (updEmp.error) {
-      // rollback
-      await supabase.from("rubros").update({ nombre: current.data.nombre }).eq("id", id);
+      if (updEmp.error) {
+        // rollback
+        await supabase.from("rubros").update({ nombre: current.data.nombre }).eq("id", id);
 
-      return NextResponse.json<ApiResponse<Rubro>>(
-        {
-          data: null,
-          error:
-            "No pude actualizar empresas relacionadas (rollback aplicado). Detalle: " +
-            updEmp.error.message,
-        },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
+        return NextResponse.json<ApiResponse<Rubro>>(
+          {
+            data: null,
+            error:
+              "No pude actualizar empresas relacionadas (rollback aplicado). Detalle: " +
+              updEmp.error.message,
+          },
+          { status: 500, headers: { "Cache-Control": "no-store" } }
+        );
+      }
     }
 
     return NextResponse.json<ApiResponse<Rubro>>(

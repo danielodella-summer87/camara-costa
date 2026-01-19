@@ -9,7 +9,7 @@ export default async function SociosPage() {
   // Consultar socios con join a empresas
   const { data, error } = await supabaseServer
     .from("socios")
-    .select("id, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre)")
+    .select("id, codigo, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre)")
     .order("fecha_alta", { ascending: false });
 
   if (error) {
@@ -49,7 +49,7 @@ export default async function SociosPage() {
                 key={row.id}
                 className="border-b transition hover:bg-slate-50"
               >
-                <td className="p-3 font-mono whitespace-nowrap">{row.id}</td>
+                <td className="p-3 font-mono whitespace-nowrap">{row.codigo ?? row.id}</td>
                 <td className="p-3 font-medium">{(row.empresas as any)?.nombre ?? "—"}</td>
                 <td className="p-3 whitespace-nowrap">{row.plan ?? "—"}</td>
                 <td className="p-3 whitespace-nowrap">{row.estado ?? "—"}</td>

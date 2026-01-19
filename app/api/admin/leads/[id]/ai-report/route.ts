@@ -34,6 +34,7 @@ type LeadRow = {
   ai_context?: string | null;
   ai_report?: string | null;
   ai_report_updated_at?: string | null;
+  ai_custom_prompt?: string | null;
 };
 
 function safeId(v: unknown) {
@@ -177,12 +178,40 @@ ${website ? `## Hipótesis por website
 /**
  * Genera un informe técnico usando OpenAI
  */
-async function generateAiReportAI(lead: LeadRow & { extra_context?: string | null }): Promise<string> {
+/**
+ * Lee el prompt base desde la tabla config
+ */
+async function getPromptBase(): Promise<string> {
+  try {
+    const sb = supabaseAdmin();
+    const { data, error } = await sb
+      .from("config")
+      .select("value")
+      .eq("key", "leads_ai_prompt_base")
+      .maybeSingle();
+
+    if (error && error.code !== "PGRST116") {
+      // PGRST116 = no rows returned (ok si no existe)
+      console.error("Error leyendo prompt base desde config:", error);
+      return "";
+    }
+
+    return (data?.value ?? "").trim();
+  } catch (e: any) {
+    console.error("Error inesperado leyendo prompt base:", e);
+    return "";
+  }
+}
+
+async function generateAiReportAI(lead: LeadRow & { custom_prompt?: string | null }): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   console.log("OPENAI_API_KEY presente:", Boolean(process.env.OPENAI_API_KEY));
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY no configurada");
   }
+
+  // Leer prompt base desde config
+  const promptBase = await getPromptBase();
 
   const nombre = lead.nombre ?? "Lead";
   const leadId = lead.id;
@@ -207,7 +236,8 @@ async function generateAiReportAI(lead: LeadRow & { extra_context?: string | nul
     day: "numeric",
   });
 
-  const prompt = `Actuás como Director de Desarrollo Institucional y Membresías de una Cámara Comercial internacional.
+  // Prompt por defecto (si no hay prompt base configurado)
+  const defaultPrompt = `Actuás como Director de Desarrollo Institucional y Membresías de una Cámara Comercial internacional.
 
 Tu rol NO es marketing.
 Tu rol es institucional–estratégico.
@@ -308,14 +338,14 @@ Regla:
 ---
 
 ## 5) Score de candidatura (priorización interna)
-Asignar puntaje 0–10 y justificar:
+Asignar puntaje 0–5 y justificar:
 - Prestigio / reputación percibida
 - Fit institucional con la Cámara
 - Potencial de aporte a la red
 - Probabilidad de cierre como socio en 30 días
 
 Luego indicar:
-- Score final (promedio)
+- Score final: X/5 (SIEMPRE usar formato X/5, NUNCA usar /10)
 - Categoría: Prioridad Alta / Media / Baja
 
 ---
@@ -362,9 +392,26 @@ REGLAS ESTRICTAS:
 - No inventes información no respaldada por los datos.
 - Si la información es insuficiente, indicarlo claramente.
 
-${lead.extra_context && lead.extra_context.trim() ? `\n**Personalización del analista (opcional):**\n${lead.extra_context.trim()}\n` : ""}
-
 Generá el informe completo siguiendo EXACTAMENTE este formato.`;
+
+  // Construir prompt final combinando:
+  // 1. Prompt base desde config (si existe)
+  // 2. Prompt con datos del lead (defaultPrompt)
+  // 3. Custom prompt del usuario (si existe)
+  const promptParts: string[] = [];
+  
+  if (promptBase) {
+    promptParts.push(promptBase.trim());
+  }
+  
+  promptParts.push(defaultPrompt);
+  
+  // Agregar personalización del usuario SI existe
+  if (lead.custom_prompt && lead.custom_prompt.trim()) {
+    promptParts.push(`**INSTRUCCIONES ADICIONALES DEL USUARIO:**\n${lead.custom_prompt.trim()}`);
+  }
+  
+  const promptFinal = promptParts.join("\n\n");
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -383,7 +430,7 @@ Generá el informe completo siguiendo EXACTAMENTE este formato.`;
           },
           {
             role: "user",
-            content: prompt,
+            content: promptFinal,
           },
         ],
         temperature: 0.7,
@@ -407,13 +454,25 @@ Generá el informe completo siguiendo EXACTAMENTE este formato.`;
       data?.choices?.[0]?.message?.content?.slice(0, 300)
     );
 
-    const report = data?.choices?.[0]?.message?.content?.trim() ?? "";
+    const aiText = data?.choices?.[0]?.message?.content?.trim() ?? "";
 
-    if (!report) {
+    if (!aiText) {
       throw new Error("OpenAI no devolvió contenido");
     }
 
-    return report;
+    // Log para debugging (solo en consola, no en el informe)
+    if (lead.custom_prompt && lead.custom_prompt.trim()) {
+      console.log("✅ Se aplicó personalización adicional al informe IA");
+    }
+
+    // Agregar línea discreta al inicio del informe SOLO si hay personalización
+    // (sin mostrar el contenido por privacidad)
+    const hasCustomization = !!(lead.custom_prompt && lead.custom_prompt.trim());
+    const finalReport = hasCustomization
+      ? `*Se aplicó personalización adicional: Sí*\n\n${aiText}`
+      : aiText;
+
+    return finalReport;
   } catch (error: any) {
     throw new Error(`Error generando informe con IA: ${error?.message ?? "Unknown error"}`);
   }
@@ -476,17 +535,26 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
-    // Body opcional: puede incluir extra_context
+    // Body opcional: puede incluir custom_prompt y force_regenerate
     const body = (await req.json().catch(() => null)) as
       | {
-          extra_context?: string | null;
+          custom_prompt?: string | null;
+          force_regenerate?: boolean;
         }
       | null;
+
+    const shouldRegenerate = body?.force_regenerate === true;
+    
+    // Fuente de verdad: prioridad 1) body.custom_prompt, 2) lead.ai_custom_prompt, 3) null
+    const bodyCustomPrompt = typeof body?.custom_prompt === "string" ? body.custom_prompt.trim() : null;
+    
+    // Log para debugging (antes de leer el lead)
+    console.log("AI REPORT leadId=", id, "body_custom_prompt_len=", bodyCustomPrompt?.length ?? 0, "force=", shouldRegenerate);
 
     const { data: lead, error: leadErr } = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt"
       )
       .eq("id", id)
       .maybeSingle();
@@ -497,6 +565,22 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     }
 
     const leadRow = lead as LeadRow;
+
+    // Determinar custom_prompt final: prioridad 1) body, 2) lead.ai_custom_prompt, 3) null
+    const finalCustomPrompt = bodyCustomPrompt || (leadRow.ai_custom_prompt?.trim() || null);
+    
+    // Log solo valores primitivos (no objetos complejos para evitar circular JSON)
+    console.log("📥 POST /ai-report recibido:", {
+      leadId: id,
+      force_regenerate: shouldRegenerate,
+      body_custom_prompt_length: bodyCustomPrompt?.length || 0,
+      db_custom_prompt_length: leadRow.ai_custom_prompt?.trim().length || 0,
+      final_custom_prompt_length: finalCustomPrompt?.length || 0,
+      has_existing_report: !!(leadRow.ai_report && leadRow.ai_report.trim()),
+    });
+
+    // Verificar si ya existe un informe
+    const hasExistingReport = !!(leadRow.ai_report && leadRow.ai_report.trim());
 
     // Log campos del lead recién leído (solo en dev)
     if (process.env.NODE_ENV === "development") {
@@ -510,19 +594,39 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       });
     }
 
-    // Si te pasan extra context, lo anexamos sin pisar lo existente
-    const extra = typeof body?.extra_context === "string" ? body.extra_context.trim() : "";
-    const nextContext = [leadRow.ai_context ?? "", extra].map((s) => s.trim()).filter(Boolean).join("\n\n");
+    // Decisión: reutilizar informe existente o generar uno nuevo
+    if (!shouldRegenerate && hasExistingReport) {
+      console.log("✅ Reutilizando informe existente (regenerate=false, hay informe previo)");
+      const row = leadRow as LeadRow;
+      return NextResponse.json(
+        {
+          data: {
+            id: row.id,
+            ai_context: row.ai_context ?? null,
+            report: row.ai_report ?? null,
+            ai_report: row.ai_report ?? null,
+            ai_report_updated_at: row.ai_report_updated_at ?? null,
+          },
+          error: null,
+        } satisfies ApiResp<any>,
+        { status: 200 }
+      );
+    }
+
+    console.log(shouldRegenerate 
+      ? "🔄 FORCE REGENERATE: generando nuevo informe (force_regenerate=true)" 
+      : "🆕 Generando nuevo informe (no hay informe previo)");
 
     // Generar informe con IA, con fallback si falla
     let report: string;
     let aiContext: string;
 
     try {
+      // Pasar custom_prompt final (prioridad: body > DB > null) a generateAiReportAI
       report = await generateAiReportAI({
         ...leadRow,
-        ai_context: nextContext || leadRow.ai_context || null,
-        extra_context: extra || null,
+        ai_context: leadRow.ai_context || null,
+        custom_prompt: finalCustomPrompt, // Personalización: body > DB > null
       });
       // Construir contexto para guardar
       aiContext = [
@@ -541,7 +645,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       // Fallback: generar informe técnico básico
       report = generateFallbackReport({
         ...leadRow,
-        ai_context: nextContext || leadRow.ai_context || null,
+        ai_context: leadRow.ai_context || null,
       });
       aiContext = [
         `Nombre: ${leadRow.nombre ?? "Lead"}`,
@@ -558,11 +662,115 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       ].join("\n");
     }
 
-    const patch = {
+    // Función para normalizar score (blindar contra valores inválidos)
+    // Asegura que siempre sea un entero entre 0-5 o null
+    function normalizeScore(raw: unknown): number | null {
+      if (raw === null || raw === undefined) return null;
+      
+      const n = Number(raw);
+      if (Number.isNaN(n) || !isFinite(n)) return null;
+      
+      // Forzar a entero y clamp a 0-5
+      const clamped = Math.max(0, Math.min(5, Math.round(n)));
+      
+      // Verificación final: debe ser entero entre 0-5
+      if (!Number.isInteger(clamped) || clamped < 0 || clamped > 5) {
+        return null;
+      }
+      
+      return clamped;
+    }
+
+    // Extraer score y categoría del informe IA
+    // ⚠️ Si no puede parsearse, NO fallar: dejar score = null y score_categoria = null
+    let extractedScore: number | null = null;
+    let extractedCategoria: string | null = null;
+
+    try {
+      // Buscar patrón: "Score final: X/5" o "Score final: X/10" o "Score final (promedio): X"
+      // Aceptar ambos formatos: X/5 y X/10
+      const scoreMatch5 = report.match(/Score\s+final[:\s]+(\d+)\s*\/\s*5/i);
+      const scoreMatch10 = report.match(/Score\s+final[:\s]+(\d+)\s*\/\s*10/i);
+      
+      let scoreValue: number | null = null;
+      let scale: "5" | "10" | null = null;
+      
+      if (scoreMatch5 && scoreMatch5[1]) {
+        // Formato X/5: usar directamente
+        scoreValue = parseInt(scoreMatch5[1], 10);
+        scale = "5";
+      } else if (scoreMatch10 && scoreMatch10[1]) {
+        // Formato X/10: convertir a escala 0-5
+        const value10 = parseInt(scoreMatch10[1], 10);
+        // Convertir X/10 a 0-5: Math.round((X/10)*5) o Math.round(X/2)
+        scoreValue = Math.round(value10 / 2);
+        scale = "10";
+      }
+      
+      if (scoreValue !== null && !isNaN(scoreValue) && isFinite(scoreValue) && Number.isInteger(scoreValue)) {
+        // Aplicar clamp: Math.max(0, Math.min(5, score))
+        const clamped = Math.max(0, Math.min(5, scoreValue));
+        // Usar normalizeScore para validación final (asegura entero 0-5)
+        extractedScore = normalizeScore(clamped);
+        
+        if (extractedScore !== null) {
+          console.log(`✅ Score parseado: ${scoreValue}${scale === "10" ? "/10" : "/5"} → ${extractedScore}/5`);
+        }
+      }
+    } catch (e) {
+      // Si falla el parseo, dejar score = null (no fallar)
+      console.warn("⚠️ No se pudo extraer score del informe IA:", e);
+      extractedScore = null;
+    }
+
+    try {
+      // Buscar patrón: "Categoría: X" (hasta fin de línea)
+      const categoriaMatch = report.match(/Categoría[:\s]+([^\n\r]+)/i);
+      if (categoriaMatch && categoriaMatch[1]) {
+        extractedCategoria = categoriaMatch[1].trim();
+        // Limpiar texto común
+        extractedCategoria = extractedCategoria.replace(/^(Prioridad\s+)?/i, "").trim();
+        if (extractedCategoria.length === 0) extractedCategoria = null;
+      }
+    } catch (e) {
+      // Si falla el parseo, dejar categoría = null (no fallar)
+      console.warn("⚠️ No se pudo extraer categoría del informe IA:", e);
+      extractedCategoria = null;
+    }
+
+    // Normalizar score antes de guardar (blindar contra valores inválidos)
+    // Asegurar que sea un entero válido (0-5) o null
+    const normalizedScore = normalizeScore(extractedScore);
+    
+    // Verificación final: score debe ser entero entre 0-5 o null
+    // Si no se puede parsear, NO actualizar score (dejarlo null)
+    const finalScore = (normalizedScore !== null && 
+                       Number.isInteger(normalizedScore) && 
+                       normalizedScore >= 0 && 
+                       normalizedScore <= 5) 
+                      ? normalizedScore 
+                      : null;
+
+    // Log de control antes de guardar
+    console.log("AI_SCORE_SAVE", { 
+      score: finalScore, 
+      categoria: extractedCategoria,
+      extractedScore,
+      normalizedScore,
+      isInteger: finalScore !== null ? Number.isInteger(finalScore) : null,
+      inRange: finalScore !== null ? (finalScore >= 0 && finalScore <= 5) : null
+    });
+
+    const patch: any = {
       ai_context: aiContext,
-      ai_report: report,
+      ai_report: report, // report ya incluye la marca de debug (agregada en generateAiReportAI)
       ai_report_updated_at: nowIso(),
       updated_at: nowIso(),
+      // Solo actualizar score si es válido (entero 0-5) o null
+      // Si no se puede parsear, NO actualizar score (dejarlo null) y NO tirar error
+      // Separar score y score_categoria para que puedan actualizarse independientemente
+      score: finalScore,
+      score_categoria: extractedCategoria,
     };
 
     const { data: updated, error: upErr } = await sb.from("leads").update(patch).eq("id", id).select("*").maybeSingle();
@@ -570,7 +778,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const row = (updated ?? null) as LeadRow | null;
 
-    // Asegurar que siempre retornamos data.report con contenido
+    // Asegurar que siempre retornamos data.report con contenido (incluye marca de debug)
     const finalReport = row?.ai_report ?? report;
 
     return NextResponse.json(

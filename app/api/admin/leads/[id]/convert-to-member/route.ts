@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // 1. Obtener datos completos del lead
     const leadCheck = await sb
       .from("leads")
-      .select("id, nombre, email, telefono, is_member")
+      .select("id, nombre, email, telefono, is_member, empresa_id")
       .eq("id", id)
       .maybeSingle();
 
@@ -70,13 +70,22 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       );
     }
 
-    // 3. Generar ID de socio (solo si no existe ya un socio para este lead_id)
-    const existingSocio = await sb.from("socios").select("id").eq("lead_id", id).maybeSingle();
+    // 3. Calcular socioId de forma segura
+    // 3.1 Buscar socio existente por lead_id
+    const existingSocio = await sb
+      .from("socios")
+      .select("id")
+      .eq("lead_id", id)
+      .maybeSingle();
 
-    let socioId = existingSocio.data?.id;
+    let socioId: string;
 
-    if (!socioId) {
-      // Buscar el último ID numérico para generar uno nuevo
+    if (existingSocio.data?.id) {
+      // Si ya existe, usar su id
+      socioId = existingSocio.data.id;
+    } else {
+      // Si no existe, generar uno nuevo tipo S-001, S-002...
+      // Buscar el último socio ordenando por id desc (o created_at desc)
       const lastSocio = await sb
         .from("socios")
         .select("id")
@@ -95,24 +104,39 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       }
     }
 
-    // 4. Upsert en socios (crear o actualizar por lead_id)
-    const socioData = {
+    // 4. Preparar socioData con id SIEMPRE presente
+    const socioDataBase: any = {
       id: socioId,
       lead_id: id,
       nombre: lead.nombre ?? null,
       email: lead.email ?? null,
       telefono: lead.telefono ?? null,
+      empresa_id: lead.empresa_id ?? null,
       plan: "Bronce",
       estado: "Activo",
       fecha_alta: today,
       proxima_accion: null,
     };
 
-    const upsertSocio = await sb
+    // 5. Intentar upsert con codigo (si existe la columna)
+    let upsertSocio;
+    let socioData = { ...socioDataBase, codigo: socioId };
+
+    upsertSocio = await sb
       .from("socios")
       .upsert(socioData, { onConflict: "lead_id" })
-      .select("id, lead_id, nombre, email, telefono, plan, estado, fecha_alta, proxima_accion")
+      .select("id, codigo, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
       .maybeSingle();
+
+    // Si falla por columna codigo, reintentar sin codigo
+    if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
+      socioData = socioDataBase; // Sin codigo
+      upsertSocio = await sb
+        .from("socios")
+        .upsert(socioData, { onConflict: "lead_id" })
+        .select("id, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
+        .maybeSingle();
+    }
 
     if (upsertSocio.error) {
       return NextResponse.json(

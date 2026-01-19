@@ -8,11 +8,12 @@ export default function Sidebar() {
 
   const items = [
     { label: "Dashboard", href: "/admin" },
-    { label: "Socios", href: "/admin/socios" },
     { label: "Empresas", href: "/admin/empresas" },
-    { label: "Eventos", href: "/admin/eventos" },
+    { label: "Rubros", href: "/admin/rubros" },
     { label: "Leads", href: "/admin/leads" },
+    { label: "Socios", href: "/admin/socios" },
     { label: "Reportes", href: "/admin/reportes" },
+    { label: "Eventos", href: "/admin/eventos" },
     { label: "Configuración", href: "/admin/configuracion" },
   ];
 

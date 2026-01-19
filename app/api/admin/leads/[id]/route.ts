@@ -39,7 +39,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q1 = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -64,7 +64,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q2 = await sb
       .from("lead")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -115,12 +115,23 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return NextResponse.json({ data: null, error: "Body inválido" } satisfies ApiResp<null>, { status: 400 });
     }
 
+    // Normalizar ai_custom_prompt: trim, si queda vacío -> null
+    const normalizeCustomPrompt = (value: unknown): string | null => {
+      if (value === null || value === undefined) return null;
+      if (typeof value !== "string") return null;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
     // Manejar is_member y member_since
     const updateData: any = {
       ...body,
       linkedin_empresa: body.linkedin_empresa ?? null,
       linkedin_director: body.linkedin_director ?? null,
       empresa_id: body.empresa_id ?? null, // Permitir actualizar empresa_id
+      ai_custom_prompt: normalizeCustomPrompt(body.ai_custom_prompt), // Normalizar: trim, si queda vacío -> null
+      score: body.score === null || body.score === undefined ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null),
+      score_categoria: body.score_categoria === null || body.score_categoria === undefined ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null),
     };
 
     // Si is_member cambia de false a true y member_since no viene, setear member_since=now()

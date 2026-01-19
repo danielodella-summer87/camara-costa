@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,6 +20,7 @@ type LeadMini = {
   oferta?: string | null;
   notas?: string | null;
   ai_report?: string | null;
+  ai_custom_prompt?: string | null;
 };
 
 type AiResp = {
@@ -142,6 +143,8 @@ export function AiLeadReport({
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
   const [status, setStatus] = useState<"idle" | "saving" | "generating" | "done">("idle");
   const [aiPromptExtra, setAiPromptExtra] = useState<string>("");
+  const [savingPrompt, setSavingPrompt] = useState(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const canRun = !!(leadId && leadId.trim());
 
@@ -153,14 +156,73 @@ export function AiLeadReport({
     }
   }, [lead]);
 
+  // Precargar el textarea desde lead.ai_custom_prompt
+  useEffect(() => {
+    const initialPrompt = lead?.ai_custom_prompt ?? "";
+    setAiPromptExtra(initialPrompt);
+  }, [lead?.ai_custom_prompt]);
+
+  // Autosave con debounce (700ms)
+  // Solo guarda cuando el usuario cambia el valor (no en el primer render)
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    // Saltar el primer render (cuando se precarga desde lead.ai_custom_prompt)
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    // Limpiar timeout anterior si existe
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Si no hay leadId, no guardar
+    if (!leadId?.trim()) return;
+
+    // Crear nuevo timeout para guardar después del debounce
+    saveTimeoutRef.current = setTimeout(async () => {
+      const validLeadId = leadId.trim();
+      const valueToSave = aiPromptExtra.trim() || null;
+
+      try {
+        setSavingPrompt(true);
+        const res = await fetch(`/api/admin/leads/${encodeURIComponent(validLeadId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ai_custom_prompt: valueToSave }),
+        });
+
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          console.warn("Error guardando ai_custom_prompt:", json?.error);
+          // No mostrar error al usuario para no romper UX
+        }
+      } catch (e: any) {
+        console.warn("Error guardando ai_custom_prompt:", e?.message);
+        // No mostrar error al usuario para no romper UX
+      } finally {
+        setSavingPrompt(false);
+      }
+    }, 700); // 700ms de debounce
+
+    // Cleanup: limpiar timeout si el componente se desmonta o cambia el valor
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [aiPromptExtra, leadId]);
+
   const filename = useMemo(() => {
     const base = (lead?.nombre || "lead").toString().trim().replace(/[^\w\-]+/g, "_");
     const stamp = new Date().toISOString().slice(0, 10);
     return `AI_Informe_${base}_${stamp}.pdf`;
   }, [lead?.nombre]);
 
-  async function generate() {
-    console.log("generate() - leadId recibido:", leadId, "canRun:", canRun);
+  async function generate(regenerate: boolean = false) {
+    // Log solo valores primitivos
+    console.log("generate() - leadId:", leadId?.trim() || "(vacío)", "canRun:", canRun, "regenerate:", regenerate);
     if (!canRun) return;
     setError(null);
     setLoading(true);
@@ -174,13 +236,30 @@ export function AiLeadReport({
       }
 
       setStatus("generating");
-      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId.trim())}/ai-report`, {
+      
+      // Validar leadId antes de hacer el fetch
+      const validLeadId = leadId?.trim();
+      if (!validLeadId) {
+        throw new Error("Lead ID inválido o faltante");
+      }
+      
+      // Crear body con solo strings/boolean (sin objetos raros)
+      const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+      const body: {
+        custom_prompt: string | null;
+        force_regenerate: boolean;
+      } = {
+        custom_prompt: customPromptValue,
+        force_regenerate: regenerate,
+      };
+      
+      // Log para debugging (solo valores primitivos)
+      console.log("AI REPORT leadId=", validLeadId, "custom_prompt_len=", customPromptValue?.length ?? 0, "force=", regenerate);
+      
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(validLeadId)}/ai-report`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        cache: "no-store",
-        body: JSON.stringify({
-          extra_context: aiPromptExtra.trim() || null,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
 
       const json = (await res.json().catch(() => ({}))) as AiResp;
@@ -235,7 +314,10 @@ export function AiLeadReport({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={generate}
+            onClick={(e) => {
+              e?.preventDefault?.();
+              generate(false); // false = no regenerar
+            }}
             disabled={!canRun || loading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
             title={!canRun ? "Lead ID inválido" : "Generar informe"}
@@ -245,12 +327,13 @@ export function AiLeadReport({
 
           <button
             type="button"
-            onClick={async () => {
+            onClick={(e) => {
+              e?.preventDefault?.();
               const ok = window.confirm(
                 "Esto regenerará el informe IA y reemplazará el actual. ¿Deseas continuar?"
               );
               if (!ok) return;
-              await generate();
+              generate(true); // true = regenerate
             }}
             disabled={!canRun || loading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
@@ -299,9 +382,14 @@ export function AiLeadReport({
 
       {/* Campo de personalización IA */}
       <div className="mt-4">
-        <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700 mb-1">
-          Personalización IA (opcional)
-        </label>
+        <div className="flex items-center justify-between mb-1">
+          <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700">
+            Personalización IA (opcional)
+          </label>
+          {savingPrompt && (
+            <span className="text-xs text-slate-400">Guardando…</span>
+          )}
+        </div>
         <textarea
           id="ai-prompt-extra"
           value={aiPromptExtra}
@@ -312,7 +400,7 @@ export function AiLeadReport({
           rows={3}
         />
         <p className="mt-1 text-xs text-slate-500">
-          Agrega instrucciones específicas para personalizar el análisis. Este texto se incluirá en el prompt de IA.
+          Agrega instrucciones específicas para personalizar el análisis. Este texto se incluirá en el prompt de IA. Se guarda automáticamente.
         </p>
       </div>
 
