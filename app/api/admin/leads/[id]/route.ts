@@ -35,11 +35,11 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
-    // Intento principal: tabla "leads"
+    // Intento principal: tabla "leads" con join a empresas
     const q1 = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -64,7 +64,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q2 = await sb
       .from("lead")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -120,6 +120,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       ...body,
       linkedin_empresa: body.linkedin_empresa ?? null,
       linkedin_director: body.linkedin_director ?? null,
+      empresa_id: body.empresa_id ?? null, // Permitir actualizar empresa_id
     };
 
     // Si is_member cambia de false a true y member_since no viene, setear member_since=now()

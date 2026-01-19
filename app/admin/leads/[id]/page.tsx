@@ -7,6 +7,25 @@ import { useParams, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+type Empresa = {
+  id: string;
+  nombre: string | null;
+  email: string | null;
+  telefono: string | null;
+  celular?: string | null;
+  rut?: string | null;
+  direccion?: string | null;
+  ciudad?: string | null;
+  pais?: string | null;
+  web?: string | null;
+  instagram?: string | null;
+  rubro_id?: string | null;
+  rubros?: {
+    id: string;
+    nombre: string | null;
+  } | null;
+};
+
 type Lead = {
   id: string;
   nombre: string | null;
@@ -34,6 +53,8 @@ type Lead = {
   next_activity_at?: string | null;
   is_member?: boolean | null;
   member_since?: string | null;
+  empresa_id?: string | null;
+  empresas?: Empresa | null;
 };
 
 type LeadApiResponse = {
@@ -58,6 +79,7 @@ type PatchPayload = Partial<
     | "oferta"
     | "linkedin_empresa"
     | "linkedin_director"
+    | "empresa_id"
   >
 >;
 
@@ -305,6 +327,7 @@ export default function LeadDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PatchPayload>({});
+  const [empresaIdInput, setEmpresaIdInput] = useState("");
 
   // ✅ propuestas
   const [proposalsOpen, setProposalsOpen] = useState(false);
@@ -433,6 +456,7 @@ export default function LeadDetailPage() {
       oferta: norm(draft.oferta),
       linkedin_empresa: norm(draft.linkedin_empresa),
       linkedin_director: norm(draft.linkedin_director),
+      empresa_id: draft.empresa_id ?? null,
     };
 
     await patchLead(normalized);
@@ -719,6 +743,7 @@ export default function LeadDetailPage() {
       contacto: lead.contacto ?? "",
       telefono: lead.telefono ?? "",
       email: lead.email ?? "",
+      empresa_id: lead.empresa_id ?? null,
       origen: lead.origen ?? "",
       pipeline: lead.pipeline ?? "Nuevo",
       notas: lead.notas ?? "",
@@ -884,9 +909,146 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {/* Warning si no está vinculado a empresa */}
+          {!lead?.empresa_id && (
+            <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-yellow-900">
+                    Este lead no está vinculado a una empresa
+                  </div>
+                  <div className="mt-1 text-xs text-yellow-700">
+                    Vincula este lead a una empresa para acceder a sus datos completos.
+                  </div>
+                </div>
+                {editing && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={empresaIdInput}
+                      onChange={(e) => setEmpresaIdInput(e.target.value)}
+                      placeholder="ID de empresa"
+                      className="h-9 w-48 rounded-xl border border-yellow-300 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-yellow-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!empresaIdInput.trim()) return;
+                        setDraft((p) => ({ ...p, empresa_id: empresaIdInput.trim() || null }));
+                        setEmpresaIdInput("");
+                        // Guardar inmediatamente
+                        try {
+                          await patchLead({ empresa_id: empresaIdInput.trim() || null });
+                          await fetchLead();
+                        } catch (e: any) {
+                          setError(e?.message ?? "Error vinculando empresa");
+                        }
+                      }}
+                      className="rounded-xl border border-yellow-300 bg-yellow-100 px-3 py-1.5 text-xs font-semibold text-yellow-900 hover:bg-yellow-200"
+                    >
+                      Vincular
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Sección: Datos de la empresa (solo lectura) */}
+            {lead?.empresas && (
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="text-xs font-semibold text-slate-500">Datos de la empresa</div>
+                <div className="mt-3 space-y-3">
+                  <Field
+                    label="Nombre"
+                    editing={false}
+                    value={lead.empresas.nombre ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Email"
+                    editing={false}
+                    value={lead.empresas.email ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Teléfono"
+                    editing={false}
+                    value={lead.empresas.telefono ?? ""}
+                    onChange={() => {}}
+                  />
+                  {lead.empresas.celular && (
+                    <Field
+                      label="Celular"
+                      editing={false}
+                      value={lead.empresas.celular ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.rut && (
+                    <Field
+                      label="RUT"
+                      editing={false}
+                      value={lead.empresas.rut ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.direccion && (
+                    <Field
+                      label="Dirección"
+                      editing={false}
+                      value={lead.empresas.direccion ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.ciudad && (
+                    <Field
+                      label="Ciudad"
+                      editing={false}
+                      value={lead.empresas.ciudad ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.pais && (
+                    <Field
+                      label="País"
+                      editing={false}
+                      value={lead.empresas.pais ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.web && (
+                    <Field
+                      label="Web"
+                      editing={false}
+                      value={lead.empresas.web ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.instagram && (
+                    <Field
+                      label="Instagram"
+                      editing={false}
+                      value={lead.empresas.instagram ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                  {lead.empresas.rubros && (
+                    <Field
+                      label="Rubro"
+                      editing={false}
+                      value={lead.empresas.rubros.nombre ?? ""}
+                      onChange={() => {}}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Sección: Datos del lead (editable) */}
             <div className="rounded-2xl border bg-white p-4">
-              <div className="text-xs font-semibold text-slate-500">Contacto</div>
+              <div className="text-xs font-semibold text-slate-500">Datos del lead</div>
 
               <div className="mt-3 space-y-3">
                 <Field

@@ -104,7 +104,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,rating,next_activity_type,next_activity_at,is_member,member_since";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,rubro_id,rubros:rubro_id(id,nombre))";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;

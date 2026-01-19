@@ -6,10 +6,10 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function SociosPage() {
-  // Consultar socios directamente (sin join)
+  // Consultar socios con join a empresas
   const { data, error } = await supabaseServer
     .from("socios")
-    .select("id, nombre, plan, estado, fecha_alta, proxima_accion")
+    .select("id, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre)")
     .order("fecha_alta", { ascending: false });
 
   if (error) {
@@ -50,7 +50,7 @@ export default async function SociosPage() {
                 className="border-b transition hover:bg-slate-50"
               >
                 <td className="p-3 font-mono whitespace-nowrap">{row.id}</td>
-                <td className="p-3 font-medium">{row.nombre ?? "—"}</td>
+                <td className="p-3 font-medium">{(row.empresas as any)?.nombre ?? "—"}</td>
                 <td className="p-3 whitespace-nowrap">{row.plan ?? "—"}</td>
                 <td className="p-3 whitespace-nowrap">{row.estado ?? "—"}</td>
 
