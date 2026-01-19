@@ -72,8 +72,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
           </div>
 
           <div className="text-sm text-slate-600">
-            Alta: {socio.alta ?? "—"} · Semáforo: {socio.semaforo ?? "—"} · Próxima acción:{" "}
-            {socio.proxima_accion ?? "—"}
+            Alta: {socio.fecha_alta ?? "—"} · Semáforo: {socio.semaforo ?? "—"} · Próxima acción: —
           </div>
         </div>
 
@@ -81,7 +80,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
         <EditSocioForm id={socio.id} initialPlan={socio.plan} initialEstado={socio.estado} />
 
         {/* Acciones */}
-        <SocioAcciones socioId={socio.id} initialAcciones={acciones} />
+        <SocioAcciones socioId={socio.id} />
       </div>
     </div>
   );

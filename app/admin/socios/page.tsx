@@ -5,21 +5,12 @@ import { supabaseServer } from "@/lib/supabase/server";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-function semaforoDotClass(raw: unknown) {
-  const s = (raw ?? "").toString().trim().toLowerCase();
-
-  if (s === "rojo") return "bg-red-500";
-  if (s === "amarillo") return "bg-yellow-400";
-  if (s === "verde") return "bg-green-500";
-
-  return "bg-slate-300";
-}
-
 export default async function SociosPage() {
-  const { data: socios, error } = await supabaseServer
-    .from("v_socio_inteligente")
-    .select("id,nombre,plan,estado,alta,semaforo,proxima_accion")
-    .order("id");
+  // Consultar socios directamente (sin join)
+  const { data, error } = await supabaseServer
+    .from("socios")
+    .select("id, nombre, plan, estado, fecha_alta, proxima_accion")
+    .order("fecha_alta", { ascending: false });
 
   if (error) {
     return (
@@ -53,37 +44,29 @@ export default async function SociosPage() {
           </thead>
 
           <tbody>
-            {(socios ?? []).map((socio) => (
+            {(data ?? []).map((row: any) => (
               <tr
-                key={socio.id}
+                key={row.id}
                 className="border-b transition hover:bg-slate-50"
               >
-                <td className="p-3 font-mono whitespace-nowrap">{socio.id}</td>
-                <td className="p-3 font-medium">{socio.nombre}</td>
-                <td className="p-3 whitespace-nowrap">{socio.plan}</td>
-                <td className="p-3 whitespace-nowrap">{socio.estado}</td>
+                <td className="p-3 font-mono whitespace-nowrap">{row.id}</td>
+                <td className="p-3 font-medium">{row.nombre ?? "—"}</td>
+                <td className="p-3 whitespace-nowrap">{row.plan ?? "—"}</td>
+                <td className="p-3 whitespace-nowrap">{row.estado ?? "—"}</td>
 
                 <td className="p-3 text-slate-700 whitespace-nowrap">
-                  {socio.alta ?? "—"}
+                  {row.fecha_alta ?? "—"}
                 </td>
 
                 <td className="p-3">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`h-3 w-3 rounded-full ${semaforoDotClass(
-                        socio.semaforo
-                      )} ring-1 ring-black/10`}
-                      title={`Semáforo: ${socio.semaforo ?? "—"}`}
-                    />
-                    <span className="text-xs text-slate-600">
-                      {socio.proxima_accion ?? "—"}
-                    </span>
-                  </div>
+                  <span className="text-xs text-slate-600">
+                    {row.proxima_accion ?? "—"}
+                  </span>
                 </td>
 
                 <td className="p-3 text-right whitespace-nowrap">
                   <Link
-                    href={`/admin/socios/${socio.id}`}
+                    href={`/admin/socios/${row.id}`}
                     className="rounded-lg border px-3 py-1 text-sm hover:bg-slate-100"
                   >
                     Ver
@@ -92,7 +75,7 @@ export default async function SociosPage() {
               </tr>
             ))}
 
-            {(!socios || socios.length === 0) && (
+            {(!data || data.length === 0) && (
               <tr>
                 <td className="p-6 text-slate-500" colSpan={7}>
                   No hay socios para mostrar.

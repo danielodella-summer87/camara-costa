@@ -1,7 +1,7 @@
 "use client";
 
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { RoleTabs } from "@/components/reports/RoleTabs";
@@ -84,8 +84,9 @@ function toCSV(rows: Lead[]) {
   return lines.join("\n");
 }
 
-export default function ReporteComercialLeadsPage() {
+function ReporteComercialLeadsInner() {
   const sp = useSearchParams();
+  // lo dejé por si lo usás más adelante (hoy no afecta)
   const tab = sp.get("tab") || "comercial";
 
   const [loading, setLoading] = useState(true);
@@ -126,6 +127,7 @@ export default function ReporteComercialLeadsPage() {
 
   useEffect(() => {
     fetchLeads();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const origenes = useMemo(() => {
@@ -239,7 +241,8 @@ export default function ReporteComercialLeadsPage() {
                 Reportes · Comercial · Leads
               </h1>
               <p className="mt-1 text-sm text-slate-700">
-                Listado filtrable + export CSV. (Datos reales desde <span className="font-semibold">/api/admin/leads</span>)
+                Listado filtrable + export CSV. (Datos reales desde{" "}
+                <span className="font-semibold">/api/admin/leads</span>)
               </p>
 
               <div className="mt-4">
@@ -428,7 +431,9 @@ export default function ReporteComercialLeadsPage() {
             {loading ? (
               <div className="p-4 text-sm text-slate-600">Cargando…</div>
             ) : filtered.length === 0 ? (
-              <div className="p-4 text-sm text-slate-600">No hay resultados con esos filtros.</div>
+              <div className="p-4 text-sm text-slate-600">
+                No hay resultados con esos filtros.
+              </div>
             ) : (
               <div className="divide-y">
                 {filtered.map((l) => (
@@ -454,10 +459,19 @@ export default function ReporteComercialLeadsPage() {
           </div>
 
           <div className="mt-3 text-xs text-slate-600">
-            Próximo: agregamos “Aging” (días desde último update), y filtros avanzados (rubro/país) cuando existan.
+            Próximo: agregamos “Aging” (días desde último update), y filtros avanzados (rubro/país)
+            cuando existan.
           </div>
         </div>
       </div>
     </PageContainer>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-600">Cargando…</div>}>
+      <ReporteComercialLeadsInner />
+    </Suspense>
   );
 }

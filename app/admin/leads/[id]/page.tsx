@@ -20,16 +20,20 @@ type Lead = {
   created_at?: string | null;
   updated_at?: string | null;
 
-  // ✅ nuevos campos (DB: website text, objetivos/audiencia jsonb, tamano text, oferta text)
+  // ✅ nuevos campos (DB: website text, objetivos/audiencia text, tamano text, oferta text)
   website?: string | null;
-  objetivos?: string[] | null; // multi
-  audiencia?: string[] | null; // multi
+  objetivos?: string | null; // texto libre (antes era array)
+  audiencia?: string | null; // texto libre (antes era array)
   tamano?: string | null; // single
   oferta?: string | null; // texto
+  linkedin_empresa?: string | null;
+  linkedin_director?: string | null;
 
   rating?: number | null;
   next_activity_type?: string | null;
   next_activity_at?: string | null;
+  is_member?: boolean | null;
+  member_since?: string | null;
 };
 
 type LeadApiResponse = {
@@ -52,6 +56,8 @@ type PatchPayload = Partial<
     | "audiencia"
     | "tamano"
     | "oferta"
+    | "linkedin_empresa"
+    | "linkedin_director"
   >
 >;
 
@@ -80,7 +86,8 @@ type ApiResp<T> = {
   error?: string | null;
 };
 
-const OBJETIVOS_OPTS = [
+// Fallback hardcodeado (si el fetch falla)
+const OBJETIVOS_OPTS_FALLBACK = [
   "Networking y alianzas",
   "Nuevas oportunidades comerciales",
   "Visibilidad y posicionamiento",
@@ -89,7 +96,7 @@ const OBJETIVOS_OPTS = [
   "Aprendizaje / capacitación",
 ];
 
-const AUDIENCIA_OPTS = [
+const AUDIENCIA_OPTS_FALLBACK = [
   "B2B",
   "B2C",
   "Gobierno",
@@ -99,7 +106,23 @@ const AUDIENCIA_OPTS = [
   "Retail/eCommerce",
 ];
 
-const TAMANO_OPTS = ["1–5", "6–20", "21–50", "51–200", "200+"];
+const TAMANO_OPTS_FALLBACK = ["1–5", "6–20", "21–50", "51–200", "200+"];
+
+type PicklistItem = {
+  id: string;
+  label: string;
+  sort: number;
+  is_active: boolean;
+};
+
+type LeadOptionsResponse = {
+  data?: {
+    membership_goals?: PicklistItem[];
+    icp_targets?: PicklistItem[];
+    company_size?: PicklistItem[];
+  } | null;
+  error?: string | null;
+};
 
 function norm(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -111,6 +134,19 @@ function normArr(v: unknown): string[] | null {
   if (!Array.isArray(v)) return null;
   const cleaned = v.map((x) => String(x).trim()).filter(Boolean);
   return cleaned.length ? cleaned : null;
+}
+
+// Convierte array a string (backward compatibility para objetivos/audiencia)
+function arrayToString(v: unknown): string | null {
+  if (Array.isArray(v)) {
+    const cleaned = v.map((x) => String(x).trim()).filter(Boolean);
+    return cleaned.length ? cleaned.join(", ") : null;
+  }
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    return trimmed.length ? trimmed : null;
+  }
+  return null;
 }
 
 function formatDateTime(iso?: string | null) {
@@ -287,6 +323,19 @@ export default function LeadDetailPage() {
     null
   );
 
+  // ✅ Opciones dinámicas desde API
+  const [leadOptions, setLeadOptions] = useState<{
+    objetivos: string[];
+    audiencia: string[];
+    tamanios: string[];
+  }>({
+    objetivos: OBJETIVOS_OPTS_FALLBACK,
+    audiencia: AUDIENCIA_OPTS_FALLBACK,
+    tamanios: TAMANO_OPTS_FALLBACK,
+  });
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+
   function flash(msg: string) {
     setNotice(msg);
     window.setTimeout(() => setNotice(null), 2500);
@@ -308,6 +357,15 @@ export default function LeadDetailPage() {
       if (!res.ok) throw new Error(json?.error ?? "Error cargando lead");
 
       const next = (json?.data ?? null) as Lead | null;
+      // Convertir objetivos/audiencia de array a string si vienen como array (backward compatibility)
+      if (next) {
+        if (Array.isArray(next.objetivos)) {
+          next.objetivos = arrayToString(next.objetivos);
+        }
+        if (Array.isArray(next.audiencia)) {
+          next.audiencia = arrayToString(next.audiencia);
+        }
+      }
       setLead(next);
 
       if (!editing) setDraft({});
@@ -345,9 +403,39 @@ export default function LeadDetailPage() {
       flash("Guardado.");
     } catch (e: any) {
       setError(e?.message ?? "Error actualizando lead");
+      throw e; // Re-lanzar para que el caller pueda manejar el error
     } finally {
       setMutating(false);
     }
+  }
+
+  // Función reutilizable para guardar el draft actual
+  async function saveDraft() {
+    if (!id) return;
+    
+    // Solo guarda si hay cambios pendientes
+    if (Object.keys(draft).length === 0) {
+      return; // No hay cambios, no hace nada
+    }
+
+    const normalized: PatchPayload = {
+      nombre: norm(draft.nombre),
+      contacto: norm(draft.contacto),
+      telefono: norm(draft.telefono),
+      email: norm(draft.email),
+      origen: norm(draft.origen),
+      pipeline: norm(draft.pipeline),
+      notas: norm(draft.notas),
+      website: norm(draft.website),
+      objetivos: norm(draft.objetivos),
+      audiencia: norm(draft.audiencia),
+      tamano: norm(draft.tamano),
+      oferta: norm(draft.oferta),
+      linkedin_empresa: norm(draft.linkedin_empresa),
+      linkedin_director: norm(draft.linkedin_director),
+    };
+
+    await patchLead(normalized);
   }
 
   async function deleteLead() {
@@ -376,6 +464,39 @@ export default function LeadDetailPage() {
       setError(e?.message ?? "Error eliminando lead");
     } finally {
       setDeleting(false);
+    }
+  }
+
+  async function convertToMember() {
+    if (!id || !lead) return;
+
+    const ok = window.confirm(
+      "¿Convertir este lead en socio? Se creará un registro en la tabla de socios."
+    );
+    if (!ok) return;
+
+    setError(null);
+    setMutating(true);
+    try {
+      // Primero guardar el draft pendiente
+      await saveDraft();
+
+      // Luego convertir a socio
+      const res = await fetch(`/api/admin/leads/${id}/convert-to-member`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      const json = (await res.json()) as ApiResp<any>;
+      if (!res.ok) throw new Error(json?.error ?? "Error convirtiendo a socio");
+
+      flash("Lead convertido en socio correctamente.");
+      await fetchLead();
+    } catch (e: any) {
+      setError(e?.message ?? "Error convirtiendo a socio");
+    } finally {
+      setMutating(false);
     }
   }
 
@@ -524,8 +645,67 @@ export default function LeadDetailPage() {
     }
   }
 
+  // ✅ Fetch opciones dinámicas desde API
+  async function fetchLeadOptions() {
+    setOptionsLoading(true);
+    setOptionsError(null);
+    try {
+      const res = await fetch("/api/admin/config/leads/options", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      const json = (await res.json()) as LeadOptionsResponse;
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando opciones");
+
+      const data = json?.data;
+      if (!data) {
+        throw new Error("No se recibieron opciones");
+      }
+
+      // Extraer labels de items activos y mapear a arrays de strings
+      const objetivos =
+        data.membership_goals
+          ?.filter((item) => item.is_active)
+          .map((item) => item.label.trim())
+          .filter(Boolean) ?? [];
+
+      const audiencia =
+        data.icp_targets
+          ?.filter((item) => item.is_active)
+          .map((item) => item.label.trim())
+          .filter(Boolean) ?? [];
+
+      const tamanios =
+        data.company_size
+          ?.filter((item) => item.is_active)
+          .map((item) => item.label.trim())
+          .filter(Boolean) ?? [];
+
+      // Solo actualizar si hay datos válidos, sino mantener fallback
+      if (objetivos.length > 0 || audiencia.length > 0 || tamanios.length > 0) {
+        setLeadOptions({
+          objetivos: objetivos.length > 0 ? objetivos : OBJETIVOS_OPTS_FALLBACK,
+          audiencia: audiencia.length > 0 ? audiencia : AUDIENCIA_OPTS_FALLBACK,
+          tamanios: tamanios.length > 0 ? tamanios : TAMANO_OPTS_FALLBACK,
+        });
+      }
+    } catch (e: any) {
+      setOptionsError(e?.message ?? "Error cargando opciones");
+      // Mantener fallback hardcodeado en caso de error
+      setLeadOptions({
+        objetivos: OBJETIVOS_OPTS_FALLBACK,
+        audiencia: AUDIENCIA_OPTS_FALLBACK,
+        tamanios: TAMANO_OPTS_FALLBACK,
+      });
+    } finally {
+      setOptionsLoading(false);
+    }
+  }
+
   useEffect(() => {
     fetchLead();
+    fetchLeadOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -544,10 +724,12 @@ export default function LeadDetailPage() {
       notas: lead.notas ?? "",
 
       website: lead.website ?? "",
-      objetivos: Array.isArray(lead.objetivos) ? lead.objetivos : [],
-      audiencia: Array.isArray(lead.audiencia) ? lead.audiencia : [],
+      objetivos: typeof lead.objetivos === "string" ? lead.objetivos : (Array.isArray(lead.objetivos) ? lead.objetivos.join(", ") : ""),
+      audiencia: typeof lead.audiencia === "string" ? lead.audiencia : (Array.isArray(lead.audiencia) ? lead.audiencia.join(", ") : ""),
       tamano: lead.tamano ?? "",
       oferta: lead.oferta ?? "",
+      linkedin_empresa: lead.linkedin_empresa ?? "",
+      linkedin_director: lead.linkedin_director ?? "",
     });
   }
 
@@ -558,23 +740,7 @@ export default function LeadDetailPage() {
   }
 
   async function saveEdit() {
-    const normalized: PatchPayload = {
-      nombre: norm(draft.nombre),
-      contacto: norm(draft.contacto),
-      telefono: norm(draft.telefono),
-      email: norm(draft.email),
-      origen: norm(draft.origen),
-      pipeline: norm(draft.pipeline),
-      notas: norm(draft.notas),
-
-      website: norm(draft.website),
-      objetivos: normArr(draft.objetivos),
-      audiencia: normArr(draft.audiencia),
-      tamano: norm(draft.tamano),
-      oferta: norm(draft.oferta),
-    };
-
-    await patchLead(normalized);
+    await saveDraft();
     setEditing(false);
   }
 
@@ -584,7 +750,7 @@ export default function LeadDetailPage() {
   }, [editing, draft.pipeline, lead?.pipeline]);
 
   const title = loading ? "Cargando…" : lead?.nombre ?? "Lead";
-  const leadIdSafe = (lead?.id ?? id ?? "").trim();
+  const leadIdSafe = (id ?? lead?.id ?? "").trim();
 
   return (
     <PageContainer>
@@ -592,7 +758,20 @@ export default function LeadDetailPage() {
         <div className="rounded-2xl border bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+                {lead?.is_member && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    Socio
+                    {lead.member_since && (
+                      <span className="text-emerald-600">
+                        desde {new Date(lead.member_since).toLocaleDateString("es-UY", { year: "numeric", month: "short", day: "numeric" })}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
               <p className="mt-1 text-sm text-slate-600">
                 Detalle, edición, propuestas e informe IA.
               </p>
@@ -638,6 +817,18 @@ export default function LeadDetailPage() {
               >
                 Propuestas
               </button>
+
+              {!lead?.is_member && (
+                <button
+                  type="button"
+                  onClick={convertToMember}
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                  disabled={disabled || !lead}
+                  title="Convertir este lead en socio"
+                >
+                  Convertir en socio
+                </button>
+              )}
 
               {!editing ? (
                 <button
@@ -757,27 +948,61 @@ export default function LeadDetailPage() {
                   placeholder="https://..."
                 />
 
-                <PillMulti
-                  label="Objetivo(s) (checkbox)"
+                <Field
+                  label="LinkedIn Empresa"
                   editing={editing}
-                  value={editing ? (draft.objetivos as any) : lead?.objetivos}
-                  options={OBJETIVOS_OPTS}
-                  onChange={(next) => setDraft((p) => ({ ...p, objetivos: next }))}
+                  value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
+                  placeholder="https://linkedin.com/..."
                 />
 
-                <PillMulti
-                  label="A quién le vende (checkbox)"
+                <Field
+                  label="LinkedIn Director"
                   editing={editing}
-                  value={editing ? (draft.audiencia as any) : lead?.audiencia}
-                  options={AUDIENCIA_OPTS}
-                  onChange={(next) => setDraft((p) => ({ ...p, audiencia: next }))}
+                  value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
+                  placeholder="https://linkedin.com/..."
                 />
+
+                <div>
+                  <div className="text-xs text-slate-500">Objetivo</div>
+                  {editing ? (
+                    <textarea
+                      value={(draft.objetivos as any) ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, objetivos: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                      rows={3}
+                      placeholder="Ej: Abrir mercado USA, conseguir distribuidores, networking, visibilidad..."
+                    />
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {lead?.objetivos ?? "—"}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-xs text-slate-500">A quién le vende</div>
+                  {editing ? (
+                    <textarea
+                      value={(draft.audiencia as any) ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, audiencia: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                      rows={3}
+                      placeholder="Ej: Retailers/cadenas, importadores USA, empresas LATAM, B2B servicios profesionales..."
+                    />
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                      {lead?.audiencia ?? "—"}
+                    </div>
+                  )}
+                </div>
 
                 <div>
                   <div className="text-xs text-slate-500">Tamaño (checkbox único)</div>
                   {editing ? (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {TAMANO_OPTS.map((opt) => {
+                      {leadOptions.tamanios.map((opt) => {
                         const active = ((draft.tamano as any) ?? "") === opt;
                         return (
                           <button
@@ -868,7 +1093,17 @@ export default function LeadDetailPage() {
         </div>
 
         {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
-        <AiLeadReport key={`ai-${leadIdSafe}`} leadId={leadIdSafe} lead={lead} />
+        <AiLeadReport
+          key={`ai-${leadIdSafe}`}
+          leadId={leadIdSafe}
+          lead={lead}
+          onBeforeGenerate={async () => {
+            // Guardar el draft actual antes de generar el informe
+            // Reutiliza la misma función que usa "Guardar"
+            // Si falla, el error se propaga y no se llama a la IA
+            await saveDraft();
+          }}
+        />
 
         <Modal
           open={proposalsOpen}

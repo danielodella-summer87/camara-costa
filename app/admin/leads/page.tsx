@@ -16,6 +16,8 @@ type Lead = {
   created_at?: string | null;
   updated_at?: string | null;
   estado?: string | null;
+  is_member?: boolean | null;
+  member_since?: string | null;
 };
 
 type PipelineRow = {
@@ -83,6 +85,7 @@ export default function LeadsPage() {
   // filtros
   const [q, setQ] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<string>("Todos");
+  const [showMembers, setShowMembers] = useState(false); // default OFF
 
   // selección masiva
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -189,6 +192,11 @@ export default function LeadsPage() {
     const term = q.trim().toLowerCase();
     let list = [...rows];
 
+    // Filtro de socios: si showMembers es false, ocultar leads con is_member=true
+    if (!showMembers) {
+      list = list.filter((r) => !r.is_member);
+    }
+
     if (pipelineFilter !== "Todos") {
       if (pipelineFilter === "Sin pipeline") {
         list = list.filter((r) => !norm(r.pipeline));
@@ -216,7 +224,7 @@ export default function LeadsPage() {
 
     list.sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? "") * -1);
     return list;
-  }, [rows, q, pipelineFilter]);
+  }, [rows, q, pipelineFilter, showMembers]);
 
   const selectedCount = selectedIds.size;
 
@@ -401,16 +409,27 @@ export default function LeadsPage() {
             </p>
 
             {/* ✅ Switch en modo LISTA */}
-            <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
-              <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
-                Lista
-              </span>
-              <Link
-                href="/admin/leads/kanban"
-                className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
-              >
-                Kanban
-              </Link>
+            <div className="mt-3 flex items-center gap-3">
+              <div className="inline-flex overflow-hidden rounded-xl border bg-white">
+                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
+                  Lista
+                </span>
+                <Link
+                  href="/admin/leads/kanban"
+                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
+                >
+                  Kanban
+                </Link>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showMembers}
+                  onChange={(e) => setShowMembers(e.target.checked)}
+                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span className="text-xs text-slate-700">Mostrar socios</span>
+              </label>
             </div>
           </div>
 
@@ -540,68 +559,164 @@ export default function LeadsPage() {
         </div>
 
         {/* tabla */}
-        <div className="mt-5 overflow-hidden rounded-2xl border">
-          <div className="grid grid-cols-[56px_1.1fr_1fr_0.9fr_0.9fr_0.8fr_160px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={allFilteredSelected}
-                onChange={toggleAllFiltered}
-                disabled={disabled || filtered.length === 0}
-                title="Seleccionar todos (filtrados)"
-              />
-              <span>Sel</span>
-            </div>
-            <div>Lead</div>
-            <div>Contacto</div>
-            <div>Origen</div>
-            <div>Pipeline</div>
-            <div>Teléfono</div>
-            <div className="text-right">Acción</div>
+        <div className="mt-5">
+          {/* Mini encabezado con conteo */}
+          <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+            <span>
+              {filtered.length} {filtered.length === 1 ? "lead" : "leads"}
+              {selectedCount > 0 && ` · ${selectedCount} seleccionado${selectedCount > 1 ? "s" : ""}`}
+            </span>
           </div>
+          
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            {loading ? (
+              <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
+            ) : filtered.length === 0 ? (
+              <div className="px-4 py-6 text-sm text-slate-500">No hay leads para mostrar.</div>
+            ) : (
+              <div className="divide-y divide-slate-200">
+                {filtered.map((l) => {
+                  const checked = selectedIds.has(l.id);
 
-          {loading ? (
-            <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
-          ) : filtered.length === 0 ? (
-            <div className="px-4 py-6 text-sm text-slate-500">No hay leads para mostrar.</div>
-          ) : (
-            <div className="divide-y">
-              {filtered.map((l) => {
-                const checked = selectedIds.has(l.id);
+                  return (
+                    <div
+                      key={l.id}
+                      className="group relative flex items-center gap-4 border-b border-slate-100 px-4 py-3 transition-colors hover:bg-slate-50 focus-within:bg-slate-50 md:min-h-[56px]"
+                    >
+                      {/* Checkbox - no navega */}
+                      <div
+                        className="flex items-center justify-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleOne(l.id)}
+                          disabled={disabled}
+                          className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
+                        />
+                      </div>
 
-                return (
-                  <div
-                    key={l.id}
-                    className="grid grid-cols-[56px_1.1fr_1fr_0.9fr_0.9fr_0.8fr_160px] items-center px-4 py-3 text-sm"
-                  >
-                    <div>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleOne(l.id)}
-                        disabled={disabled}
-                      />
-                    </div>
-
-                    <div className="font-medium text-slate-900">{l.nombre ?? "—"}</div>
-                    <div className="text-slate-700">{l.contacto ?? "—"}</div>
-                    <div className="text-slate-700">{l.origen ?? "—"}</div>
-                    <div className="text-slate-700">{l.pipeline ?? "—"}</div>
-                    <div className="text-slate-700">{l.telefono ?? "—"}</div>
-
-                    <div className="flex items-center justify-end gap-2">
+                      {/* Fila clickeable - navega al lead */}
                       <Link
                         href={`/admin/leads/${l.id}`}
-                        className="inline-flex items-center justify-center rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"
+                        className="flex flex-1 items-center gap-4 min-w-0 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded"
+                        onClick={(e) => {
+                          // Si el click viene del checkbox o botones, no navegar
+                          if ((e.target as HTMLElement).closest('input[type="checkbox"]') || 
+                              (e.target as HTMLElement).closest('button') ||
+                              (e.target as HTMLElement).closest('a[href*="/admin/leads/"]')) {
+                            e.preventDefault();
+                          }
+                        }}
                       >
-                        Ver
+                        {/* Desktop: Layout horizontal completo */}
+                        <div className="hidden md:flex flex-1 items-center gap-6 min-w-0">
+                          {/* Columna izquierda: Empresa + Contacto */}
+                          <div className="flex min-w-0 flex-col gap-0.5 flex-[2]">
+                            <div className="truncate font-semibold text-slate-900">
+                              {l.nombre ?? <span className="text-slate-400">—</span>}
+                            </div>
+                            {l.contacto && (
+                              <div className="truncate text-xs text-slate-500">{l.contacto}</div>
+                            )}
+                          </div>
+
+                          {/* Centro: Email + Teléfono */}
+                          <div className="flex min-w-0 flex-col gap-0.5 flex-[2]">
+                            {l.email && (
+                              <div
+                                className="truncate text-sm text-slate-700"
+                                title={l.email}
+                              >
+                                {l.email}
+                              </div>
+                            )}
+                            {l.telefono && (
+                              <div className="truncate text-sm text-slate-700">{l.telefono}</div>
+                            )}
+                            {!l.email && !l.telefono && (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </div>
+
+                          {/* Derecha: Chips + Botón */}
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {l.origen && (
+                              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                {l.origen}
+                              </span>
+                            )}
+                            {l.pipeline && (
+                              <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                {l.pipeline}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Mobile: Layout compacto 2 líneas */}
+                        <div className="flex md:hidden flex-1 flex-col gap-2 min-w-0">
+                          {/* Línea 1: Empresa + Acción */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex min-w-0 flex-col gap-0.5 flex-1">
+                              <div className="truncate font-semibold text-slate-900">
+                                {l.nombre ?? <span className="text-slate-400">—</span>}
+                              </div>
+                              {l.contacto && (
+                                <div className="truncate text-xs text-slate-500">{l.contacto}</div>
+                              )}
+                            </div>
+                          </div>
+                          {/* Línea 2: Email/Teléfono + Chips */}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 flex-col gap-0.5 flex-1">
+                              {l.email && (
+                                <div
+                                  className="truncate text-xs text-slate-600"
+                                  title={l.email}
+                                >
+                                  {l.email}
+                                </div>
+                              )}
+                              {l.telefono && (
+                                <div className="truncate text-xs text-slate-600">{l.telefono}</div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {l.origen && (
+                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+                                  {l.origen}
+                                </span>
+                              )}
+                              {l.pipeline && (
+                                <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                                  {l.pipeline}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </Link>
+
+                      {/* Botón Ver - no navega desde el Link padre */}
+                      <div
+                        className="flex items-center flex-shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Link
+                          href={`/admin/leads/${l.id}`}
+                          className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
+                        >
+                          Ver
+                        </Link>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 text-xs text-slate-500">

@@ -104,7 +104,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,rating,next_activity_type,next_activity_at";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,rating,next_activity_type,next_activity_at,is_member,member_since";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;

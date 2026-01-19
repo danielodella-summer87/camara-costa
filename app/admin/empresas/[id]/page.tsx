@@ -170,7 +170,7 @@ export default function EmpresaDetailPage() {
 
   async function saveEdit() {
     const normalized: PatchPayload = {
-      nombre: normalizeStr(draft.nombre),
+      nombre: normalizeStr(draft.nombre) ?? undefined,
       rubro_id: draft.rubro_id ?? null,
       telefono: normalizeStr(draft.telefono),
       email: normalizeStr(draft.email),
