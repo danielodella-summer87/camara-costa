@@ -43,9 +43,6 @@ export default function EmpresasTable() {
 
   // filtros UI
   const [q, setQ] = useState("");
-  const [estadoFilter, setEstadoFilter] = useState<
-    "Todos" | "Pendiente" | "Aprobada" | "Rechazada"
-  >("Todos");
 
   // edición inline rubro
   const [editingRubroForId, setEditingRubroForId] = useState<string | null>(null);
@@ -184,15 +181,9 @@ export default function EmpresasTable() {
     const term = q.trim().toLowerCase();
     let list = [...rows];
 
-    if (estadoFilter !== "Todos") {
-      list = list.filter(
-        (e) => (e.estado ?? "").toLowerCase() === estadoFilter.toLowerCase()
-      );
-    }
-
     if (term.length) {
       list = list.filter((e) => {
-        const haystack = [e.nombre ?? "", e.rubro ?? "", e.estado ?? "", e.telefono ?? ""]
+        const haystack = [e.nombre ?? "", e.rubro ?? "", e.telefono ?? ""]
           .join(" ")
           .toLowerCase();
         return haystack.includes(term);
@@ -201,7 +192,7 @@ export default function EmpresasTable() {
 
     list.sort((a, b) => (a.nombre ?? "").localeCompare(b.nombre ?? ""));
     return list;
-  }, [rows, q, estadoFilter]);
+  }, [rows, q]);
 
   async function startEditRubro(e: Empresa) {
     setError(null);
@@ -311,32 +302,16 @@ export default function EmpresasTable() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por nombre, rubro, estado o teléfono..."
+          placeholder="Buscar por nombre, rubro o teléfono..."
           className="w-full rounded-xl border px-4 py-2 text-sm md:max-w-xl"
         />
-
-        <div className="flex items-center gap-2 self-end md:self-auto">
-          <div className="text-xs font-semibold text-slate-600">Estado</div>
-          <select
-            value={estadoFilter}
-            onChange={(e) => setEstadoFilter(e.target.value as any)}
-            className="rounded-xl border px-3 py-2 text-sm"
-          >
-            <option>Todos</option>
-            <option>Pendiente</option>
-            <option>Aprobada</option>
-            <option>Rechazada</option>
-          </select>
-        </div>
       </div>
 
       {/* tabla */}
       <div className="mt-5 overflow-hidden rounded-2xl border">
-        <div className="grid grid-cols-[1.2fr_1.1fr_0.7fr_0.7fr_300px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+        <div className="grid grid-cols-[1.2fr_1.1fr_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
           <div>Empresa</div>
           <div>Rubro</div>
-          <div>Estado</div>
-          <div>Aprobación</div>
           <div className="text-right">Acción</div>
         </div>
 
@@ -350,14 +325,12 @@ export default function EmpresasTable() {
           <div className="divide-y">
             {empresasFiltradas.map((e) => {
               const busy = mutatingId === e.id;
-              const aprob = aprobacionLabel(e);
-              const estadoTxt = e.estado ?? "Pendiente";
               const isEditingRubro = editingRubroForId === e.id;
 
               return (
                 <div
                   key={e.id}
-                  className="grid grid-cols-[1.2fr_1.1fr_0.7fr_0.7fr_300px] items-center px-4 py-3 text-sm"
+                  className="grid grid-cols-[1.2fr_1.1fr_200px] items-center px-4 py-3 text-sm"
                 >
                   {/* Empresa */}
                   <div className="font-medium text-slate-900">{e.nombre}</div>
@@ -416,60 +389,8 @@ export default function EmpresasTable() {
                     )}
                   </div>
 
-                  {/* Estado */}
-                  <div>
-                    <span
-                      className={`inline-flex rounded-full border px-3 py-1 text-xs ${badgeClassEstado(
-                        estadoTxt
-                      )}`}
-                    >
-                      {estadoTxt}
-                    </span>
-                  </div>
-
-                  {/* Aprobación */}
-                  <div>
-                    <span
-                      className={`inline-flex rounded-full border px-3 py-1 text-xs ${badgeClassAprobacion(
-                        aprob
-                      )}`}
-                    >
-                      {aprob}
-                    </span>
-                  </div>
-
                   {/* Acciones */}
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => patchEmpresa(e.id, { aprobada: true, estado: "Aprobada" })}
-                      className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      disabled={busy || loading || e.aprobada === true}
-                      title={e.aprobada ? "Ya está aprobada" : "Aprobar empresa"}
-                    >
-                      {busy ? "…" : "Aprobar"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        patchEmpresa(e.id, { aprobada: false, estado: "Rechazada" })
-                      }
-                      className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                      disabled={
-                        busy ||
-                        loading ||
-                        (e.estado ?? "").toLowerCase() === "rechazada"
-                      }
-                      title={
-                        (e.estado ?? "").toLowerCase() === "rechazada"
-                          ? "Ya está rechazada"
-                          : "Rechazar empresa"
-                      }
-                    >
-                      {busy ? "…" : "Rechazar"}
-                    </button>
-
                     <Link
                       href={`/admin/empresas/${e.id}`}
                       className="inline-flex items-center justify-center rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50"

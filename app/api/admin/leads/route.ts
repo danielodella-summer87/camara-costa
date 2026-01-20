@@ -39,6 +39,23 @@ type LeadRow = {
   rating: number | null;
   next_activity_type: NextActivityType | null;
   next_activity_at: string | null;
+  empresa_id: string | null;
+  score: number | null;
+  score_categoria: string | null;
+  
+  // Campos adicionales usados en UI y endpoints
+  website?: string | null;
+  objetivos?: string | null;
+  audiencia?: string | null;
+  tamano?: string | null;
+  oferta?: string | null;
+  linkedin_empresa?: string | null;
+  linkedin_director?: string | null;
+  ai_custom_prompt?: string | null;
+  ai_report?: string | null;
+  ai_report_updated_at?: string | null;
+  is_member?: boolean | null;
+  member_since?: string | null;
 };
 
 type LeadsApiResponse = {
@@ -104,7 +121,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,rating,next_activity_type,next_activity_at";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -115,10 +132,13 @@ type LeadCreateInput = Partial<{
   estado: string | null;
   pipeline: string | null;
   notas: string | null;
+  website: string | null;
 
   rating: number | string | null;
   next_activity_type: string | null;
   next_activity_at: string | number | null;
+  empresa_id: string | null;
+  score: number | string | null;
 }>;
 
 export async function GET(req: Request) {
@@ -220,6 +240,24 @@ export async function POST(req: Request) {
       }
     }
 
+    // Validar empresa_id si viene (debe ser UUID válido o null)
+    const empresaId = body.empresa_id === null || body.empresa_id === undefined 
+      ? null 
+      : (typeof body.empresa_id === "string" && body.empresa_id.trim().length > 0 
+          ? body.empresa_id.trim() 
+          : null);
+
+    // Validar score (0-10 o null)
+    const scoreParsed = body.score === null || body.score === undefined 
+      ? null 
+      : cleanInt(body.score);
+    if (scoreParsed !== null && (scoreParsed < 0 || scoreParsed > 10)) {
+      return NextResponse.json(
+        { data: null, error: "score inválido (debe ser 0-10 o null)" } satisfies LeadApiResponse,
+        { status: 400, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
     const insert: Partial<LeadRow> = {
       nombre,
       contacto: cleanStr(body.contacto),
@@ -229,10 +267,13 @@ export async function POST(req: Request) {
       estado: cleanStr(body.estado),
       pipeline,
       notas: cleanStr(body.notas),
+      website: cleanStr(body.website),
 
       rating: ratingParsed ?? 0,
       next_activity_type: activityParsed ?? null,
       next_activity_at: nextAtParsed ?? null,
+      empresa_id: empresaId,
+      score: scoreParsed,
 
       updated_at: new Date().toISOString(),
     };

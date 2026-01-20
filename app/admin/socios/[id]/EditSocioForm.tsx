@@ -7,10 +7,6 @@ import { updateSocio } from "@/app/admin/socios/actions";
 type Estado = "Activo" | "Pendiente" | "Vencido";
 type Plan = "Oro" | "Plata" | "Bronce";
 
-function cls(...xs: Array<string | false | undefined | null>) {
-  return xs.filter(Boolean).join(" ");
-}
-
 function normalizeEstado(v: string): Estado {
   const s = (v ?? "").trim().toLowerCase();
   if (s === "activo") return "Activo";
@@ -70,16 +66,6 @@ export default function EditSocioForm({
     toastSaved();
   }
 
-  async function quickSet(next: { plan?: Plan; estado?: Estado }) {
-    startTransition(async () => {
-      try {
-        await safeUpdate(next);
-      } catch (e: any) {
-        setErrMsg(e?.message ?? "Error guardando cambios");
-      }
-    });
-  }
-
   function onSave() {
     setSaved(false);
     startTransition(async () => {
@@ -91,87 +77,32 @@ export default function EditSocioForm({
     });
   }
 
-  const estadoBtn = (value: Estado) =>
-    cls(
-      "h-10 px-4 rounded-lg text-sm font-medium transition border",
-      "disabled:opacity-60 disabled:cursor-not-allowed",
-      estado === value
-        ? "bg-slate-900 text-white border-slate-900"
-        : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50"
-    );
-
-  const planBtn = (value: Plan) =>
-    cls(
-      "h-10 px-4 rounded-lg text-sm font-medium transition border",
-      "disabled:opacity-60 disabled:cursor-not-allowed",
-      plan === value
-        ? "bg-slate-900 text-white border-slate-900"
-        : "bg-white text-slate-800 border-slate-200 hover:bg-slate-50"
-    );
-
   return (
     <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm text-slate-600">Edición rápida</div>
-          <div className="text-xs text-slate-500">Acciones 1-click + edición manual</div>
+          <div className="text-sm font-medium text-slate-900">Edición</div>
+          <div className="text-xs text-slate-500">Actualizar plan y estado del socio</div>
         </div>
 
         <button
           onClick={onSave}
           disabled={isPending || !dirty}
-          className={cls(
-            "h-10 px-4 rounded-lg text-sm font-medium text-white transition",
-            "bg-slate-900 hover:bg-slate-800",
-            "disabled:opacity-60 disabled:cursor-not-allowed"
-          )}
+          className={`
+            h-10 px-4 rounded-lg text-sm font-medium text-white transition
+            bg-slate-900 hover:bg-slate-800
+            disabled:opacity-60 disabled:cursor-not-allowed
+          `}
         >
           {isPending ? "Guardando..." : "Guardar cambios"}
         </button>
       </div>
 
-      {/* Quick actions */}
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-        {/* Estado */}
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div className="text-xs font-medium text-slate-600">Estado</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button disabled={isPending} className={estadoBtn("Activo")} onClick={() => quickSet({ estado: "Activo" })}>
-              Activo
-            </button>
-            <button disabled={isPending} className={estadoBtn("Pendiente")} onClick={() => quickSet({ estado: "Pendiente" })}>
-              Pendiente
-            </button>
-            <button disabled={isPending} className={estadoBtn("Vencido")} onClick={() => quickSet({ estado: "Vencido" })}>
-              Vencido
-            </button>
-          </div>
-          <div className="mt-2 text-xs text-slate-500">Click guarda y refresca la ficha.</div>
-        </div>
-
-        {/* Plan */}
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-          <div className="text-xs font-medium text-slate-600">Plan</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button disabled={isPending} className={planBtn("Oro")} onClick={() => quickSet({ plan: "Oro" })}>
-              Oro
-            </button>
-            <button disabled={isPending} className={planBtn("Plata")} onClick={() => quickSet({ plan: "Plata" })}>
-              Plata
-            </button>
-            <button disabled={isPending} className={planBtn("Bronce")} onClick={() => quickSet({ plan: "Bronce" })}>
-              Bronce
-            </button>
-          </div>
-          <div className="mt-2 text-xs text-slate-500">Ideal para cambios rápidos en atención.</div>
-        </div>
-      </div>
-
-      {/* Manual selects (fallback) */}
+      {/* Selects */}
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
-          <label className="text-xs font-medium text-slate-600">Plan (manual)</label>
+          <label className="text-xs font-medium text-slate-600">Plan</label>
           <select
             value={plan}
             onChange={(e) => setPlan(e.target.value as Plan)}
@@ -185,7 +116,7 @@ export default function EditSocioForm({
         </div>
 
         <div>
-          <label className="text-xs font-medium text-slate-600">Estado (manual)</label>
+          <label className="text-xs font-medium text-slate-600">Estado</label>
           <select
             value={estado}
             onChange={(e) => setEstado(e.target.value as Estado)}

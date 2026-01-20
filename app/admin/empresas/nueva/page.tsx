@@ -135,7 +135,7 @@ export default function NuevaEmpresaPage() {
           <div className="rounded-2xl border p-4">
             <label className="text-xs font-medium text-slate-600">Rubro *</label>
             <div className="mt-2">
-              <RubroSelect value={rubroId} onChange={setRubroId} />
+            <RubroSelect value={rubroId || null} onChange={(nextId) => setRubroId(nextId ?? "")} />
             </div>
           </div>
 

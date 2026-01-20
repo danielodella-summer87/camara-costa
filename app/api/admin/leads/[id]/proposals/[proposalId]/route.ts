@@ -1,192 +1,130 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function supabaseAdmin() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  });
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!url || !key) {
+    throw new Error("Faltan env NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY");
+  }
+  return createClient(url, key, { auth: { persistSession: false } });
 }
 
-function isUuidLike(v: unknown) {
-  if (typeof v !== "string") return false;
+function safeStr(v: unknown) {
+  if (typeof v !== "string") return null;
   const s = v.trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  return s.length ? s : null;
 }
 
-function getIdFromReq(req: Request, params?: { proposalId?: string | string[] }) {
-  const fromParams = params?.proposalId;
-  const candidate = Array.isArray(fromParams) ? fromParams[0] : fromParams;
-  if (candidate && typeof candidate === "string") return candidate;
-
-  const url = new URL(req.url);
-  const parts = url.pathname.split("/").filter(Boolean);
-  return parts[parts.length - 1] || null;
-}
+type ApiResp<T> = { data?: T | null; error?: string | null };
 
 type ProposalRow = {
   id: string;
   lead_id: string;
-  created_at: string;
-  title: string | null;
-  notes: string | null;
-  file_bucket: string;
-  file_path: string;
-  file_name: string;
-  mime_type: string;
-  file_size: number | null;
-  sent_at: string | null;
+  title?: string | null;
+  notes?: string | null;
+
+  file_bucket?: string | null;
+  file_path?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+
+  signed_url?: string | null;
+  url?: string | null; // compat
+  created_at?: string | null;
+  sent_at?: string | null;
 };
 
-type ApiResp<T> = { data?: T | null; error?: string | null };
+async function fetchProposalById(sb: ReturnType<typeof supabaseAdmin>, leadId: string, proposalId: string) {
+  // Intento 1: lead_proposals (lo más probable)
+  const q1 = await sb
+    .from("lead_proposals")
+    .select("*")
+    .eq("id", proposalId)
+    .eq("lead_id", leadId)
+    .maybeSingle();
 
-const SELECT =
-  "id,lead_id,created_at,title,notes,file_bucket,file_path,file_name,mime_type,file_size,sent_at";
+  if (!q1.error) return { row: (q1.data ?? null) as ProposalRow | null, table: "lead_proposals" as const };
 
-// GET => metadata + signed_url (+ aliases url/file_url para UI)
-export async function GET(req: Request, ctx: { params?: { proposalId?: string | string[] } }) {
-  try {
-    const proposalId = getIdFromReq(req, ctx?.params);
-    if (!proposalId) {
-      return NextResponse.json({ data: null, error: "Falta proposalId" } satisfies ApiResp<null>, {
-        status: 400,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-    if (!isUuidLike(proposalId)) {
-      return NextResponse.json(
-        { data: null, error: "proposalId inválido (UUID)" } satisfies ApiResp<null>,
-        { status: 400, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+  // Fallback: proposals
+  const q2 = await sb
+    .from("proposals")
+    .select("*")
+    .eq("id", proposalId)
+    .eq("lead_id", leadId)
+    .maybeSingle();
 
-    const supabase = supabaseAdmin();
-
-    const { data, error } = await supabase
-      .from("lead_proposals")
-      .select(SELECT)
-      .eq("id", proposalId)
-      .maybeSingle();
-
-    if (error) {
-      return NextResponse.json({ data: null, error: error.message } satisfies ApiResp<null>, {
-        status: 500,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-    if (!data) {
-      return NextResponse.json({ data: null, error: "No existe" } satisfies ApiResp<null>, {
-        status: 404,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-
-    const row = data as ProposalRow;
-
-    const { data: signed, error: sErr } = await supabase.storage
-      .from(row.file_bucket)
-      .createSignedUrl(row.file_path, 60 * 60);
-
-    if (sErr) {
-      return NextResponse.json({ data: null, error: sErr.message } satisfies ApiResp<null>, {
-        status: 500,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-
-    const signedUrl = signed?.signedUrl ?? null;
-
-    return NextResponse.json(
-      {
-        data: {
-          ...row,
-          signed_url: signedUrl,
-          url: signedUrl, // ✅ alias típico para UI
-          file_url: signedUrl, // ✅ alias extra por compatibilidad
-        },
-        error: null,
-      } satisfies ApiResp<any>,
-      { status: 200, headers: { "Cache-Control": "no-store" } }
-    );
-  } catch (e: any) {
-    return NextResponse.json({ data: null, error: e?.message ?? "Error inesperado" } satisfies ApiResp<null>, {
-      status: 500,
-      headers: { "Cache-Control": "no-store" },
-    });
-  }
+  if (q2.error) throw q2.error;
+  return { row: (q2.data ?? null) as ProposalRow | null, table: "proposals" as const };
 }
 
-// DELETE => borra archivo + registro
-export async function DELETE(req: Request, ctx: { params?: { proposalId?: string | string[] } }) {
+async function signIfPossible(sb: ReturnType<typeof supabaseAdmin>, row: ProposalRow) {
+  const bucket = safeStr(row.file_bucket);
+  const path = safeStr(row.file_path);
+
+  if (!bucket || !path) {
+    const existing = safeStr(row.signed_url) || safeStr(row.url);
+    return existing ?? null;
+  }
+
+  const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 60 * 60); // 1h
+  if (error) {
+    // si falla la firma, devolvemos lo que haya guardado como fallback
+    const existing = safeStr(row.signed_url) || safeStr(row.url);
+    return existing ?? null;
+  }
+  return data?.signedUrl ?? null;
+}
+
+/**
+ * GET /api/admin/leads/:id/proposals/:proposalId
+ * Devuelve 1 propuesta con signed_url fresca (si se puede firmar).
+ */
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ id: string; proposalId: string }> }
+) {
   try {
-    const proposalId = getIdFromReq(req, ctx?.params);
-    if (!proposalId) {
-      return NextResponse.json({ data: null, error: "Falta proposalId" } satisfies ApiResp<null>, {
-        status: 400,
-        headers: { "Cache-Control": "no-store" },
-      });
+    const sb = supabaseAdmin();
+    const { id, proposalId } = await context.params;
+
+    const leadId = safeStr(id);
+    const proposalIdSafe = safeStr(proposalId);
+
+    if (!leadId) {
+      return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
-    if (!isUuidLike(proposalId)) {
+    if (!proposalIdSafe) {
       return NextResponse.json(
-        { data: null, error: "proposalId inválido (UUID)" } satisfies ApiResp<null>,
-        { status: 400, headers: { "Cache-Control": "no-store" } }
+        { data: null, error: "proposalId requerido" } satisfies ApiResp<null>,
+        { status: 400 }
       );
     }
 
-    const supabase = supabaseAdmin();
+    const { row } = await fetchProposalById(sb, leadId, proposalIdSafe);
 
-    // 1) traer row para saber bucket/path
-    const { data: row, error: rErr } = await supabase
-      .from("lead_proposals")
-      .select(SELECT)
-      .eq("id", proposalId)
-      .maybeSingle();
-
-    if (rErr) {
-      return NextResponse.json({ data: null, error: rErr.message } satisfies ApiResp<null>, {
-        status: 500,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
     if (!row) {
-      return NextResponse.json({ data: null, error: "No existe" } satisfies ApiResp<null>, {
+      return NextResponse.json({ data: null, error: "Propuesta no encontrada" } satisfies ApiResp<null>, {
         status: 404,
-        headers: { "Cache-Control": "no-store" },
       });
     }
 
-    // 2) borrar archivo (si falla, igual seguimos con DB)
-    await supabase.storage
-      .from((row as any).file_bucket)
-      .remove([(row as any).file_path])
-      .catch(() => {});
+    const signed = await signIfPossible(sb, row);
 
-    // 3) borrar registro
-    const { data, error } = await supabase
-      .from("lead_proposals")
-      .delete()
-      .eq("id", proposalId)
-      .select("id")
-      .maybeSingle();
+    const payload = {
+      ...row,
+      signed_url: signed,
+      // compat extra por si algún lugar del front lee otros nombres
+      url: signed ?? row.url ?? null,
+      file_url: signed ?? row.url ?? null,
+    };
 
-    if (error) {
-      return NextResponse.json({ data: null, error: error.message } satisfies ApiResp<null>, {
-        status: 500,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-
-    return NextResponse.json({ data: data ?? { id: proposalId }, error: null } satisfies ApiResp<any>, {
-      status: 200,
-      headers: { "Cache-Control": "no-store" },
-    });
+    return NextResponse.json({ data: payload, error: null } satisfies ApiResp<any>, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json({ data: null, error: e?.message ?? "Error inesperado" } satisfies ApiResp<null>, {
-      status: 500,
-      headers: { "Cache-Control": "no-store" },
-    });
+    return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
   }
 }

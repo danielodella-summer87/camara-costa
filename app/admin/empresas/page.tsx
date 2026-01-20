@@ -14,15 +14,6 @@ export default function EmpresasPage() {
               Directorio, aprobación, edición, rubros.
             </p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Link
-              href="/admin/empresas/nueva"
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
-            >
-              Nueva empresa
-            </Link>
-          </div>
         </div>
       </div>
 

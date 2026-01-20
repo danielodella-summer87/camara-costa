@@ -1,8 +1,8 @@
 "use client";
 
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 
 type Lead = {
@@ -68,10 +68,10 @@ function isoFromDateInput(dateYYYYMMDD: string, endOfDay = false) {
   return new Date(dateYYYYMMDD + t).toISOString();
 }
 
-export default function ReporteComercialLeadsPage() {
-  const router = useRouter();
-  const pathname = usePathname();
+function ReporteComercialLeadsInner() {
   const sp = useSearchParams();
+  // lo dejé por si lo usás más adelante (hoy no afecta)
+  const tab = sp.get("tab") || "comercial";
 
   // filtros (querystring)
   const q = sp.get("q") ?? "";
@@ -171,22 +171,6 @@ export default function ReporteComercialLeadsPage() {
     });
   }, [leads, q, origen, pipeline, estado, ratingMin, from, to]);
 
-  function setParam(next: Record<string, string>) {
-    const params = new URLSearchParams(sp.toString());
-    params.set("tab", "comercial"); // mantenemos contexto
-
-    Object.entries(next).forEach(([k, v]) => {
-      if (!v) params.delete(k);
-      else params.set(k, v);
-    });
-
-    router.push(`${pathname}?${params.toString()}`);
-  }
-
-  function clearFilters() {
-    router.push(`${pathname}?tab=comercial`);
-  }
-
   function exportCSV() {
     const rows = filtered.map((l) => ({
       id: l.id,
@@ -217,7 +201,8 @@ export default function ReporteComercialLeadsPage() {
                 Reporte · Comercial · Leads
               </h1>
               <p className="mt-1 text-sm text-slate-700">
-                Listado con filtros + export a CSV.
+                Listado filtrable + export CSV. (Datos reales desde{" "}
+                <span className="font-semibold">/api/admin/leads</span>)
               </p>
 
               <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
@@ -267,7 +252,8 @@ export default function ReporteComercialLeadsPage() {
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   placeholder="nombre, email, teléfono, notas…"
                   value={q}
-                  onChange={(e) => setParam({ q: e.target.value })}
+                  readOnly
+                  title="Filtro de búsqueda (próximamente)"
                 />
               </div>
 
@@ -276,7 +262,8 @@ export default function ReporteComercialLeadsPage() {
                 <select
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   value={origen}
-                  onChange={(e) => setParam({ origen: e.target.value })}
+                  disabled
+                  title="Filtro de origen (próximamente)"
                 >
                   <option value="">Todos</option>
                   {options.origenes.map((o) => (
@@ -292,7 +279,8 @@ export default function ReporteComercialLeadsPage() {
                 <select
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   value={pipeline}
-                  onChange={(e) => setParam({ pipeline: e.target.value })}
+                  disabled
+                  title="Filtro de pipeline (próximamente)"
                 >
                   <option value="">Todos</option>
                   {options.pipelines.map((p) => (
@@ -308,7 +296,8 @@ export default function ReporteComercialLeadsPage() {
                 <select
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   value={estado}
-                  onChange={(e) => setParam({ estado: e.target.value })}
+                  disabled
+                  title="Filtro de estado (próximamente)"
                 >
                   <option value="">Todos</option>
                   {options.estados.map((s) => (
@@ -325,9 +314,8 @@ export default function ReporteComercialLeadsPage() {
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   placeholder="4"
                   value={ratingMin}
-                  onChange={(e) =>
-                    setParam({ ratingMin: e.target.value.replace(/[^\d.]/g, "") })
-                  }
+                  readOnly
+                  title="Filtro de rating (próximamente)"
                 />
               </div>
             </div>
@@ -339,7 +327,8 @@ export default function ReporteComercialLeadsPage() {
                   type="date"
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   value={from}
-                  onChange={(e) => setParam({ from: e.target.value })}
+                  readOnly
+                  title="Filtro de fecha desde (próximamente)"
                 />
               </div>
               <div className="md:col-span-2">
@@ -348,15 +337,17 @@ export default function ReporteComercialLeadsPage() {
                   type="date"
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                   value={to}
-                  onChange={(e) => setParam({ to: e.target.value })}
+                  readOnly
+                  title="Filtro de fecha hasta (próximamente)"
                 />
               </div>
 
               <div className="md:col-span-2 flex items-end gap-2">
                 <button
                   type="button"
-                  onClick={clearFilters}
-                  className="w-full rounded-xl border bg-white px-4 py-2 text-sm hover:bg-slate-50"
+                  disabled
+                  className="w-full rounded-xl border bg-white px-4 py-2 text-sm opacity-50"
+                  title="Limpiar filtros (próximamente)"
                 >
                   Limpiar filtros
                 </button>
@@ -367,78 +358,51 @@ export default function ReporteComercialLeadsPage() {
               Filas: <span className="font-semibold">{filtered.length}</span> /{" "}
               {leads.length}
             </div>
+
+            {loading ? (
+              <div className="p-4 text-sm text-slate-600">Cargando…</div>
+            ) : filtered.length === 0 ? (
+              <div className="p-4 text-sm text-slate-600">
+                No hay resultados con esos filtros.
+              </div>
+            ) : (
+              <div className="divide-y">
+                {filtered.map((l) => (
+                  <div key={l.id} className="grid grid-cols-12 items-center px-3 py-2 text-sm">
+                    <div className="col-span-3 min-w-0">
+                      <div className="truncate font-medium text-slate-900">{l.nombre ?? "—"}</div>
+                      <div className="mt-0.5 truncate text-xs text-slate-500">{l.email ?? "—"}</div>
+                    </div>
+
+                    <div className="col-span-2 min-w-0">
+                      <div className="truncate text-slate-800">{l.contacto ?? "—"}</div>
+                      <div className="mt-0.5 truncate text-xs text-slate-500">{l.telefono ?? "—"}</div>
+                    </div>
+
+                    <div className="col-span-2 truncate text-slate-700">{l.origen ?? "—"}</div>
+                    <div className="col-span-2 truncate text-slate-700">{l.pipeline ?? "—"}</div>
+                    <div className="col-span-1 text-slate-700">{l.rating ?? "—"}</div>
+                    <div className="col-span-2 text-slate-700">{fmtDate(l.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Tabla */}
-          <div className="mt-6 rounded-2xl border bg-white">
-            <div className="overflow-auto">
-              <table className="w-full min-w-[920px] text-left text-sm">
-                <thead className="border-b bg-slate-50 text-xs font-semibold text-slate-600">
-                  <tr>
-                    <th className="px-4 py-3">Nombre</th>
-                    <th className="px-4 py-3">Email</th>
-                    <th className="px-4 py-3">Teléfono</th>
-                    <th className="px-4 py-3">Origen</th>
-                    <th className="px-4 py-3">Pipeline</th>
-                    <th className="px-4 py-3">Estado</th>
-                    <th className="px-4 py-3">Rating</th>
-                    <th className="px-4 py-3">Creado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td className="px-4 py-4 text-slate-600" colSpan={8}>
-                        Cargando…
-                      </td>
-                    </tr>
-                  ) : error ? (
-                    <tr>
-                      <td className="px-4 py-4 text-red-700" colSpan={8}>
-                        Error: {error}
-                      </td>
-                    </tr>
-                  ) : filtered.length === 0 ? (
-                    <tr>
-                      <td className="px-4 py-4 text-slate-600" colSpan={8}>
-                        Sin resultados con los filtros actuales.
-                      </td>
-                    </tr>
-                  ) : (
-                    filtered.map((l) => (
-                      <tr key={l.id} className="border-b last:border-b-0">
-                        <td className="px-4 py-3">
-                          <Link
-                            href={`/admin/leads/${l.id}`}
-                            className="font-semibold text-slate-900 hover:underline"
-                          >
-                            {l.nombre ?? "—"}
-                          </Link>
-                          <div className="text-xs text-slate-500">{l.contacto ?? ""}</div>
-                        </td>
-                        <td className="px-4 py-3">{l.email ?? "—"}</td>
-                        <td className="px-4 py-3">{l.telefono ?? "—"}</td>
-                        <td className="px-4 py-3">{l.origen ?? "—"}</td>
-                        <td className="px-4 py-3">{l.pipeline ?? "—"}</td>
-                        <td className="px-4 py-3">{l.estado ?? "—"}</td>
-                        <td className="px-4 py-3">
-                          {typeof l.rating === "number" ? l.rating : "—"}
-                        </td>
-                        <td className="px-4 py-3">{fmtDate(l.created_at)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="mt-4 text-xs text-slate-600">
-            <span className="font-semibold">Dashboard</span> = KPIs/alertas ·{" "}
-            <span className="font-semibold">Reportes</span> = listados con filtros + export.
+          <div className="mt-3 text-xs text-slate-600">
+            Próximo: agregamos "Aging" (días desde último update), y filtros avanzados (rubro/país)
+            cuando existan.
           </div>
         </div>
       </div>
     </PageContainer>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-600">Cargando…</div>}>
+      <ReporteComercialLeadsInner />
+    </Suspense>
   );
 }

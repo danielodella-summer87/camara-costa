@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 type Rubro = {
   id: string;
   nombre: string;
+  activo: boolean;
   created_at?: string;
 };
 
@@ -36,7 +37,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("rubros")
-      .select("id,nombre,created_at")
+      .select("id,nombre,activo,created_at")
       .order("nombre", { ascending: true });
 
     if (error) {
@@ -72,11 +73,11 @@ export async function POST(req: Request) {
       );
     }
 
-    // evitar duplicados exactos (si querés case-insensitive, lo hacemos después con una función SQL)
+    // evitar duplicados exactos (case-insensitive)
     const dup = await supabase
       .from("rubros")
       .select("id")
-      .eq("nombre", nombre)
+      .ilike("nombre", nombre)
       .maybeSingle();
 
     if (dup?.data?.id) {
@@ -88,8 +89,8 @@ export async function POST(req: Request) {
 
     const { data, error } = await supabase
       .from("rubros")
-      .insert({ nombre })
-      .select("id,nombre,created_at")
+      .insert({ nombre, activo: true })
+      .select("id,nombre,activo,created_at")
       .single();
 
     if (error) {

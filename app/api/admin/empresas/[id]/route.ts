@@ -72,7 +72,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
     const { data, error } = await supabase
       .from("empresas")
-      .select("*")
+      .select("*,rubro_id,rubros:rubro_id(id,nombre)")
       .eq("id", id)
       .maybeSingle();
 

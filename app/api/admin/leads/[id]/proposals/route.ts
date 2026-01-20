@@ -1,11 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function supabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Faltan env NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY");
+  }
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
@@ -41,20 +45,6 @@ function cleanDateToISO(v: unknown): string | null {
   return null;
 }
 
-function getLeadIdFromReq(req: Request, params?: { id?: string | string[] }) {
-  const fromParams = params?.id;
-  const candidate = Array.isArray(fromParams) ? fromParams[0] : fromParams;
-  if (candidate && typeof candidate === "string") return candidate;
-
-  // fallback defensivo por si dev cache mete lío
-  const url = new URL(req.url);
-  const parts = url.pathname.split("/").filter(Boolean);
-  // .../leads/{id}/proposals => el {id} está antes de "proposals"
-  const idx = parts.lastIndexOf("leads");
-  const id = idx >= 0 ? parts[idx + 1] : null;
-  return id || null;
-}
-
 type ProposalRow = {
   id: string;
   lead_id: string;
@@ -75,15 +65,18 @@ const SELECT =
   "id,lead_id,created_at,title,notes,file_bucket,file_path,file_name,mime_type,file_size,sent_at";
 
 // GET /api/admin/leads/:id/proposals  => lista + signed_url
-export async function GET(req: Request, ctx: { params?: { id?: string | string[] } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const leadId = getLeadIdFromReq(req, ctx?.params);
+    const { id: leadIdRaw } = await params;
+    const leadId = (leadIdRaw ?? "").trim();
+
     if (!leadId) {
       return NextResponse.json({ data: null, error: "Falta id" } satisfies ApiResp<null>, {
         status: 400,
         headers: { "Cache-Control": "no-store" },
       });
     }
+
     if (!isUuidLike(leadId)) {
       return NextResponse.json({ data: null, error: "Id inválido (UUID)" } satisfies ApiResp<null>, {
         status: 400,
@@ -135,15 +128,18 @@ export async function GET(req: Request, ctx: { params?: { id?: string | string[]
 }
 
 // POST /api/admin/leads/:id/proposals  => upload pdf + insert row
-export async function POST(req: Request, ctx: { params?: { id?: string | string[] } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const leadId = getLeadIdFromReq(req, ctx?.params);
+    const { id: leadIdRaw } = await params;
+    const leadId = (leadIdRaw ?? "").trim();
+
     if (!leadId) {
       return NextResponse.json({ data: null, error: "Falta id" } satisfies ApiResp<null>, {
         status: 400,
         headers: { "Cache-Control": "no-store" },
       });
     }
+
     if (!isUuidLike(leadId)) {
       return NextResponse.json({ data: null, error: "Id inválido (UUID)" } satisfies ApiResp<null>, {
         status: 400,
@@ -190,9 +186,8 @@ export async function POST(req: Request, ctx: { params?: { id?: string | string[
 
     const supabase = supabaseAdmin();
 
-    // subir a storage
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const { error: upErr } = await supabase.storage.from(bucket).upload(path, bytes, {
+    // subir a storage (File directo: más compatible que Uint8Array en types)
+    const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
       contentType: "application/pdf",
       upsert: false,
     });

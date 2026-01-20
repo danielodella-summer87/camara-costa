@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Rubro = { id: string; nombre: string };
+type Rubro = { id: string; nombre: string; activo?: boolean };
 type RubrosApiResponse = { data?: Rubro[]; error?: string | null };
 
 const UUID_RE =
@@ -13,11 +13,13 @@ export default function RubroSelect({
   onChange,
   disabled,
   placeholder = "Seleccionar rubro…",
+  refreshTrigger,
 }: {
   value: string | null; // ideal: UUID. si viene nombre, lo resolvemos.
   onChange: (nextId: string | null) => void;
   disabled?: boolean;
   placeholder?: string;
+  refreshTrigger?: number; // Cuando cambia, refresca la lista
 }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<Rubro[]>([]);
@@ -36,7 +38,9 @@ export default function RubroSelect({
       const json = (await res.json()) as RubrosApiResponse;
       if (!res.ok) throw new Error(json?.error ?? "Error cargando rubros");
 
-      setRows(Array.isArray(json?.data) ? json.data : []);
+      // Filtrar solo rubros activos
+      const allRubros = Array.isArray(json?.data) ? json.data : [];
+      setRows(allRubros.filter((r) => (r as any).activo !== false));
     } catch (e: any) {
       setError(e?.message ?? "Error cargando rubros");
       setRows([]);
@@ -48,6 +52,13 @@ export default function RubroSelect({
   useEffect(() => {
     fetchRubros();
   }, []);
+
+  // Refrescar cuando cambia refreshTrigger
+  useEffect(() => {
+    if (refreshTrigger !== undefined && refreshTrigger > 0) {
+      fetchRubros();
+    }
+  }, [refreshTrigger]);
 
   // Normalizamos:
   // - si nos pasan UUID, lo usamos tal cual (aunque rows aún no cargó)
