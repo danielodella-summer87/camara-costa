@@ -42,6 +42,20 @@ type LeadRow = {
   empresa_id: string | null;
   score: number | null;
   score_categoria: string | null;
+  
+  // Campos adicionales usados en UI y endpoints
+  website?: string | null;
+  objetivos?: string | null;
+  audiencia?: string | null;
+  tamano?: string | null;
+  oferta?: string | null;
+  linkedin_empresa?: string | null;
+  linkedin_director?: string | null;
+  ai_custom_prompt?: string | null;
+  ai_report?: string | null;
+  ai_report_updated_at?: string | null;
+  is_member?: boolean | null;
+  member_since?: string | null;
 };
 
 type LeadsApiResponse = {

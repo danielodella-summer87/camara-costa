@@ -84,25 +84,28 @@ async function signIfPossible(sb: ReturnType<typeof supabaseAdmin>, row: Proposa
  * GET /api/admin/leads/:id/proposals/:proposalId
  * Devuelve 1 propuesta con signed_url fresca (si se puede firmar).
  */
-export async function GET(_req: NextRequest, context: { params: Promise<{ id: string; proposalId: string }> }) {
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ id: string; proposalId: string }> }
+) {
   try {
     const sb = supabaseAdmin();
-    const { id: rawLeadId, proposalId: rawProposalId } = await context.params;
+    const { id, proposalId } = await context.params;
 
-    const leadId = safeStr(rawLeadId);
-    const proposalId = safeStr(rawProposalId);
+    const leadId = safeStr(id);
+    const proposalIdSafe = safeStr(proposalId);
 
     if (!leadId) {
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
-    if (!proposalId) {
+    if (!proposalIdSafe) {
       return NextResponse.json(
         { data: null, error: "proposalId requerido" } satisfies ApiResp<null>,
         { status: 400 }
       );
     }
 
-    const { row } = await fetchProposalById(sb, leadId, proposalId);
+    const { row } = await fetchProposalById(sb, leadId, proposalIdSafe);
 
     if (!row) {
       return NextResponse.json({ data: null, error: "Propuesta no encontrada" } satisfies ApiResp<null>, {

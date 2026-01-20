@@ -18,7 +18,7 @@ type ReportCard = {
   desc: string;
   href?: string;
   disabled?: boolean;
-  tag?: string;
+  tag?: string; // opcional (demo / próximo)
 };
 
 function SectionBadge({ text }: { text: string }) {
@@ -59,9 +59,12 @@ function Card({ r }: { r: ReportCard }) {
   );
 }
 
-export default function AdminReportesHomeClient() {
+export default function ReportesClient() {
   const sp = useSearchParams();
   const tab = (sp.get("tab") as TabKey | null) ?? "resumen";
+
+  const title = "Reportes";
+  const subtitle = "Catálogo de reportes (listados con filtros + export). Elegí un rol.";
 
   const byTab: Record<TabKey, ReportCard[]> = {
     resumen: [
@@ -87,10 +90,10 @@ export default function AdminReportesHomeClient() {
         href: "/admin/reportes/comercial/leads?tab=comercial",
       },
       {
-        title: "Pipeline + Aging (stale 30 días)",
-        desc: "Tabla por pipeline + Top stale + export. Riesgo = rating ≤ 2 + sin actualización.",
-        href: "/admin/reportes/comercial/pipeline?tab=comercial",
-        tag: "nuevo",
+        title: "Pipeline (listado + aging) (demo)",
+        desc: "Etapas, tiempo en etapa, oportunidades calientes/frías.",
+        disabled: true,
+        tag: "próximo",
       },
       {
         title: "Propuestas (historial) (demo)",
@@ -118,45 +121,71 @@ export default function AdminReportesHomeClient() {
     tecnico: [
       {
         title: "Tickets / Estado portal / Incidentes (demo)",
-        desc: "Operación del portal (cuando existan registros).",
+        desc: "Salud técnica y backlog.",
         disabled: true,
         tag: "próximo",
       },
     ],
   };
 
-  const cards = byTab[tab] ?? byTab.resumen;
+  const cards = byTab[tab] ?? [];
+
+  // fondo pastel por rol (para que sea obvio dónde estás)
+  const bgByTab: Record<TabKey, string> = {
+    resumen: "bg-sky-50 border-sky-100",
+    direccion: "bg-indigo-50 border-indigo-100",
+    comercial: "bg-amber-50 border-amber-100",
+    marketing: "bg-pink-50 border-pink-100",
+    administracion: "bg-emerald-50 border-emerald-100",
+    tecnico: "bg-violet-50 border-violet-100",
+  };
 
   return (
     <PageContainer>
-      <div className="mx-auto w-full max-w-6xl space-y-6">
-        <div className="rounded-2xl border bg-white p-6">
+      <div className="mx-auto w-full max-w-5xl space-y-6">
+        <div className={`rounded-2xl border p-6 ${bgByTab[tab]}`}>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold text-slate-900">Reportes</h1>
-              <p className="mt-1 text-sm text-slate-600">
-                Catálogo por rol. Elegí un área y abrí el reporte.
-              </p>
+              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+              <p className="mt-1 text-sm text-slate-700">{subtitle}</p>
 
               <div className="mt-4">
                 <RoleTabs basePath="/admin/reportes" defaultTab="resumen" />
+              </div>
+
+              <div className="mt-4 inline-flex overflow-hidden rounded-xl border bg-white">
+                <Link
+                  href="/admin?tab=resumen"
+                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
+                >
+                  Dashboard
+                </Link>
+                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
+                  Reportes
+                </span>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <Link
-                href="/admin"
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+                href="/admin/leads"
+                className="rounded-xl border bg-white px-4 py-2 text-sm hover:bg-slate-50"
               >
-                Volver a Dashboard
+                Ir a Leads
               </Link>
             </div>
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
             {cards.map((r) => (
-              <Card key={`${r.title}-${r.href ?? "x"}`} r={r} />
+              <Card key={r.title} r={r} />
             ))}
+          </div>
+
+          <div className="mt-4 text-xs text-slate-600">
+            Concepto: <span className="font-semibold">Dashboard</span> = KPIs/alertas rápidas.
+            <span className="mx-2">·</span>
+            <span className="font-semibold">Reportes</span> = listados con filtros + export.
           </div>
         </div>
       </div>

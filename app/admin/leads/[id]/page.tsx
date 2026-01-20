@@ -60,6 +60,7 @@ type Lead = {
   empresa_id?: string | null;
   empresas?: Empresa | null;
   score?: number | null;
+  score_categoria?: string | null;
 };
 
 type LeadApiResponse = {
@@ -760,8 +761,8 @@ export default function LeadDetailPage() {
       notas: lead.notas ?? "",
 
       website: lead.website ?? "",
-      objetivos: typeof lead.objetivos === "string" ? lead.objetivos : (Array.isArray(lead.objetivos) ? lead.objetivos.join(", ") : ""),
-      audiencia: typeof lead.audiencia === "string" ? lead.audiencia : (Array.isArray(lead.audiencia) ? lead.audiencia.join(", ") : ""),
+      objetivos: lead.objetivos ?? "",
+      audiencia: lead.audiencia ?? "",
       tamano: lead.tamano ?? "",
       oferta: lead.oferta ?? "",
       linkedin_empresa: lead.linkedin_empresa ?? "",
@@ -787,6 +788,32 @@ export default function LeadDetailPage() {
 
   const title = loading ? "Cargando…" : lead?.nombre ?? "Lead";
   const leadIdSafe = (id ?? lead?.id ?? "").trim();
+
+  const leadForAi = useMemo(() => {
+    if (!lead) return null;
+
+    const toArray = (value: unknown): string[] | null => {
+      if (!value) return null;
+
+      if (Array.isArray(value)) {
+        return value.map(String).map(v => v.trim()).filter(Boolean);
+      }
+
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        return trimmed.split(",").map(v => v.trim()).filter(Boolean);
+      }
+
+      return null;
+    };
+
+    return {
+      ...lead,
+      objetivos: toArray(lead.objetivos),
+      audiencia: toArray(lead.audiencia),
+    };
+  }, [lead]);
 
   return (
     <PageContainer>
@@ -1336,7 +1363,7 @@ export default function LeadDetailPage() {
         <AiLeadReport
           key={`ai-${leadIdSafe}`}
           leadId={leadIdSafe}
-          lead={lead}
+          lead={leadForAi as any}
           onBeforeGenerate={async () => {
             // Guardar el draft actual antes de generar el informe
             // Reutiliza la misma función que usa "Guardar"
