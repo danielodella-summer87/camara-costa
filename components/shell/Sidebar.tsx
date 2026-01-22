@@ -61,7 +61,6 @@ function SidebarItem({ label, href, icon: Icon, isActive = false }: Omit<Sidebar
     >
       <Icon 
         className="w-4 h-4 shrink-0" 
-        strokeWidth={2}
         aria-hidden="true"
       />
       <span>{label}</span>
@@ -203,7 +202,7 @@ export default function Sidebar() {
               href="/admin/configuracion"
               className="flex items-center gap-2 flex-1"
             >
-              <SettingsIcon className="w-4 h-4 shrink-0" strokeWidth={2} aria-hidden="true" />
+              <SettingsIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>Configuración</span>
             </Link>
             <button
@@ -239,7 +238,6 @@ export default function Sidebar() {
                     >
                       <subItem.icon 
                         className="w-4 h-4 shrink-0" 
-                        strokeWidth={2}
                         aria-hidden="true"
                       />
                       <span>{subItem.label}</span>
