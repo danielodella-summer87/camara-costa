@@ -1,6 +1,7 @@
 "use client";
 
 import { AiLeadReport } from "@/components/leads/AiLeadReport";
+import { LeadDocsModal } from "@/components/leads/LeadDocsModal";
 import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -51,6 +52,7 @@ type Lead = {
   oferta?: string | null; // texto
   linkedin_empresa?: string | null;
   linkedin_director?: string | null;
+  meet_url?: string | null;
 
   rating?: number | null;
   next_activity_type?: string | null;
@@ -85,31 +87,13 @@ type PatchPayload = Partial<
     | "oferta"
     | "linkedin_empresa"
     | "linkedin_director"
+    | "meet_url"
     | "empresa_id"
     | "score"
     | "score_categoria"
   >
 >;
 
-type Proposal = {
-  id: string;
-  lead_id: string;
-
-  title?: string | null;
-  notes?: string | null;
-
-  file_bucket?: string | null;
-  file_path?: string | null;
-  file_name?: string | null;
-  mime_type?: string | null;
-
-  file_size?: number | null; // bytes
-  signed_url?: string | null; // puede venir en list (si lo devolvés)
-  url?: string | null; // compat
-
-  created_at?: string | null;
-  sent_at?: string | null;
-};
 
 type ApiResp<T> = {
   data?: T | null;
@@ -337,22 +321,63 @@ export default function LeadDetailPage() {
   const [draft, setDraft] = useState<PatchPayload>({});
   const [empresaIdInput, setEmpresaIdInput] = useState("");
 
-  // ✅ propuestas
-  const [proposalsOpen, setProposalsOpen] = useState(false);
-  const [proposalsLoading, setProposalsLoading] = useState(false);
-  const [proposalsError, setProposalsError] = useState<string | null>(null);
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadSentAt, setUploadSentAt] = useState("");
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  // ✅ Documentación
+  const [docsOpen, setDocsOpen] = useState(false);
 
-  const [openingProposalId, setOpeningProposalId] = useState<string | null>(
-    null
-  );
-  const [mailingProposalId, setMailingProposalId] = useState<string | null>(
-    null
-  );
+  // ✅ Meet Asistido
+  const [startingMeet, setStartingMeet] = useState(false);
+  const [meetWindowOpened, setMeetWindowOpened] = useState(false);
+  const meetWinRef = useRef<Window | null>(null);
+
+  // Función reutilizable para abrir Meet en ventana popup controlada
+  function openMeetWindow(meetUrl: string) {
+    // Si ya existe una ventana abierta y no cerrada, hacer focus y retornar
+    if (meetWinRef.current && !meetWinRef.current.closed) {
+      meetWinRef.current.focus();
+      return;
+    }
+
+    const name = "meet_assistido_window";
+    const features = "popup=yes,width=1200,height=800,left=80,top=80";
+    const w = window.open(meetUrl, name, features);
+
+    if (w === null) {
+      // Popup bloqueado, fallback a nueva pestaña
+      window.open(meetUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    // Ventana abierta exitosamente
+    meetWinRef.current = w;
+    w.focus();
+    sessionStorage.setItem("meetWindowOpened", "true");
+    setMeetWindowOpened(!!meetWinRef.current && !meetWinRef.current.closed);
+  }
+
+  // Monitorear estado de la ventana para detectar cierre
+  useEffect(() => {
+    // Interval para detectar cierre de ventana
+    let intervalId: number | null = null;
+    
+    if (meetWindowOpened && meetWinRef.current) {
+      intervalId = window.setInterval(() => {
+        if (meetWinRef.current?.closed === true) {
+          setMeetWindowOpened(false);
+          sessionStorage.removeItem("meetWindowOpened");
+          meetWinRef.current = null;
+        } else {
+          // Actualizar estado basado en estado real de la ventana
+          setMeetWindowOpened(!!meetWinRef.current && !meetWinRef.current.closed);
+        }
+      }, 1500);
+    }
+
+    return () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [meetWindowOpened]);
 
   // ✅ Opciones dinámicas desde API
   const [leadOptions, setLeadOptions] = useState<{
@@ -464,12 +489,56 @@ export default function LeadDetailPage() {
       oferta: norm(draft.oferta),
       linkedin_empresa: norm(draft.linkedin_empresa),
       linkedin_director: norm(draft.linkedin_director),
+      meet_url: norm(draft.meet_url),
       empresa_id: draft.empresa_id ?? null,
       score: draft.score ?? null,
       score_categoria: draft.score_categoria ?? null,
     };
 
     await patchLead(normalized);
+  }
+
+  async function startMeetSession() {
+    if (!id || !lead?.meet_url) {
+      setError("Cargar Google Meet URL primero");
+      return;
+    }
+
+    setStartingMeet(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/meet-sessions/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meet_url: lead.meet_url }),
+      });
+
+      const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
+      if (!res.ok) {
+        throw new Error(json?.error ?? "Error al iniciar sesión de Meet");
+      }
+
+      if (res.status === 201 && json?.data) {
+        const session = json.data;
+        const sessionId = session?.id;
+        
+        if (!sessionId) {
+          throw new Error("No se recibió sessionId en la respuesta");
+        }
+
+        // Abrir Google Meet en ventana popup controlada
+        if (lead.meet_url) {
+          openMeetWindow(lead.meet_url);
+        }
+
+        // Redirigir inmediatamente a la pantalla exclusiva del Meet
+        window.location.href = `/admin/leads/${id}/meet-sessions/${sessionId}`;
+      }
+    } catch (e: unknown) {
+      const error = e instanceof Error ? e : new Error("Error desconocido");
+      setError(error.message);
+      setStartingMeet(false);
+    }
   }
 
   async function deleteLead() {
@@ -534,150 +603,6 @@ export default function LeadDetailPage() {
     }
   }
 
-  // ✅ propuestas (GET list)
-  async function fetchProposals() {
-    if (!id) return;
-    setProposalsError(null);
-    setProposalsLoading(true);
-    try {
-      const res = await fetch(`/api/admin/leads/${id}/proposals`, {
-        method: "GET",
-        cache: "no-store",
-        headers: { "Cache-Control": "no-store" },
-      });
-
-      const json = (await res.json()) as ApiResp<Proposal[]>;
-      if (!res.ok) throw new Error(json?.error ?? "Error cargando propuestas");
-
-      const rows = Array.isArray(json?.data) ? json.data : [];
-      setProposals(rows);
-    } catch (e: any) {
-      setProposalsError(e?.message ?? "Error cargando propuestas");
-      setProposals([]);
-    } finally {
-      setProposalsLoading(false);
-    }
-  }
-
-  // ✅ traer URL firmada fresca por proposalId (a prueba de expiración / campos)
-  async function getFreshSignedUrl(proposalId: string): Promise<string | null> {
-    if (!id) return null;
-
-    const res = await fetch(`/api/admin/leads/${id}/proposals/${proposalId}`, {
-      method: "GET",
-      cache: "no-store",
-      headers: { "Cache-Control": "no-store" },
-    });
-
-    const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
-    if (!res.ok)
-      throw new Error((json as any)?.error ?? "No se pudo obtener la URL del PDF");
-
-    const row = (json as any)?.data ?? null;
-    const url =
-      (row?.signed_url && String(row.signed_url).trim()) ||
-      (row?.url && String(row.url).trim()) ||
-      null;
-
-    return url;
-  }
-
-  async function openProposal(proposalId: string) {
-    if (!proposalId) return;
-    setOpeningProposalId(proposalId);
-    setProposalsError(null);
-    try {
-      const url = await getFreshSignedUrl(proposalId);
-      if (!url) throw new Error("La API no devolvió signed_url/url para este PDF.");
-
-      window.open(url, "_blank", "noopener,noreferrer");
-    } catch (e: any) {
-      setProposalsError(e?.message ?? "No se pudo abrir el PDF");
-    } finally {
-      setOpeningProposalId(null);
-    }
-  }
-
-  async function emailProposal(p: Proposal) {
-    const to = lead?.email?.trim() ?? "";
-    if (!to) {
-      setProposalsError("Este lead no tiene email cargado.");
-      return;
-    }
-
-    setMailingProposalId(p.id);
-    setProposalsError(null);
-    try {
-      const url = await getFreshSignedUrl(p.id);
-      if (!url) throw new Error("No hay URL disponible para enviar.");
-
-      const name =
-        (p.title && p.title.trim()) ||
-        (p.file_name && p.file_name.trim()) ||
-        "Propuesta";
-
-      const subject = `Propuesta: ${name}`;
-      const body = `Hola,\n\nTe comparto la propuesta en PDF:\n${url}\n\nSaludos.`;
-
-      const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(
-        subject
-      )}&body=${encodeURIComponent(body)}`;
-
-      window.location.href = mailto;
-    } catch (e: any) {
-      setProposalsError(e?.message ?? "No se pudo preparar el email");
-    } finally {
-      setMailingProposalId(null);
-    }
-  }
-
-  // ✅ propuestas (POST multipart)
-  async function uploadProposal() {
-    if (!id) return;
-    const file = fileRef.current?.files?.[0] ?? null;
-    if (!file) {
-      setProposalsError("Seleccioná un PDF primero.");
-      return;
-    }
-    if (file.type !== "application/pdf") {
-      setProposalsError("El archivo debe ser PDF.");
-      return;
-    }
-
-    setUploading(true);
-    setProposalsError(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const t = uploadTitle.trim();
-      if (t) fd.append("title", t);
-
-      const sentAt = uploadSentAt.trim();
-      if (sentAt) fd.append("sent_at", sentAt);
-
-      const res = await fetch(`/api/admin/leads/${id}/proposals`, {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Cache-Control": "no-store" },
-        body: fd,
-      });
-
-      const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
-      if (!res.ok) throw new Error((json as any)?.error ?? "Error subiendo propuesta");
-
-      if (fileRef.current) fileRef.current.value = "";
-      setUploadTitle("");
-      setUploadSentAt("");
-      flash("Propuesta subida.");
-
-      await fetchProposals();
-    } catch (e: any) {
-      setProposalsError(e?.message ?? "Error subiendo propuesta");
-    } finally {
-      setUploading(false);
-    }
-  }
 
   // ✅ Fetch opciones dinámicas desde API
   async function fetchLeadOptions() {
@@ -767,6 +692,7 @@ export default function LeadDetailPage() {
       oferta: lead.oferta ?? "",
       linkedin_empresa: lead.linkedin_empresa ?? "",
       linkedin_director: lead.linkedin_director ?? "",
+      meet_url: lead.meet_url ?? "",
     });
   }
 
@@ -836,7 +762,7 @@ export default function LeadDetailPage() {
                 )}
               </div>
               <p className="mt-1 text-sm text-slate-600">
-                Detalle, edición, propuestas e informe IA.
+                Detalle, edición e informe IA.
               </p>
 
               <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
@@ -870,15 +796,26 @@ export default function LeadDetailPage() {
 
               <button
                 type="button"
-                onClick={async () => {
-                  setProposalsOpen(true);
-                  await fetchProposals();
+                onClick={() => {
+                  if (id) {
+                    setDocsOpen(true);
+                  }
                 }}
                 className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                disabled={disabled || !lead}
-                title="Historial de propuestas (PDF)"
+                disabled={disabled || !id}
+                title="Documentación PDF del lead"
               >
-                Propuestas
+                Documentación
+              </button>
+
+              <button
+                type="button"
+                onClick={startMeetSession}
+                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={disabled || !id || !lead?.meet_url || startingMeet}
+                title={!lead?.meet_url ? "Cargar Google Meet URL primero" : "Iniciar sesión de Meet asistido"}
+              >
+                {startingMeet ? "Iniciando…" : "Iniciar Meet Asistido"}
               </button>
 
               {!lead?.is_member && (
@@ -992,7 +929,7 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="mt-5 grid grid-cols-1 gap-4">
             {/* Sección: Datos de Empresa (base) - solo lectura */}
             {lead?.empresas && (
             <div className="rounded-2xl border bg-white p-4">
@@ -1232,6 +1169,33 @@ export default function LeadDetailPage() {
                 />
 
                 <div>
+                  <div className="text-xs text-slate-500">Google Meet URL</div>
+                  {editing ? (
+                    <input
+                      value={(draft.meet_url as any) ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, meet_url: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                      placeholder="https://meet.google.com/xxx-xxxx-xxx"
+                    />
+                  ) : (
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {lead?.meet_url ? (
+                        <a
+                          href={lead.meet_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          {lead.meet_url}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div>
                   <div className="text-xs text-slate-500">Objetivo</div>
                   {editing ? (
                     <textarea
@@ -1359,6 +1323,51 @@ export default function LeadDetailPage() {
           )}
         </div>
 
+        {/* ✅ Meet Asistido */}
+        {lead?.meet_url && (
+          <div className="rounded-2xl border bg-white p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900">Meet Asistido</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Inicia una sesión de coaching en vivo con transcripción y semáforo estratégico
+                </p>
+              </div>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={startMeetSession}
+                  className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                  disabled={disabled || !id || !lead?.meet_url || startingMeet}
+                  title={!lead?.meet_url ? "Cargar Google Meet URL primero" : "Iniciar sesión de Meet asistido"}
+                >
+                  {startingMeet ? "Iniciando…" : "Iniciar Meet Asistido"}
+                </button>
+                {lead.meet_url && (
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (lead.meet_url) {
+                          openMeetWindow(lead.meet_url);
+                        }
+                      }}
+                      className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+                    >
+                      Abrir Meet (Ventana)
+                    </button>
+                    {meetWindowOpened && (
+                      <div className="text-xs text-slate-600 text-center">
+                        Meet abierto en ventana externa
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
         <AiLeadReport
           key={`ai-${leadIdSafe}`}
@@ -1372,161 +1381,12 @@ export default function LeadDetailPage() {
           }}
         />
 
-        <Modal
-          open={proposalsOpen}
-          title={`Propuestas · ${lead?.nombre ?? "Lead"}`}
-          onClose={() => setProposalsOpen(false)}
-        >
-          {proposalsError && (
-            <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {proposalsError}
-            </div>
-          )}
-
-          <div className="rounded-2xl border bg-white p-4">
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="grow">
-                <div className="text-xs text-slate-500">Título (opcional)</div>
-                <input
-                  value={uploadTitle}
-                  onChange={(e) => setUploadTitle(e.target.value)}
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                  placeholder="Ej: Propuesta Growth Q1"
-                  disabled={proposalsLoading || uploading}
-                />
-              </div>
-
-              <div className="w-full sm:w-56">
-                <div className="text-xs text-slate-500">Fecha envío (opcional)</div>
-                <input
-                  value={uploadSentAt}
-                  onChange={(e) => setUploadSentAt(e.target.value)}
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                  placeholder="2026-01-05T14:00:00-03:00"
-                  disabled={proposalsLoading || uploading}
-                />
-              </div>
-
-              <div className="w-full sm:w-auto">
-                <div className="text-xs text-slate-500">PDF</div>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="application/pdf"
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                  disabled={proposalsLoading || uploading}
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={uploadProposal}
-                disabled={proposalsLoading || uploading}
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-              >
-                {uploading ? "Subiendo…" : "Subir"}
-              </button>
-
-              <button
-                type="button"
-                onClick={fetchProposals}
-                disabled={proposalsLoading || uploading}
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-              >
-                {proposalsLoading ? "Cargando…" : "Refrescar"}
-              </button>
-            </div>
-
-            <div className="mt-4">
-              {proposalsLoading ? (
-                <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
-                  Cargando propuestas…
-                </div>
-              ) : proposals.length === 0 ? (
-                <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
-                  No hay propuestas cargadas todavía.
-                </div>
-              ) : (
-                <div className="overflow-hidden rounded-2xl border">
-                  <div className="grid grid-cols-12 gap-0 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                    <div className="col-span-5">Documento</div>
-                    <div className="col-span-3">Creado</div>
-                    <div className="col-span-2">Enviado</div>
-                    <div className="col-span-2 text-right">Acciones</div>
-                  </div>
-
-                  <div className="divide-y">
-                    {proposals.map((p) => {
-                      const name =
-                        (p.title && p.title.trim()) ||
-                        (p.file_name && p.file_name.trim()) ||
-                        p.id;
-
-                      const isOpening = openingProposalId === p.id;
-                      const isMailing = mailingProposalId === p.id;
-
-                      return (
-                        <div
-                          key={p.id}
-                          className="grid grid-cols-12 items-center px-3 py-2 text-sm"
-                        >
-                          <div className="col-span-5 min-w-0">
-                            <div className="truncate font-medium text-slate-900">{name}</div>
-                            <div className="mt-0.5 text-xs text-slate-500">
-                              {p.file_name ? (
-                                <span className="truncate">{p.file_name}</span>
-                              ) : null}
-                              {p.file_size ? (
-                                <span className="ml-2 rounded-full border bg-white px-2 py-0.5 text-[11px] text-slate-600">
-                                  {bytes(p.file_size)}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          <div className="col-span-3 text-xs text-slate-600">
-                            {formatDateTime(p.created_at ?? null)}
-                          </div>
-
-                          <div className="col-span-2 text-xs text-slate-600">
-                            {formatDateTime(p.sent_at ?? null)}
-                          </div>
-
-                          <div className="col-span-2 flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openProposal(p.id)}
-                              disabled={isOpening || proposalsLoading || uploading}
-                              className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-                              title="Abrir PDF"
-                            >
-                              {isOpening ? "Abriendo…" : "Abrir"}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => emailProposal(p)}
-                              disabled={isMailing || proposalsLoading || uploading}
-                              className="rounded-lg border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-                              title={lead?.email ? `Enviar a ${lead.email}` : "Este lead no tiene email"}
-                            >
-                              {isMailing ? "Preparando…" : "Mail"}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-3 text-xs text-slate-500">
-                “Abrir” siempre pide una <span className="font-semibold">signed_url fresca</span> al endpoint del proposal,
-                así evitamos expiración o campos faltantes.
-              </div>
-            </div>
-          </div>
-        </Modal>
+        <LeadDocsModal
+          open={docsOpen}
+          onClose={() => setDocsOpen(false)}
+          leadId={id ?? ""}
+          leadName={lead?.nombre ?? null}
+        />
       </div>
     </PageContainer>
   );

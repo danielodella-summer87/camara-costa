@@ -39,7 +39,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q1 = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -52,6 +52,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
             ...row,
             linkedin_empresa: row.linkedin_empresa ?? null,
             linkedin_director: row.linkedin_director ?? null,
+            meet_url: row.meet_url ?? null,
           },
           error: null,
         } satisfies ApiResp<any>,
@@ -64,7 +65,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q2 = await sb
       .from("lead")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -86,6 +87,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
           ...row,
           linkedin_empresa: row.linkedin_empresa ?? null,
           linkedin_director: row.linkedin_director ?? null,
+          meet_url: row.meet_url ?? null,
         },
         error: null,
       } satisfies ApiResp<any>,
@@ -123,6 +125,29 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return trimmed.length > 0 ? trimmed : null;
     };
 
+    // Validar meet_url si viene
+    let meetUrlNormalized: string | null = null;
+    if (body.meet_url !== undefined) {
+      if (body.meet_url === null) {
+        meetUrlNormalized = null;
+      } else {
+        const meetUrlStr = safeStr(body.meet_url);
+        if (meetUrlStr !== null) {
+          // Validación opcional: debe empezar con https://meet.google.com/
+          if (!meetUrlStr.startsWith("https://meet.google.com/")) {
+            return NextResponse.json(
+              { data: null, error: "meet_url debe empezar con https://meet.google.com/" } satisfies ApiResp<null>,
+              { status: 400 }
+            );
+          }
+          meetUrlNormalized = meetUrlStr;
+        } else {
+          // Si viene como string vacío, normalizar a null
+          meetUrlNormalized = null;
+        }
+      }
+    }
+
     // Manejar is_member y member_since
     const updateData: any = {
       ...body,
@@ -133,6 +158,11 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       score: body.score === null || body.score === undefined ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null),
       score_categoria: body.score_categoria === null || body.score_categoria === undefined ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null),
     };
+
+    // Agregar meet_url normalizado si fue proporcionado
+    if (body.meet_url !== undefined) {
+      updateData.meet_url = meetUrlNormalized;
+    }
 
     // Si is_member cambia de false a true y member_since no viene, setear member_since=now()
     if (body.is_member === true) {

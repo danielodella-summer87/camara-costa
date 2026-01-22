@@ -128,3 +128,59 @@ export async function GET(
     return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/admin/leads/:id/proposals/:proposalId
+ * Elimina una propuesta y su archivo del storage.
+ */
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ id: string; proposalId: string }> }
+) {
+  try {
+    const sb = supabaseAdmin();
+    const { id, proposalId } = await context.params;
+
+    const leadId = safeStr(id);
+    const proposalIdSafe = safeStr(proposalId);
+
+    if (!leadId) {
+      return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
+    }
+    if (!proposalIdSafe) {
+      return NextResponse.json(
+        { data: null, error: "proposalId requerido" } satisfies ApiResp<null>,
+        { status: 400 }
+      );
+    }
+
+    // Obtener la propuesta para saber qué archivo borrar
+    const { row, table } = await fetchProposalById(sb, leadId, proposalIdSafe);
+
+    if (!row) {
+      return NextResponse.json({ data: null, error: "Propuesta no encontrada" } satisfies ApiResp<null>, {
+        status: 404,
+      });
+    }
+
+    // Borrar archivo del storage si existe
+    const bucket = safeStr(row.file_bucket);
+    const path = safeStr(row.file_path);
+    if (bucket && path) {
+      await sb.storage.from(bucket).remove([path]).catch(() => {
+        // Si falla borrar el archivo, continuamos igual (no bloqueamos)
+      });
+    }
+
+    // Borrar registro de la DB
+    const { error: delError } = await sb.from(table).delete().eq("id", proposalIdSafe).eq("lead_id", leadId);
+
+    if (delError) {
+      return NextResponse.json({ data: null, error: delError.message } satisfies ApiResp<null>, { status: 500 });
+    }
+
+    return NextResponse.json({ data: { deleted: true }, error: null } satisfies ApiResp<any>, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
+  }
+}

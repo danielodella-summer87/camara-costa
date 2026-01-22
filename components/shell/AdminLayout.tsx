@@ -5,7 +5,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen w-full bg-slate-100 text-slate-900 flex">
       {/* Sidebar */}
-      <div className="w-64 shrink-0">
+      <div className="w-48 shrink-0">
         <Sidebar />
       </div>
 

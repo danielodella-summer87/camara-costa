@@ -56,6 +56,7 @@ type LeadRow = {
   ai_report_updated_at?: string | null;
   is_member?: boolean | null;
   member_since?: string | null;
+  meet_url?: string | null;
 };
 
 type LeadsApiResponse = {
@@ -121,7 +122,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,score,score_categoria,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -133,6 +134,7 @@ type LeadCreateInput = Partial<{
   pipeline: string | null;
   notas: string | null;
   website: string | null;
+  meet_url: string | null;
 
   rating: number | string | null;
   next_activity_type: string | null;
@@ -258,6 +260,19 @@ export async function POST(req: Request) {
       );
     }
 
+    // Validar meet_url (opcional, pero si viene debe ser string válido)
+    const meetUrlRaw = body.meet_url === null || body.meet_url === undefined 
+      ? null 
+      : cleanStr(body.meet_url);
+    
+    // Validación opcional: si viene meet_url, verificar que empiece con https://meet.google.com/
+    if (meetUrlRaw !== null && !meetUrlRaw.startsWith("https://meet.google.com/")) {
+      return NextResponse.json(
+        { data: null, error: "meet_url debe empezar con https://meet.google.com/" } satisfies LeadApiResponse,
+        { status: 400, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
     const insert: Partial<LeadRow> = {
       nombre,
       contacto: cleanStr(body.contacto),
@@ -268,6 +283,7 @@ export async function POST(req: Request) {
       pipeline,
       notas: cleanStr(body.notas),
       website: cleanStr(body.website),
+      meet_url: meetUrlRaw,
 
       rating: ratingParsed ?? 0,
       next_activity_type: activityParsed ?? null,
