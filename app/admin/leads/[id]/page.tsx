@@ -332,7 +332,7 @@ export default function LeadDetailPage() {
   const meetWinRef = useRef<Window | null>(null);
 
   // ✅ Tabs
-  const [activeTab, setActiveTab] = useState<"empresa" | "lead" | "ia">("empresa");
+  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet">("entidad");
 
   // Función reutilizable para abrir Meet en ventana popup controlada
   function openMeetWindow(meetUrl: string) {
@@ -904,12 +904,12 @@ export default function LeadDetailPage() {
 
               <button
                 type="button"
-                onClick={startMeetSession}
-                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={disabled || !id || startingMeet || loadingSession}
-                title={activeSession ? "Ir a sesión activa de Meet asistido" : "Iniciar sesión de Meet asistido"}
+                onClick={() => setActiveTab("meet")}
+                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                disabled={disabled || !lead}
+                title="Ir a Meet Asistido"
               >
-                {startingMeet ? "Iniciando…" : activeSession ? "Ir a Meet Asistido" : "Iniciar Meet Asistido"}
+                Meet Asistido
               </button>
 
               {!lead?.is_member && (
@@ -983,14 +983,14 @@ export default function LeadDetailPage() {
             <div className="mt-4 inline-flex overflow-hidden rounded-xl border bg-white">
               <button
                 type="button"
-                onClick={() => setActiveTab("empresa")}
+                onClick={() => setActiveTab("entidad")}
                 className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "empresa"
+                  activeTab === "entidad"
                     ? "bg-slate-900 text-white"
                     : "text-slate-700 hover:bg-slate-50"
                 }`}
               >
-                Datos Empresa
+                Datos de Entidad
               </button>
               <button
                 type="button"
@@ -1001,7 +1001,7 @@ export default function LeadDetailPage() {
                     : "text-slate-700 hover:bg-slate-50"
                 }`}
               >
-                Datos Lead
+                Datos nuevos del lead
               </button>
               <button
                 type="button"
@@ -1014,11 +1014,22 @@ export default function LeadDetailPage() {
               >
                 Agente IA
               </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("meet")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "meet"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Meet Asistido
+              </button>
             </div>
           )}
 
           {/* Warning si no está vinculado a empresa */}
-          {!lead?.empresa_id && activeTab === "empresa" && (
+          {!lead?.empresa_id && activeTab === "entidad" && (
             <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1063,7 +1074,7 @@ export default function LeadDetailPage() {
           )}
 
           {/* Contenido de Tabs */}
-          {activeTab === "empresa" && (
+          {activeTab === "entidad" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
               {/* Sección: Datos de Empresa (base) - solo lectura */}
               <div className="rounded-2xl border bg-white p-4">
@@ -1182,7 +1193,7 @@ export default function LeadDetailPage() {
             <div className="mt-5 grid grid-cols-1 gap-4">
               <div className="rounded-2xl border bg-white p-4">
                 <div className="text-xs font-semibold text-slate-500">
-                  Estado Comercial
+                  Datos nuevos del lead
                 </div>
 
                 <div className="mt-3 space-y-3">
@@ -1317,7 +1328,7 @@ export default function LeadDetailPage() {
                 </div>
 
                 <div>
-                  <div className="text-xs text-slate-500">Tamaño (checkbox único)</div>
+                  <div className="text-xs text-slate-500">Tamaño</div>
                   {editing ? (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {leadOptions.tamanios.map((opt) => {
@@ -1369,7 +1380,7 @@ export default function LeadDetailPage() {
                 </div>
 
                 <div>
-                  <div className="text-xs text-slate-500">Notas (memo)</div>
+                  <div className="text-xs text-slate-500">Notas</div>
                   {editing ? (
                     <textarea
                       value={(draft.notas as any) ?? ""}
@@ -1421,70 +1432,86 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {activeTab === "meet" && (
+            <div className="mt-5">
+              {/* ✅ Meet Asistido */}
+              {lead && (
+                <div className="rounded-2xl border bg-white p-6 space-y-4">
+                  {/* Encabezado */}
+                  <div>
+                    <h2 className="text-xl font-semibold text-slate-900">Meet Asistido</h2>
+                    <p className="mt-1 text-sm text-slate-600">
+                      Inicia una sesión de coaching en vivo con transcripción y semáforo estratégico
+                    </p>
+                  </div>
+
+                  {/* Fila de acciones */}
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <button
+                      type="button"
+                      onClick={startMeetSession}
+                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={disabled || !id || startingMeet || loadingSession}
+                      title={activeSession ? "Ir a sesión activa de Meet asistido" : "Iniciar sesión de Meet asistido"}
+                    >
+                      {startingMeet ? "Iniciando…" : activeSession ? "Ir a Meet Asistido" : "Iniciar Meet Asistido"}
+                    </button>
+                    {lead.meet_url && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (lead.meet_url) {
+                            openMeetWindow(lead.meet_url);
+                          }
+                        }}
+                        className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+                      >
+                        Abrir Meet (Ventana)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Estado de sesión */}
+                  {activeSession ? (
+                    <div className="rounded-xl border bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="font-semibold text-slate-900 mb-1">Sesión activa</div>
+                          <div className="text-xs text-slate-600 mb-3">
+                            ID: {activeSession.id.substring(0, 8)}...
+                          </div>
+                        </div>
+                        <Link
+                          href={`/admin/leads/${id}/meet-sessions/${activeSession.id}`}
+                          className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 whitespace-nowrap"
+                        >
+                          Abrir panel de sesión
+                        </Link>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
+                      No hay sesión activa.
+                    </div>
+                  )}
+
+                  {/* Indicador de ventana abierta */}
+                  {meetWindowOpened && (
+                    <div className="text-xs text-slate-600 text-center">
+                      Meet abierto en ventana externa
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {!loading && !lead && (
             <div className="mt-5 rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
               No se encontró el lead.
             </div>
           )}
         </div>
-
-        {/* ✅ Meet Asistido */}
-        {lead && (
-          <div className="rounded-2xl border bg-white p-6 space-y-4">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-900">Meet Asistido</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Inicia una sesión de coaching en vivo con transcripción y semáforo estratégico
-                </p>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                {lead.meet_url && (
-                  <div className="flex flex-col gap-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (lead.meet_url) {
-                          openMeetWindow(lead.meet_url);
-                        }
-                      }}
-                      className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-                    >
-                      Abrir Meet (Ventana)
-                    </button>
-                    {meetWindowOpened && (
-                      <div className="text-xs text-slate-600 text-center">
-                        Meet abierto en ventana externa
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {activeSession ? (
-              <div className="mt-4">
-                <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
-                  <div className="font-semibold mb-2">Sesión activa</div>
-                  <div className="text-xs text-slate-600 mb-3">
-                    Hay una sesión de Meet Asistido en curso. Usá el botón superior "Ir a Meet Asistido" para acceder al panel de coaching.
-                  </div>
-                  <Link
-                    href={`/admin/leads/${id}/meet-sessions/${activeSession.id}`}
-                    className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
-                  >
-                    Abrir panel de sesión
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
-                No hay una sesión activa. Iniciá Meet Asistido desde el botón superior.
-              </div>
-            )}
-          </div>
-        )}
-
 
         <LeadDocsModal
           open={docsOpen}
