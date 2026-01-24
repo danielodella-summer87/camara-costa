@@ -71,7 +71,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
           {/* Datos de la empresa */}
           {(socio.empresas as any) && (
             <div className="mt-4 rounded-xl border bg-slate-50 p-4">
-              <h2 className="text-sm font-semibold text-slate-900 mb-2">Datos de la empresa</h2>
+              <h2 className="text-sm font-semibold text-slate-900 mb-2">Datos de la entidad</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-slate-700">
                 {(socio.empresas as any).email && (
                   <div>

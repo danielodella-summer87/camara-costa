@@ -38,6 +38,12 @@ export async function POST(
   context: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    // Logs al inicio del handler
+    console.log("[transcribe] method:", req.method);
+    console.log("[transcribe] content-type:", req.headers.get("content-type"));
+    console.log("[transcribe] content-length:", req.headers.get("content-length"));
+    console.log("[transcribe] user-agent:", req.headers.get("user-agent"));
+
     const sb = supabaseAdmin();
     const { sessionId: rawSessionId } = await context.params;
 
@@ -79,24 +85,77 @@ export async function POST(
 
     // Validar DEEPGRAM_API_KEY
     const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
-    if (!deepgramApiKey) {
+    if (!deepgramApiKey || deepgramApiKey.trim().length === 0) {
       return NextResponse.json(
-        { data: null, error: "DEEPGRAM_API_KEY no configurada" } satisfies ApiResp<null>,
+        { 
+          data: null, 
+          error: "DEEPGRAM_API_KEY no configurada. Por favor, configura la variable de entorno DEEPGRAM_API_KEY en .env.local (local) o en las variables de entorno de Vercel (producción)." 
+        } satisfies ApiResp<null>,
         { status: 500, headers: { "Cache-Control": "no-store" } }
       );
     }
 
+    // DEBUG TRANSCRIBE: Logs de diagnóstico en servidor antes de procesar
+    const contentTypeHeader = req.headers.get("content-type");
+    const contentLengthHeader = req.headers.get("content-length");
+    console.log("[DEBUG TRANSCRIBE SERVER] Headers recibidos:", {
+      "content-type": contentTypeHeader,
+      "content-length": contentLengthHeader,
+      "user-agent": req.headers.get("user-agent"),
+    });
+
     // Leer body como ArrayBuffer
     const audioBuffer = await req.arrayBuffer();
+    
+    // Log tamaño real recibido (justo después de leer el buffer)
+    console.log("[transcribe] buffer byteLength:", audioBuffer.byteLength);
+    
+    // DEBUG TRANSCRIBE: Log del buffer recibido
+    console.log("[DEBUG TRANSCRIBE SERVER] Buffer recibido:", {
+      byteLength: audioBuffer.byteLength,
+      sizeKB: (audioBuffer.byteLength / 1024).toFixed(2),
+      sizeMB: (audioBuffer.byteLength / (1024 * 1024)).toFixed(2),
+      isEmpty: audioBuffer.byteLength === 0,
+    });
+
     if (!audioBuffer || audioBuffer.byteLength === 0) {
+      console.error("[DEBUG TRANSCRIBE SERVER] Error: Body vacío o inválido");
       return NextResponse.json(
         { data: null, error: "Body vacío o inválido" } satisfies ApiResp<null>,
         { status: 400, headers: { "Cache-Control": "no-store" } }
       );
     }
 
+    // DEBUG TRANSCRIBE: Validación de tamaño mínimo
+    if (audioBuffer.byteLength < 2000) {
+      const errorMsg = `Audio demasiado corto: ${audioBuffer.byteLength} bytes. Se requiere al menos 2000 bytes.`;
+      console.error("[DEBUG TRANSCRIBE SERVER]", errorMsg);
+      return NextResponse.json(
+        { data: null, error: errorMsg } satisfies ApiResp<null>,
+        { status: 400, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
     // Obtener Content-Type del request (o usar default)
-    const contentType = req.headers.get("content-type") || "audio/wav";
+    const contentType = contentTypeHeader || "audio/wav";
+    
+    // DEBUG TRANSCRIBE: Log del contentType que se usará
+    console.log("[DEBUG TRANSCRIBE SERVER] ContentType a usar:", contentType);
+
+    // DEBUG TRANSCRIBE: Log antes de llamar a Deepgram
+    console.log("[DEBUG TRANSCRIBE SERVER] Enviando a Deepgram:", {
+      url: "https://api.deepgram.com/v1/listen?smart_format=true&punctuate=true",
+      bufferSize: audioBuffer.byteLength,
+      bufferSizeKB: (audioBuffer.byteLength / 1024).toFixed(2),
+      contentType: contentType,
+      hasApiKey: !!deepgramApiKey,
+      apiKeyLength: deepgramApiKey?.length || 0,
+    });
+
+    // Logs justo antes de llamar a Deepgram
+    console.log("[transcribe] buffer.length (byteLength):", audioBuffer.byteLength);
+    console.log("[transcribe] tipo final enviando:", contentType);
+    console.log("[transcribe] enviando bytes (ArrayBuffer):", audioBuffer instanceof ArrayBuffer);
 
     // Llamar a Deepgram
     const deepgramUrl = "https://api.deepgram.com/v1/listen?smart_format=true&punctuate=true";
@@ -109,8 +168,21 @@ export async function POST(
       body: audioBuffer,
     });
 
+    // DEBUG TRANSCRIBE: Log respuesta de Deepgram
+    console.log("[DEBUG TRANSCRIBE SERVER] Respuesta de Deepgram:", {
+      ok: deepgramRes.ok,
+      status: deepgramRes.status,
+      statusText: deepgramRes.statusText,
+      headers: Object.fromEntries(deepgramRes.headers.entries()),
+    });
+
     if (!deepgramRes.ok) {
       const errorText = await deepgramRes.text().catch(() => "Error desconocido");
+      console.error("[DEBUG TRANSCRIBE SERVER] Error de Deepgram:", {
+        status: deepgramRes.status,
+        statusText: deepgramRes.statusText,
+        errorText: errorText.substring(0, 500), // Limitar a 500 chars para no saturar logs
+      });
       return NextResponse.json(
         { data: null, error: `Deepgram error: ${deepgramRes.status} ${errorText}` } satisfies ApiResp<null>,
         { status: 500, headers: { "Cache-Control": "no-store" } }
@@ -181,6 +253,7 @@ export async function POST(
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (e: any) {
+    console.error("[transcribe] ERROR:", e);
     return NextResponse.json(
       { data: null, error: e?.message ?? "Error inesperado" } satisfies ApiResp<null>,
       { status: 500, headers: { "Cache-Control": "no-store" } }

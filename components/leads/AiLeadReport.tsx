@@ -144,6 +144,7 @@ export function AiLeadReport({
   const [status, setStatus] = useState<"idle" | "saving" | "generating" | "done">("idle");
   const [aiPromptExtra, setAiPromptExtra] = useState<string>("");
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [reportExpanded, setReportExpanded] = useState(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const canRun = !!(leadId && leadId.trim());
@@ -409,94 +410,116 @@ export function AiLeadReport({
           <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
             Aún no hay informe. Tocá <span className="font-semibold">Generar IA</span>.
           </div>
-        ) : viewMode === "raw" ? (
-          <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-700 whitespace-pre-wrap font-mono">
-            {report}
-          </div>
         ) : (
-          <div className="rounded-xl border bg-white p-6 prose prose-slate max-w-none">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                h1: ({ children }) => (
-                  <h1 className="text-2xl font-bold text-slate-900 mt-6 mb-4 pb-2 border-b border-slate-200">
-                    {children}
-                  </h1>
-                ),
-                h2: ({ children }) => (
-                  <h2 className="text-xl font-semibold text-slate-800 mt-6 mb-3">
-                    {children}
-                  </h2>
-                ),
-                h3: ({ children }) => (
-                  <h3 className="text-lg font-semibold text-slate-700 mt-4 mb-2">
-                    {children}
-                  </h3>
-                ),
-                p: ({ children }) => <p className="text-slate-700 mb-3 leading-relaxed">{children}</p>,
-                ul: ({ children }) => <ul className="list-disc list-inside mb-4 space-y-1 text-slate-700">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal list-inside mb-4 space-y-1 text-slate-700">{children}</ol>,
-                li: ({ children }) => <li className="ml-4">{children}</li>,
-                table: ({ children }) => (
-                  <div className="overflow-x-auto my-4">
-                    <table className="min-w-full border-collapse border border-slate-300 text-sm">
-                      {children}
-                    </table>
-                  </div>
-                ),
-                thead: ({ children }) => (
-                  <thead className="bg-slate-100">{children}</thead>
-                ),
-                tbody: ({ children }) => <tbody>{children}</tbody>,
-                tr: ({ children }) => (
-                  <tr className="border-b border-slate-200 hover:bg-slate-50">{children}</tr>
-                ),
-                th: ({ children }) => (
-                  <th className="border border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">
-                    {children}
-                  </th>
-                ),
-                td: ({ children }) => (
-                  <td className="border border-slate-300 px-3 py-2 text-slate-700">{children}</td>
-                ),
-                a: ({ href, children }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 underline"
-                  >
-                    {children}
-                  </a>
-                ),
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-4 border-slate-300 pl-4 my-4 italic text-slate-600">
-                    {children}
-                  </blockquote>
-                ),
-                code: ({ children, className }) => {
-                  const isInline = !className;
-                  return isInline ? (
-                    <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
-                      {children}
-                    </code>
-                  ) : (
-                    <code className={className}>{children}</code>
-                  );
-                },
-                pre: ({ children }) => (
-                  <pre className="bg-slate-100 p-4 rounded-lg overflow-x-auto my-4 text-sm">
-                    {children}
-                  </pre>
-                ),
-                hr: () => <hr className="my-6 border-slate-300" />,
-                strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
-                em: ({ children }) => <em className="italic">{children}</em>,
-              }}
+          <>
+            <button
+              type="button"
+              onClick={() => setReportExpanded(v => !v)}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-slate-50"
             >
-              {report}
-            </ReactMarkdown>
-          </div>
+              {reportExpanded ? "Colapsar informe" : "Ver informe"}
+            </button>
+
+            {reportExpanded ? (
+              <div className="mt-4">
+                {viewMode === "raw" ? (
+                  <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-sm text-slate-700 font-mono">
+                    {String(report ?? "")}
+                  </pre>
+                ) : (
+                  <div className="rounded-xl border bg-white p-6">
+                    <div className="prose max-w-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          h1: ({ children }) => (
+                            <h1 className="text-2xl font-bold text-slate-900 mt-6 mb-4 pb-2 border-b border-slate-200">
+                              {children}
+                            </h1>
+                          ),
+                          h2: ({ children }) => (
+                            <h2 className="text-xl font-semibold text-slate-800 mt-6 mb-3">
+                              {children}
+                            </h2>
+                          ),
+                          h3: ({ children }) => (
+                            <h3 className="text-lg font-semibold text-slate-700 mt-4 mb-2">
+                              {children}
+                            </h3>
+                          ),
+                          p: ({ children }) => <p className="text-slate-700 mb-3 leading-relaxed">{children}</p>,
+                          ul: ({ children }) => <ul className="list-disc list-inside mb-4 space-y-1 text-slate-700">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal list-inside mb-4 space-y-1 text-slate-700">{children}</ol>,
+                          li: ({ children }) => <li className="ml-4">{children}</li>,
+                          table: ({ children }) => (
+                            <div className="overflow-x-auto my-4">
+                              <table className="min-w-full border-collapse border border-slate-300 text-sm">
+                                {children}
+                              </table>
+                            </div>
+                          ),
+                          thead: ({ children }) => (
+                            <thead className="bg-slate-100">{children}</thead>
+                          ),
+                          tbody: ({ children }) => <tbody>{children}</tbody>,
+                          tr: ({ children }) => (
+                            <tr className="border-b border-slate-200 hover:bg-slate-50">{children}</tr>
+                          ),
+                          th: ({ children }) => (
+                            <th className="border border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">
+                              {children}
+                            </th>
+                          ),
+                          td: ({ children }) => (
+                            <td className="border border-slate-300 px-3 py-2 text-slate-700">{children}</td>
+                          ),
+                          a: ({ href, children }) => (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 underline"
+                            >
+                              {children}
+                            </a>
+                          ),
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-4 border-slate-300 pl-4 my-4 italic text-slate-600">
+                              {children}
+                            </blockquote>
+                          ),
+                          code: ({ children, className }) => {
+                            const isInline = !className;
+                            return isInline ? (
+                              <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
+                                {children}
+                              </code>
+                            ) : (
+                              <code className={className}>{children}</code>
+                            );
+                          },
+                          pre: ({ children }) => (
+                            <pre className="bg-slate-100 p-4 rounded-lg overflow-x-auto my-4 text-sm">
+                              {children}
+                            </pre>
+                          ),
+                          hr: () => <hr className="my-6 border-slate-300" />,
+                          strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
+                          em: ({ children }) => <em className="italic">{children}</em>,
+                        }}
+                      >
+                        {String(report ?? "")}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 text-sm text-slate-500 italic">
+                Informe oculto. Presioná "Ver informe" para visualizarlo.
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

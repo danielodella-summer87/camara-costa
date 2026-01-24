@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { RoleTabs } from "@/components/reports/RoleTabs";
 import { RolePanels } from "@/components/reports/RolePanels";
+import { WhatsAppCallCard } from "@/components/admin/WhatsAppCallCard";
 
 type TabKey =
   | "resumen"
@@ -64,6 +65,9 @@ export default function AdminClient() {
             <RolePanels variant="dashboard" />
           </div>
         </div>
+
+        {/* WhatsApp Call Card */}
+        <WhatsAppCallCard />
       </div>
     </PageContainer>
   );

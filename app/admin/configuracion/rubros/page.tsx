@@ -155,7 +155,7 @@ export default function RubrosAdminPage() {
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Rubros</h1>
             <p className="mt-1 text-sm text-slate-600">
-              Administrá los rubros que aparecen en Empresas.
+              Administrá los rubros que aparecen en Entidades.
             </p>
           </div>
 

@@ -66,6 +66,9 @@ export default function LiveCoachingPanel({
   const timerRef = useRef<number | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   async function fetchEvents() {
     try {
@@ -88,13 +91,12 @@ export default function LiveCoachingPanel({
   }
 
   function findSupportedMimeType(): string | null {
-    const candidates = [
+    const preferredTypes = [
       "audio/webm;codecs=opus",
       "audio/webm",
       "audio/ogg;codecs=opus",
-      "audio/ogg",
     ];
-    for (const mimeType of candidates) {
+    for (const mimeType of preferredTypes) {
       if (MediaRecorder.isTypeSupported(mimeType)) {
         return mimeType;
       }
@@ -111,26 +113,107 @@ export default function LiveCoachingPanel({
     try {
       setMicError(null);
 
-      // Pedir acceso al micrófono
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      // UX: Mensaje antes de abrir selector
+      setMicError("Se abrirá el selector. Elegí 'Pestaña de Chrome' (Google Meet) y activá 'Compartir audio'.");
+
+      // Capturar audio de pestaña/sistema usando getDisplayMedia
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: false,
+        audio: true,
+      } as any);
+      displayStreamRef.current = displayStream;
+
+      // Validar que hay audio tracks
+      const displayAudioTracks = displayStream.getAudioTracks();
+      if (displayAudioTracks.length === 0) {
+        displayStream.getTracks().forEach((t) => t.stop());
+        throw new Error("No se pudo capturar audio. En el selector elegí 'Pestaña de Chrome' y activá 'Compartir audio'.");
+      }
+
+      // Limpiar mensaje de instrucciones
+      setMicError(null);
+
+      // (Opcional) Capturar también micrófono del usuario
+      let micStream: MediaStream | null = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = micStream;
+      } catch (micError) {
+        // Micrófono es opcional, continuar sin él
+        console.warn("No se pudo capturar micrófono (opcional):", micError);
+      }
+
+      // Mezclar streams usando AudioContext
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioCtxRef.current = audioCtx;
+      const destination = audioCtx.createMediaStreamDestination();
+
+      // Conectar displayStream (audio de pestaña) a destination
+      const sysSource = audioCtx.createMediaStreamSource(displayStream);
+      sysSource.connect(destination);
+
+      // Conectar micStream (si existe) a destination
+      let micSource: MediaStreamAudioSourceNode | null = null;
+      if (micStream) {
+        micSource = audioCtx.createMediaStreamSource(micStream);
+        micSource.connect(destination);
+      }
+
+      // Stream final mezclado
+      const mixedStream = destination.stream;
+      streamRef.current = mixedStream;
 
       // Encontrar mimeType soportado
       const mimeType = findSupportedMimeType();
       if (!mimeType) {
-        stream.getTracks().forEach((t) => t.stop());
+        displayStream.getTracks().forEach((t) => t.stop());
+        if (micStream) micStream.getTracks().forEach((t) => t.stop());
+        audioCtx.close();
         setMicError("No hay codec de audio soportado en este navegador");
         return;
       }
 
-      // Crear MediaRecorder
-      const recorder = new MediaRecorder(stream, { mimeType });
+      // Crear MediaRecorder con stream final
+      const recorder = new MediaRecorder(mixedStream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder;
+      console.log("RECORDER MIME:", recorder.mimeType);
 
       // Handler para chunks de audio
       recorder.ondataavailable = async (event: BlobEvent) => {
+        // Ignorar blobs de size 0
+        if (!event.data || event.data.size === 0) {
+          return;
+        }
+
         if (event.data && event.data.size > 0) {
+          // DEBUG TRANSCRIBE: Logs de diagnóstico en cliente
+          const blob = event.data;
+          console.log("AUDIO BLOB SIZE:", blob.size);
+          console.log("AUDIO BLOB TYPE:", blob.type);
+          console.log("[DEBUG TRANSCRIBE CLIENT] Blob recibido:", {
+            type: blob.type,
+            size: blob.size,
+            mimeType: mimeType,
+            sizeKB: (blob.size / 1024).toFixed(2),
+          });
+
+          // DEBUG TRANSCRIBE: Validación de tamaño mínimo
+          if (blob.size < 2000) {
+            const errorMsg = `Audio vacío o demasiado corto (${blob.size} bytes). Se requiere al menos 2000 bytes.`;
+            console.warn("[DEBUG TRANSCRIBE CLIENT]", errorMsg);
+            setMicError(errorMsg);
+            return;
+          }
+
           try {
+            // DEBUG TRANSCRIBE: Log antes de enviar
+            console.log("[DEBUG TRANSCRIBE CLIENT] Enviando a servidor:", {
+              sessionId,
+              blobType: blob.type,
+              blobSize: blob.size,
+              contentType: blob.type || mimeType,
+            });
+
             const res = await fetch(
               `/api/admin/meet-sessions/${sessionId}/transcribe`,
               {
@@ -142,11 +225,21 @@ export default function LiveCoachingPanel({
               }
             );
 
+            // DEBUG TRANSCRIBE: Log respuesta del servidor
+            console.log("[DEBUG TRANSCRIBE CLIENT] Respuesta del servidor:", {
+              ok: res.ok,
+              status: res.status,
+              statusText: res.statusText,
+            });
+
             if (!res.ok) {
               const json = (await res.json()) as ApiResp<unknown>;
               const errorMsg = json.error || `HTTP ${res.status}`;
+              console.error("[DEBUG TRANSCRIBE CLIENT] Error del servidor:", errorMsg);
               setMicError(`Error transcribiendo: ${errorMsg}`);
               // NO detener automáticamente, solo mostrar error
+            } else {
+              console.log("[DEBUG TRANSCRIBE CLIENT] Transcripción exitosa");
             }
             // Si es exitoso, el evento se agregará al feed automáticamente por el polling
           } catch (fetchError: unknown) {
@@ -166,18 +259,34 @@ export default function LiveCoachingPanel({
     } catch (error: unknown) {
       const err =
         error instanceof Error ? error : new Error("Error desconocido");
+      
+      // Limpiar recursos en caso de error
+      if (displayStreamRef.current) {
+        displayStreamRef.current.getTracks().forEach((t) => t.stop());
+        displayStreamRef.current = null;
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((t) => t.stop());
+        micStreamRef.current = null;
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+        audioCtxRef.current = null;
+      }
+
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        setMicError("Permisos de micrófono denegados");
+        setMicError("Permisos de captura de pantalla/audio denegados");
       } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        setMicError("No se encontró ningún micrófono");
+        setMicError("No se encontró fuente de audio");
       } else {
-        setMicError(`Error accediendo al micrófono: ${err.message}`);
+        setMicError(err.message || `Error accediendo a audio: ${err.message}`);
       }
       setIsTranscribing(false);
     }
   }
 
   function stopTranscription() {
+    // Detener MediaRecorder
     if (mediaRecorderRef.current) {
       if (mediaRecorderRef.current.state !== "inactive") {
         mediaRecorderRef.current.stop();
@@ -185,6 +294,25 @@ export default function LiveCoachingPanel({
       mediaRecorderRef.current = null;
     }
 
+    // Detener todos los tracks de displayStream
+    if (displayStreamRef.current) {
+      displayStreamRef.current.getTracks().forEach((track) => track.stop());
+      displayStreamRef.current = null;
+    }
+
+    // Detener todos los tracks de micStream (si existe)
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    }
+
+    // Cerrar AudioContext (si existe)
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+
+    // Limpiar streamRef
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;

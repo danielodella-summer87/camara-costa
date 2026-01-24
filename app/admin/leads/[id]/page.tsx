@@ -327,7 +327,12 @@ export default function LeadDetailPage() {
   // ✅ Meet Asistido
   const [startingMeet, setStartingMeet] = useState(false);
   const [meetWindowOpened, setMeetWindowOpened] = useState(false);
+  const [activeSession, setActiveSession] = useState<{ id: string } | null>(null);
+  const [loadingSession, setLoadingSession] = useState(false);
   const meetWinRef = useRef<Window | null>(null);
+
+  // ✅ Tabs
+  const [activeTab, setActiveTab] = useState<"empresa" | "lead" | "ia">("empresa");
 
   // Función reutilizable para abrir Meet en ventana popup controlada
   function openMeetWindow(meetUrl: string) {
@@ -338,7 +343,11 @@ export default function LeadDetailPage() {
     }
 
     const name = "meet_assistido_window";
-    const features = "popup=yes,width=1200,height=800,left=80,top=80";
+    const width = 500;
+    const height = 700;
+    const left = (window.screen.width - width) / 2;
+    const top = (window.screen.height - height) / 2;
+    const features = `popup=yes,width=${width},height=${height},left=${left},top=${top}`;
     const w = window.open(meetUrl, name, features);
 
     if (w === null) {
@@ -498,19 +507,93 @@ export default function LeadDetailPage() {
     await patchLead(normalized);
   }
 
+  // Función para obtener sesión activa
+  async function fetchActiveSession() {
+    if (!id) return;
+    
+    setLoadingSession(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/meet-sessions?status=active`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+      
+      const json = (await res.json()) as ApiResp<any>;
+      if (res.ok && json?.data) {
+        setActiveSession({ id: json.data.id });
+      } else {
+        setActiveSession(null);
+      }
+    } catch (e: any) {
+      console.warn("Error obteniendo sesión activa:", e?.message);
+      setActiveSession(null);
+    } finally {
+      setLoadingSession(false);
+    }
+  }
+
   async function startMeetSession() {
-    if (!id || !lead?.meet_url) {
-      setError("Cargar Google Meet URL primero");
+    if (!id) {
+      setError("ID de lead no disponible");
+      return;
+    }
+
+    // Si ya hay sesión activa, navegar a ella en lugar de crear una nueva
+    if (activeSession?.id) {
+      router.push(`/admin/leads/${id}/meet-sessions/${activeSession.id}`);
       return;
     }
 
     setStartingMeet(true);
     setError(null);
     try {
+      // Determinar el URL final: usar el del lead o pedirlo al usuario
+      let urlFinal: string | null = lead?.meet_url ?? null;
+
+      if (!urlFinal || urlFinal.trim().length === 0) {
+        // Pedir URL al usuario
+        const urlInput = window.prompt("Pegá el link de Google Meet (https://meet.google.com/...)");
+        
+        if (!urlInput || urlInput.trim().length === 0) {
+          setError("Debes ingresar un link de Google Meet");
+          setStartingMeet(false);
+          return;
+        }
+
+        const urlTrimmed = urlInput.trim();
+        
+        // Validar que empiece con "https://meet.google.com/"
+        if (!urlTrimmed.startsWith("https://meet.google.com/")) {
+          setError("El link debe empezar con https://meet.google.com/");
+          setStartingMeet(false);
+          return;
+        }
+
+        urlFinal = urlTrimmed;
+
+        // Guardar el URL en el lead
+        const patchRes = await fetch(`/api/admin/leads/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ meet_url: urlFinal }),
+        });
+
+        const patchJson = (await patchRes.json().catch(() => ({}))) as LeadApiResponse;
+        if (!patchRes.ok) {
+          throw new Error(patchJson?.error ?? "Error guardando el link de Meet");
+        }
+
+        // Actualizar el estado local del lead
+        if (patchJson?.data) {
+          setLead(patchJson.data);
+        }
+      }
+
+      // Iniciar sesión con el URL final
       const res = await fetch(`/api/admin/leads/${id}/meet-sessions/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meet_url: lead.meet_url }),
+        body: JSON.stringify({ meet_url: urlFinal }),
       });
 
       const json = (await res.json().catch(() => ({}))) as ApiResp<any>;
@@ -527,9 +610,11 @@ export default function LeadDetailPage() {
         }
 
         // Abrir Google Meet en ventana popup controlada
-        if (lead.meet_url) {
-          openMeetWindow(lead.meet_url);
+        if (urlFinal) {
+          openMeetWindow(urlFinal);
         }
+
+        flash("Sesión de Meet iniciada");
 
         // Redirigir inmediatamente a la pantalla exclusiva del Meet
         window.location.href = `/admin/leads/${id}/meet-sessions/${sessionId}`;
@@ -665,8 +750,17 @@ export default function LeadDetailPage() {
   useEffect(() => {
     fetchLead();
     fetchLeadOptions();
+    fetchActiveSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Refrescar sesión activa después de iniciar una nueva
+  useEffect(() => {
+    if (!startingMeet) {
+      fetchActiveSession();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startingMeet]);
 
   const disabled = loading || mutating || deleting;
 
@@ -812,10 +906,10 @@ export default function LeadDetailPage() {
                 type="button"
                 onClick={startMeetSession}
                 className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={disabled || !id || !lead?.meet_url || startingMeet}
-                title={!lead?.meet_url ? "Cargar Google Meet URL primero" : "Iniciar sesión de Meet asistido"}
+                disabled={disabled || !id || startingMeet || loadingSession}
+                title={activeSession ? "Ir a sesión activa de Meet asistido" : "Iniciar sesión de Meet asistido"}
               >
-                {startingMeet ? "Iniciando…" : "Iniciar Meet Asistido"}
+                {startingMeet ? "Iniciando…" : activeSession ? "Ir a Meet Asistido" : "Iniciar Meet Asistido"}
               </button>
 
               {!lead?.is_member && (
@@ -884,16 +978,55 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {/* Tabs */}
+          {lead && (
+            <div className="mt-4 inline-flex overflow-hidden rounded-xl border bg-white">
+              <button
+                type="button"
+                onClick={() => setActiveTab("empresa")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "empresa"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Datos Empresa
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("lead")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "lead"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Datos Lead
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("ia")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "ia"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Agente IA
+              </button>
+            </div>
+          )}
+
           {/* Warning si no está vinculado a empresa */}
-          {!lead?.empresa_id && (
+          {!lead?.empresa_id && activeTab === "empresa" && (
             <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-yellow-900">
-                    Este lead no está vinculado a una empresa
+                    Este lead no está vinculado a una entidad
                   </div>
                   <div className="mt-1 text-xs text-yellow-700">
-                    Vincula este lead a una empresa para acceder a sus datos completos.
+                    Vincula este lead a una entidad para acceder a sus datos completos.
                   </div>
                 </div>
                 {editing && (
@@ -929,31 +1062,62 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          <div className="mt-5 grid grid-cols-1 gap-4">
-            {/* Sección: Datos de Empresa (base) - solo lectura */}
-            {lead?.empresas && (
-            <div className="rounded-2xl border bg-white p-4">
-                <div className="text-xs font-semibold text-slate-500">Datos de Empresa (base)</div>
+          {/* Contenido de Tabs */}
+          {activeTab === "empresa" && (
+            <div className="mt-5 grid grid-cols-1 gap-4">
+              {/* Sección: Datos de Empresa (base) - solo lectura */}
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="text-xs font-semibold text-slate-500">Datos de Entidad</div>
                 <div className="mt-3 space-y-3">
                   <Field
                     label="Nombre"
                     editing={false}
-                    value={lead.empresas.nombre ?? ""}
+                    value={lead?.empresas?.nombre ?? ""}
                     onChange={() => {}}
                   />
                   <Field
-                    label="Email"
+                    label="Contacto"
                     editing={false}
-                    value={lead.empresas.email ?? ""}
+                    value={lead?.empresas?.contacto_nombre ?? ""}
                     onChange={() => {}}
                   />
                   <Field
                     label="Teléfono"
                     editing={false}
-                    value={lead.empresas.telefono ?? ""}
+                    value={lead?.empresas?.telefono ?? ""}
                     onChange={() => {}}
                   />
-                  {lead.empresas.celular && (
+                  <Field
+                    label="Email"
+                    editing={false}
+                    value={lead?.empresas?.email ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Rubro"
+                    editing={false}
+                    value={lead?.empresas?.rubros?.nombre ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Dirección"
+                    editing={false}
+                    value={lead?.empresas?.direccion ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Website"
+                    editing={false}
+                    value={lead?.empresas?.web ?? ""}
+                    onChange={() => {}}
+                  />
+                  <Field
+                    label="Instagram"
+                    editing={false}
+                    value={lead?.empresas?.instagram ?? ""}
+                    onChange={() => {}}
+                  />
+                  {lead?.empresas?.celular && (
                     <Field
                       label="Celular"
                       editing={false}
@@ -961,7 +1125,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.rut && (
+                  {lead?.empresas?.rut && (
                     <Field
                       label="RUT"
                       editing={false}
@@ -969,15 +1133,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.direccion && (
-                    <Field
-                      label="Dirección"
-                      editing={false}
-                      value={lead.empresas.direccion ?? ""}
-                      onChange={() => {}}
-                    />
-                  )}
-                  {lead.empresas.ciudad && (
+                  {lead?.empresas?.ciudad && (
                     <Field
                       label="Ciudad"
                       editing={false}
@@ -985,7 +1141,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.pais && (
+                  {lead?.empresas?.pais && (
                     <Field
                       label="País"
                       editing={false}
@@ -993,39 +1149,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.web && (
-                    <Field
-                      label="Web"
-                      editing={false}
-                      value={lead.empresas.web ?? ""}
-                      onChange={() => {}}
-                    />
-                  )}
-                  {lead.empresas.instagram && (
-                    <Field
-                      label="Instagram"
-                      editing={false}
-                      value={lead.empresas.instagram ?? ""}
-                      onChange={() => {}}
-                    />
-                  )}
-                  {lead.empresas.rubros && (
-                    <Field
-                      label="Rubro"
-                      editing={false}
-                      value={lead.empresas.rubros.nombre ?? ""}
-                      onChange={() => {}}
-                    />
-                  )}
-                  {lead.empresas.contacto_nombre && (
-                    <Field
-                      label="Contacto (nombre)"
-                      editing={false}
-                      value={lead.empresas.contacto_nombre ?? ""}
-                      onChange={() => {}}
-                    />
-                  )}
-                  {lead.empresas.contacto_celular && (
+                  {lead?.empresas?.contacto_celular && (
                     <Field
                       label="Contacto (celular)"
                       editing={false}
@@ -1033,7 +1157,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.contacto_email && (
+                  {lead?.empresas?.contacto_email && (
                     <Field
                       label="Contacto (email)"
                       editing={false}
@@ -1041,7 +1165,7 @@ export default function LeadDetailPage() {
                       onChange={() => {}}
                     />
                   )}
-                  {lead.empresas.etiquetas && (
+                  {lead?.empresas?.etiquetas && (
                     <Field
                       label="Etiquetas"
                       editing={false}
@@ -1051,122 +1175,85 @@ export default function LeadDetailPage() {
                   )}
                 </div>
               </div>
-            )}
-
-            {/* Sección: Datos del lead (editable) */}
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-xs font-semibold text-slate-500">Datos del lead</div>
-
-              <div className="mt-3 space-y-3">
-                <Field
-                  label="Nombre"
-                  editing={editing}
-                  value={(editing ? (draft.nombre as any) : lead?.nombre) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, nombre: v }))}
-                />
-                <Field
-                  label="Contacto"
-                  editing={editing}
-                  value={(editing ? (draft.contacto as any) : lead?.contacto) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, contacto: v }))}
-                />
-                <Field
-                  label="Teléfono"
-                  editing={editing}
-                  value={(editing ? (draft.telefono as any) : lead?.telefono) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, telefono: v }))}
-                />
-                <Field
-                  label="Email"
-                  editing={editing}
-                  value={(editing ? (draft.email as any) : lead?.email) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, email: v }))}
-                />
-              </div>
             </div>
+          )}
 
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-xs font-semibold text-slate-500">
-                Perfil / Afiliación
-              </div>
-
-              <div className="mt-3 space-y-3">
-                {/* Score (0-10 estrellas) */}
-                <div className="rounded-xl border p-4">
-                  <div className="text-xs font-semibold text-slate-600 mb-2">
-                    Calidad del lead
-                  </div>
-                  {editing ? (
-                    <StarRating
-                      value={draft.score ?? null}
-                      onChange={(v) => setDraft((p) => ({ ...p, score: v }))}
-                      disabled={disabled}
-                    />
-                  ) : (
-                    <>
-                      {lead?.score !== null && lead?.score !== undefined ? (
-                        <>
-                          <StarRating
-                            value={lead.score}
-                            onChange={() => {}}
-                            disabled={true}
-                          />
-                          {lead?.score_categoria && (
-                            <div className="mt-1 text-xs text-slate-500">
-                              Categoría IA: {lead.score_categoria}
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="text-xs text-slate-500">
-                          Sin score IA
-                        </div>
-                      )}
-                    </>
-                  )}
+          {activeTab === "lead" && (
+            <div className="mt-5 grid grid-cols-1 gap-4">
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="text-xs font-semibold text-slate-500">
+                  Estado Comercial
                 </div>
 
-                <Field
-                  label="Origen"
-                  editing={editing}
-                  value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
-                />
-                <Field
-                  label="Pipeline"
-                  editing={editing}
-                  value={
-                    editing
-                      ? ((draft.pipeline as any) ?? "Nuevo")
-                      : (pipelineValue ?? "")
-                  }
-                  onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
-                  placeholder="Nuevo"
-                />
+                <div className="mt-3 space-y-3">
+                  {/* Score (0-10 estrellas) */}
+                  <div className="rounded-xl border p-4">
+                    <div className="text-xs font-semibold text-slate-600 mb-2">
+                      Calidad del lead
+                    </div>
+                    {editing ? (
+                      <StarRating
+                        value={draft.score ?? null}
+                        onChange={(v) => setDraft((p) => ({ ...p, score: v }))}
+                        disabled={disabled}
+                      />
+                    ) : (
+                      <>
+                        {lead?.score !== null && lead?.score !== undefined ? (
+                          <>
+                            <StarRating
+                              value={lead.score}
+                              onChange={() => {}}
+                              disabled={true}
+                            />
+                            {lead?.score_categoria && (
+                              <div className="mt-1 text-xs text-slate-500">
+                                Categoría IA: {lead.score_categoria}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-xs text-slate-500">
+                            Sin score IA
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
 
-                <Field
-                  label="Website"
-                  editing={editing}
-                  value={(editing ? (draft.website as any) : lead?.website) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, website: v }))}
-                  placeholder="https://..."
-                />
+                  <Field
+                    label="Origen"
+                    editing={editing}
+                    value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
+                  />
+                  <Field
+                    label="Pipeline"
+                    editing={editing}
+                    value={
+                      editing
+                        ? ((draft.pipeline as any) ?? "Nuevo")
+                        : (pipelineValue ?? "")
+                    }
+                    onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
+                    placeholder="Nuevo"
+                  />
 
-                <Field
-                  label="LinkedIn Empresa"
-                  editing={editing}
-                  value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
-                  placeholder="https://linkedin.com/..."
-                />
+                  <Field
+                    label="LinkedIn Empresa"
+                    editing={editing}
+                    value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
+                    placeholder="https://linkedin.com/..."
+                  />
 
-                <Field
-                  label="LinkedIn Director"
-                  editing={editing}
-                  value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
-                  placeholder="https://linkedin.com/..."
-                />
+                  <Field
+                    label="LinkedIn Director"
+                    editing={editing}
+                    value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
+                    placeholder="https://linkedin.com/..."
+                  />
 
                 <div>
                   <div className="text-xs text-slate-500">Google Meet URL</div>
@@ -1314,7 +1401,25 @@ export default function LeadDetailPage() {
                 </div>
               </div>
             </div>
-          </div>
+            </div>
+          )}
+
+          {activeTab === "ia" && (
+            <div className="mt-5">
+              {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
+              <AiLeadReport
+                key={`ai-${leadIdSafe}`}
+                leadId={leadIdSafe}
+                lead={leadForAi as any}
+                onBeforeGenerate={async () => {
+                  // Guardar el draft actual antes de generar el informe
+                  // Reutiliza la misma función que usa "Guardar"
+                  // Si falla, el error se propaga y no se llama a la IA
+                  await saveDraft();
+                }}
+              />
+            </div>
+          )}
 
           {!loading && !lead && (
             <div className="mt-5 rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
@@ -1324,7 +1429,7 @@ export default function LeadDetailPage() {
         </div>
 
         {/* ✅ Meet Asistido */}
-        {lead?.meet_url && (
+        {lead && (
           <div className="rounded-2xl border bg-white p-6 space-y-4">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -1334,15 +1439,6 @@ export default function LeadDetailPage() {
                 </p>
               </div>
               <div className="flex gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={startMeetSession}
-                  className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                  disabled={disabled || !id || !lead?.meet_url || startingMeet}
-                  title={!lead?.meet_url ? "Cargar Google Meet URL primero" : "Iniciar sesión de Meet asistido"}
-                >
-                  {startingMeet ? "Iniciando…" : "Iniciar Meet Asistido"}
-                </button>
                 {lead.meet_url && (
                   <div className="flex flex-col gap-1">
                     <button
@@ -1365,21 +1461,30 @@ export default function LeadDetailPage() {
                 )}
               </div>
             </div>
+
+            {activeSession ? (
+              <div className="mt-4">
+                <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
+                  <div className="font-semibold mb-2">Sesión activa</div>
+                  <div className="text-xs text-slate-600 mb-3">
+                    Hay una sesión de Meet Asistido en curso. Usá el botón superior "Ir a Meet Asistido" para acceder al panel de coaching.
+                  </div>
+                  <Link
+                    href={`/admin/leads/${id}/meet-sessions/${activeSession.id}`}
+                    className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                  >
+                    Abrir panel de sesión
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
+                No hay una sesión activa. Iniciá Meet Asistido desde el botón superior.
+              </div>
+            )}
           </div>
         )}
 
-        {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
-        <AiLeadReport
-          key={`ai-${leadIdSafe}`}
-          leadId={leadIdSafe}
-          lead={leadForAi as any}
-          onBeforeGenerate={async () => {
-            // Guardar el draft actual antes de generar el informe
-            // Reutiliza la misma función que usa "Guardar"
-            // Si falla, el error se propaga y no se llama a la IA
-            await saveDraft();
-          }}
-        />
 
         <LeadDocsModal
           open={docsOpen}

@@ -111,7 +111,7 @@ export default function Sidebar() {
 
   const items: SidebarItem[] = [
     { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
-    { label: "Empresas", href: "/admin/empresas", icon: Building2 },
+    { label: "Entidades", href: "/admin/empresas", icon: Building2 },
     { label: "Leads", href: "/admin/leads", icon: Target },
     { label: "Socios", href: "/admin/socios", icon: Users },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },

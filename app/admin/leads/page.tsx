@@ -106,7 +106,7 @@ function NewLeadButton() {
                 }}
                 className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 rounded-t-xl"
               >
-                Desde empresa
+                Desde entidad
               </button>
               <Link
                 href="/admin/leads/nuevo"
@@ -136,7 +136,7 @@ function NewLeadButton() {
               const empresa = empresasJson?.data?.find((e: any) => e.id === empresaId);
               
               if (!empresa) {
-                alert("Empresa no encontrada");
+                alert("Entidad no encontrada");
                 return;
               }
 
@@ -168,7 +168,7 @@ function NewLeadButton() {
                 window.location.href = `/admin/leads/${leadJson.data.id}`;
               }
             } catch (e: any) {
-              alert(e?.message ?? "Error creando lead desde empresa");
+              alert(e?.message ?? "Error creando lead desde entidad");
             }
           }}
         />
@@ -232,7 +232,7 @@ function EmpresaSelectorModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between p-6 border-b">
-          <h2 className="text-lg font-semibold text-slate-900">Seleccionar empresa</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Seleccionar entidad</h2>
           <button
             type="button"
             onClick={onClose}
@@ -255,12 +255,12 @@ function EmpresaSelectorModal({
 
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
-            <div className="text-sm text-slate-500">Cargando empresas...</div>
+            <div className="text-sm text-slate-500">Cargando entidades...</div>
           ) : error ? (
             <div className="text-sm text-red-600">{error}</div>
           ) : filtered.length === 0 ? (
             <div className="text-sm text-slate-500">
-              {search ? "No se encontraron empresas con ese criterio." : "No hay empresas disponibles."}
+              {search ? "No se encontraron entidades con ese criterio." : "No hay entidades disponibles."}
             </div>
           ) : (
             <div className="space-y-2">

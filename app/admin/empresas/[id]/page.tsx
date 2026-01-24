@@ -8,6 +8,7 @@ import RubroSelect from "../RubroSelect";
 type Empresa = {
   id: string;
   nombre: string;
+  tipo?: "empresa" | "profesional" | "institucion" | null;
   rubro: string | null; // nombre (display) - legacy
   rubro_id: string | null; // UUID real
   rubros?: { id: string; nombre: string } | null; // join a rubros
@@ -33,6 +34,7 @@ type PatchPayload = Partial<
   Pick<
     Empresa,
     | "nombre"
+    | "tipo"
     | "rubro_id"
     | "telefono"
     | "email"
@@ -181,6 +183,7 @@ export default function EmpresaDetailPage() {
     setEditing(true);
     setDraft({
       nombre: empresa.nombre ?? "",
+      tipo: (empresa.tipo ?? "empresa") as "empresa" | "profesional" | "institucion",
       rubro_id: empresa.rubro_id ?? null, // ✅ IMPORTANTE
       telefono: empresa.telefono ?? "",
       email: empresa.email ?? "",
@@ -200,6 +203,7 @@ export default function EmpresaDetailPage() {
   async function saveEdit() {
     const normalized: PatchPayload = {
       nombre: normalizeStr(draft.nombre) ?? undefined,
+      tipo: draft.tipo ?? "empresa",
       rubro_id: draft.rubro_id ?? null,
       telefono: normalizeStr(draft.telefono),
       email: normalizeStr(draft.email),
@@ -305,7 +309,7 @@ export default function EmpresaDetailPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">
-              {loading ? "Cargando…" : empresa?.nombre ?? "Empresa"}
+              {loading ? "Cargando…" : empresa?.nombre ?? "Entidad"}
             </h1>
             <p className="mt-1 text-sm text-slate-600">
               Detalle y datos de contacto.
@@ -384,12 +388,24 @@ export default function EmpresaDetailPage() {
         {loading ? (
           <div className="text-sm text-slate-500">Cargando datos…</div>
         ) : !empresa ? (
-          <div className="text-sm text-slate-500">No se encontró la empresa.</div>
+          <div className="text-sm text-slate-500">No se encontró la entidad.</div>
         ) : (
           <div className="space-y-5">
             <div className="grid gap-3 md:grid-cols-2">
               {!editing ? (
                 <>
+                  <Field
+                    label="Tipo de entidad"
+                    value={
+                      empresa.tipo === "empresa"
+                        ? "Empresa"
+                        : empresa.tipo === "profesional"
+                        ? "Profesional"
+                        : empresa.tipo === "institucion"
+                        ? "Institución"
+                        : "—"
+                    }
+                  />
                   <Field
                     label="Rubro"
                     value={(empresa.rubros as any)?.nombre ?? empresa.rubro ?? "—"}
@@ -406,6 +422,27 @@ export default function EmpresaDetailPage() {
                     onChange={(v) => setDraft((d) => ({ ...d, nombre: v }))}
                     disabled={disabled}
                   />
+
+                  <div className="rounded-xl border p-4">
+                    <div className="text-xs font-semibold text-slate-600 mb-2">
+                      Tipo de entidad
+                    </div>
+                    <select
+                      value={(draft.tipo as any) ?? "empresa"}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          tipo: e.target.value as "empresa" | "profesional" | "institucion",
+                        }))
+                      }
+                      disabled={disabled}
+                      className="mt-2 w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
+                    >
+                      <option value="empresa">Empresa</option>
+                      <option value="profesional">Profesional</option>
+                      <option value="institucion">Institución</option>
+                    </select>
+                  </div>
 
                   <div className="rounded-xl border p-4">
                     <div className="flex items-center justify-between mb-2">

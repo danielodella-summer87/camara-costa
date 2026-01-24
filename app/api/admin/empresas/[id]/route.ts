@@ -104,6 +104,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
 type EmpresaPatchInput = {
   nombre?: string;
+  tipo?: "empresa" | "profesional" | "institucion" | null;
   rubro_id?: string | null;
   telefono?: string | null;
   email?: string | null;
@@ -139,6 +140,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     const rubro_id = body.rubro_id === undefined ? undefined : cleanStr(body.rubro_id);
     const nombre = body.nombre === undefined ? undefined : cleanStr(body.nombre);
+    const tipo = body.tipo === undefined ? undefined : (body.tipo ?? "empresa");
     const telefono = body.telefono === undefined ? undefined : cleanStr(body.telefono);
     const email = body.email === undefined ? undefined : cleanStr(body.email);
     const web = body.web === undefined ? undefined : cleanStr(body.web);
@@ -150,6 +152,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const update: Record<string, any> = {};
 
     if (nombre !== undefined) update.nombre = nombre;
+    if (tipo !== undefined) update.tipo = tipo;
     if (telefono !== undefined) update.telefono = telefono;
     if (email !== undefined) update.email = email;
     if (web !== undefined) update.web = web;

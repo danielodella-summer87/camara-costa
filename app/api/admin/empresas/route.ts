@@ -17,6 +17,7 @@ const UUID_RE =
 
 type EmpresaCreateInput = {
   nombre?: string;
+  tipo?: "empresa" | "profesional" | "institucion" | null;
   // podés mandar rubro_id (preferido) o rubro (texto)
   rubro_id?: string | null;
   rubro?: string | null;
@@ -148,6 +149,7 @@ export async function POST(req: Request) {
 
     const payload: any = {
       nombre,
+      tipo: body?.tipo ?? "empresa",
       // guardamos FK si existe
       rubro_id: rubro_id ?? null,
       // mantenemos texto por compat (opcional)

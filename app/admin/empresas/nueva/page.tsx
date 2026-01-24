@@ -32,6 +32,7 @@ export default function NuevaEmpresaPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [nombre, setNombre] = useState("");
+  const [tipo, setTipo] = useState<"empresa" | "profesional" | "institucion">("empresa");
   const [rubroId, setRubroId] = useState<string>(""); // rubro_id
   const [telefono, setTelefono] = useState("");
   const [email, setEmail] = useState("");
@@ -49,6 +50,7 @@ export default function NuevaEmpresaPage() {
 
     const payload = {
       nombre: cleanStr(nombre),
+      tipo: tipo,
       rubro_id: rubroId,
       telefono: cleanStr(telefono),
       email: cleanStr(email),
@@ -90,9 +92,9 @@ export default function NuevaEmpresaPage() {
       <div className="rounded-2xl border bg-white p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Nueva empresa</h1>
+            <h1 className="text-2xl font-semibold text-slate-900">Nueva entidad</h1>
             <p className="mt-1 text-sm text-slate-600">
-              Cargá una empresa al directorio (queda en Pendiente por defecto).
+              Cargá una entidad al directorio (queda en Pendiente por defecto).
             </p>
           </div>
 
@@ -130,6 +132,19 @@ export default function NuevaEmpresaPage() {
               className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
               placeholder="Ej: Óptica Casino"
             />
+          </div>
+
+          <div className="rounded-2xl border p-4">
+            <label className="text-xs font-medium text-slate-600">Tipo de entidad</label>
+            <select
+              value={tipo}
+              onChange={(e) => setTipo(e.target.value as "empresa" | "profesional" | "institucion")}
+              className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+            >
+              <option value="empresa">Empresa</option>
+              <option value="profesional">Profesional</option>
+              <option value="institucion">Institución</option>
+            </select>
           </div>
 
           <div className="rounded-2xl border p-4">
