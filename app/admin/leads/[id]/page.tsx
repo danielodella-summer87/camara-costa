@@ -343,11 +343,7 @@ export default function LeadDetailPage() {
     }
 
     const name = "meet_assistido_window";
-    const width = 500;
-    const height = 700;
-    const left = (window.screen.width - width) / 2;
-    const top = (window.screen.height - height) / 2;
-    const features = `popup=yes,width=${width},height=${height},left=${left},top=${top}`;
+    const features = "popup=yes,width=500,height=700,left=80,top=80";
     const w = window.open(meetUrl, name, features);
 
     if (w === null) {
@@ -1023,7 +1019,15 @@ export default function LeadDetailPage() {
                     : "text-slate-700 hover:bg-slate-50"
                 }`}
               >
-                Meet Asistido
+                <span className="inline-flex items-center gap-2">
+                  Meet Asistido
+                  {activeSession?.id && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 border border-emerald-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                      Activa
+                    </span>
+                  )}
+                </span>
               </button>
             </div>
           )}
@@ -1191,244 +1195,242 @@ export default function LeadDetailPage() {
 
           {activeTab === "lead" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
-              <div className="rounded-2xl border bg-white p-4">
-                <div className="text-xs font-semibold text-slate-500">
-                  Datos nuevos del lead
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  {/* Score (0-10 estrellas) */}
-                  <div className="rounded-xl border p-4">
-                    <div className="text-xs font-semibold text-slate-600 mb-2">
-                      Calidad del lead
+              <details open className="rounded-xl border bg-white">
+                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                  Estado Comercial
+                </summary>
+                <div className="px-4 pb-4">
+                  <div className="space-y-3">
+                    {/* Score (0-10 estrellas) */}
+                    <div className="rounded-xl border p-4">
+                      <div className="text-xs font-semibold text-slate-600 mb-2">
+                        Calidad del lead
+                      </div>
+                      {editing ? (
+                        <StarRating
+                          value={draft.score ?? null}
+                          onChange={(v) => setDraft((p) => ({ ...p, score: v }))}
+                          disabled={disabled}
+                        />
+                      ) : (
+                        <>
+                          {lead?.score !== null && lead?.score !== undefined ? (
+                            <>
+                              <StarRating
+                                value={lead.score}
+                                onChange={() => {}}
+                                disabled={true}
+                              />
+                              {lead?.score_categoria && (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  Categoría IA: {lead.score_categoria}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="text-xs text-slate-500">
+                              Sin score IA
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
+
+                    <Field
+                      label="Origen"
+                      editing={editing}
+                      value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
+                      onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
+                    />
+                    <Field
+                      label="Pipeline"
+                      editing={editing}
+                      value={
+                        editing
+                          ? ((draft.pipeline as any) ?? "Nuevo")
+                          : (pipelineValue ?? "")
+                      }
+                      onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
+                      placeholder="Nuevo"
+                    />
+
+                    <Field
+                      label="LinkedIn Empresa"
+                      editing={editing}
+                      value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
+                      onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
+                      placeholder="https://linkedin.com/..."
+                    />
+
+                    <Field
+                      label="LinkedIn Director"
+                      editing={editing}
+                      value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
+                      onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
+                      placeholder="https://linkedin.com/..."
+                    />
+                  </div>
+                </div>
+              </details>
+
+              <details open className="rounded-xl border bg-white">
+                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                  Datos del Lead
+                </summary>
+                <div className="px-4 pb-4 space-y-4">
+                  <div>
+                    <div className="text-xs text-slate-500">Objetivo</div>
                     {editing ? (
-                      <StarRating
-                        value={draft.score ?? null}
-                        onChange={(v) => setDraft((p) => ({ ...p, score: v }))}
-                        disabled={disabled}
+                      <textarea
+                        value={(draft.objetivos as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, objetivos: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        rows={3}
+                        placeholder="Ej: Abrir mercado USA, conseguir distribuidores, networking, visibilidad..."
                       />
                     ) : (
-                      <>
-                        {lead?.score !== null && lead?.score !== undefined ? (
-                          <>
-                            <StarRating
-                              value={lead.score}
-                              onChange={() => {}}
-                              disabled={true}
-                            />
-                            {lead?.score_categoria && (
-                              <div className="mt-1 text-xs text-slate-500">
-                                Categoría IA: {lead.score_categoria}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="text-xs text-slate-500">
-                            Sin score IA
-                          </div>
-                        )}
-                      </>
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                        {lead?.objetivos ?? "—"}
+                      </div>
                     )}
                   </div>
 
-                  <Field
-                    label="Origen"
-                    editing={editing}
-                    value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
-                  />
-                  <Field
-                    label="Pipeline"
-                    editing={editing}
-                    value={
-                      editing
-                        ? ((draft.pipeline as any) ?? "Nuevo")
-                        : (pipelineValue ?? "")
-                    }
-                    onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
-                    placeholder="Nuevo"
-                  />
-
-                  <Field
-                    label="LinkedIn Empresa"
-                    editing={editing}
-                    value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
-                    placeholder="https://linkedin.com/..."
-                  />
-
-                  <Field
-                    label="LinkedIn Director"
-                    editing={editing}
-                    value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
-                    placeholder="https://linkedin.com/..."
-                  />
-
-                <div>
-                  <div className="text-xs text-slate-500">Google Meet URL</div>
-                  {editing ? (
-                    <input
-                      value={(draft.meet_url as any) ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, meet_url: e.target.value }))}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                      placeholder="https://meet.google.com/xxx-xxxx-xxx"
-                    />
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                      {lead?.meet_url ? (
-                        <a
-                          href={lead.meet_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-800 hover:underline"
-                        >
-                          {lead.meet_url}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="text-xs text-slate-500">Objetivo</div>
-                  {editing ? (
-                    <textarea
-                      value={(draft.objetivos as any) ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, objetivos: e.target.value }))}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                      rows={3}
-                      placeholder="Ej: Abrir mercado USA, conseguir distribuidores, networking, visibilidad..."
-                    />
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                      {lead?.objetivos ?? "—"}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="text-xs text-slate-500">A quién le vende</div>
-                  {editing ? (
-                    <textarea
-                      value={(draft.audiencia as any) ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, audiencia: e.target.value }))}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                      rows={3}
-                      placeholder="Ej: Retailers/cadenas, importadores USA, empresas LATAM, B2B servicios profesionales..."
-                    />
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                      {lead?.audiencia ?? "—"}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="text-xs text-slate-500">Tamaño</div>
-                  {editing ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {leadOptions.tamanios.map((opt) => {
-                        const active = ((draft.tamano as any) ?? "") === opt;
-                        return (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() =>
-                              setDraft((p) => ({ ...p, tamano: active ? "" : opt }))
-                            }
-                            className={[
-                              "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
-                              active
-                                ? "bg-slate-900 text-white border-slate-900"
-                                : "bg-white text-slate-700 hover:bg-slate-50",
-                            ].join(" ")}
-                            aria-pressed={active}
-                          >
-                            {opt}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                      {lead?.tamano ?? "—"}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="text-xs text-slate-500">
-                    Qué ofrece a la Cámara / comunidad
+                  <div>
+                    <div className="text-xs text-slate-500">A quién le vende</div>
+                    {editing ? (
+                      <textarea
+                        value={(draft.audiencia as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, audiencia: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        rows={3}
+                        placeholder="Ej: Retailers/cadenas, importadores USA, empresas LATAM, B2B servicios profesionales..."
+                      />
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                        {lead?.audiencia ?? "—"}
+                      </div>
+                    )}
                   </div>
-                  {editing ? (
-                    <textarea
-                      value={(draft.oferta as any) ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, oferta: e.target.value }))}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                      rows={3}
-                      placeholder="Ej: descuentos, expertise, charlas, referrals, partnership…"
-                    />
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                      {lead?.oferta ?? "—"}
-                    </div>
-                  )}
-                </div>
 
-                <div>
-                  <div className="text-xs text-slate-500">Notas</div>
-                  {editing ? (
-                    <textarea
-                      value={(draft.notas as any) ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, notas: e.target.value }))}
-                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                      rows={5}
-                      placeholder="Notas internas…"
-                    />
-                  ) : (
-                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                      {lead?.notas ?? "—"}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
-                  <div className="rounded-xl border bg-white px-3 py-2">
-                    <div className="font-semibold">Creado</div>
-                    <div className="mt-1">
-                      {formatDateTime(lead?.created_at ?? null)}
-                    </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Tamaño</div>
+                    {editing ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {leadOptions.tamanios.map((opt) => {
+                          const active = ((draft.tamano as any) ?? "") === opt;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() =>
+                                setDraft((p) => ({ ...p, tamano: active ? "" : opt }))
+                              }
+                              className={[
+                                "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                                active
+                                  ? "bg-slate-900 text-white border-slate-900"
+                                  : "bg-white text-slate-700 hover:bg-slate-50",
+                              ].join(" ")}
+                              aria-pressed={active}
+                            >
+                              {opt}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        {lead?.tamano ?? "—"}
+                      </div>
+                    )}
                   </div>
-                  <div className="rounded-xl border bg-white px-3 py-2">
-                    <div className="font-semibold">Actualizado</div>
-                    <div className="mt-1">
-                      {formatDateTime(lead?.updated_at ?? null)}
+
+                  <div>
+                    <div className="text-xs text-slate-500">
+                      Qué ofrece a la Cámara / comunidad
                     </div>
+                    {editing ? (
+                      <textarea
+                        value={(draft.oferta as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, oferta: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        rows={3}
+                        placeholder="Ej: descuentos, expertise, charlas, referrals, partnership…"
+                      />
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                        {lead?.oferta ?? "—"}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-slate-500">Notas</div>
+                    {editing ? (
+                      <textarea
+                        value={(draft.notas as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, notas: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        rows={5}
+                        placeholder="Notas internas…"
+                      />
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
+                        {lead?.notas ?? "—"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </details>
+
+              {/* ✅ Creado / Actualizado fijo */}
+              <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
+                <div className="rounded-xl border bg-white px-3 py-2">
+                  <div className="font-semibold">Creado</div>
+                  <div className="mt-1">
+                    {formatDateTime(lead?.created_at ?? null)}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-white px-3 py-2">
+                  <div className="font-semibold">Actualizado</div>
+                  <div className="mt-1">
+                    {formatDateTime(lead?.updated_at ?? null)}
                   </div>
                 </div>
               </div>
             </div>
-            </div>
           )}
 
           {activeTab === "ia" && (
-            <div className="mt-5">
-              {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
-              <AiLeadReport
-                key={`ai-${leadIdSafe}`}
-                leadId={leadIdSafe}
-                lead={leadForAi as any}
-                onBeforeGenerate={async () => {
-                  // Guardar el draft actual antes de generar el informe
-                  // Reutiliza la misma función que usa "Guardar"
-                  // Si falla, el error se propaga y no se llama a la IA
-                  await saveDraft();
-                }}
-              />
+            <div className="mt-5 grid grid-cols-1 gap-4">
+              <details open className="rounded-2xl border bg-white">
+                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                  IA — Acciones
+                </summary>
+                <div className="px-4 pb-4 space-y-3">
+                  {/* ⬇️ botones/acciones IA */}
+                </div>
+              </details>
+
+              <details className="rounded-2xl border bg-white">
+                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                  IA — Informe
+                </summary>
+                <div className="px-4 pb-4">
+                  {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
+                  <AiLeadReport
+                    key={`ai-${leadIdSafe}`}
+                    leadId={leadIdSafe}
+                    lead={leadForAi as any}
+                    onBeforeGenerate={async () => {
+                      // Guardar el draft actual antes de generar el informe
+                      // Reutiliza la misma función que usa "Guardar"
+                      // Si falla, el error se propaga y no se llama a la IA
+                      await saveDraft();
+                    }}
+                  />
+                </div>
+              </details>
             </div>
           )}
 
@@ -1443,6 +1445,34 @@ export default function LeadDetailPage() {
                     <p className="mt-1 text-sm text-slate-600">
                       Inicia una sesión de coaching en vivo con transcripción y semáforo estratégico
                     </p>
+                  </div>
+
+                  {/* URL de Zoom/Meet */}
+                  <div>
+                    <div className="text-xs text-slate-500">URL de Zoom/Meet</div>
+                    {editing ? (
+                      <input
+                        value={(draft.meet_url as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, meet_url: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        placeholder="https://meet.google.com/... o https://zoom.us/j/..."
+                      />
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        {lead?.meet_url ? (
+                          <a
+                            href={lead.meet_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {lead.meet_url}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Fila de acciones */}
