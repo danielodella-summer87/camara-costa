@@ -56,6 +56,12 @@ export async function POST(
     if (leadCheckErr) return NextResponse.json({ error: leadCheckErr.message }, { status: 500 });
 
     if (existingLead?.id) {
+      // Asegurar que empresa_id esté seteado (por si quedó nulo por alguna corrida anterior)
+      await sb
+        .from("leads")
+        .update({ empresa_id: empresa.id })
+        .eq("id", existingLead.id);
+      
       return NextResponse.json({ data: { lead_id: existingLead.id, already_existed: true } });
     }
 

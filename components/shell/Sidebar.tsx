@@ -64,10 +64,11 @@ function SidebarItem({ label, href, icon: Icon, isActive = false }: Omit<Sidebar
 export default function Sidebar() {
   const pathname = usePathname();
   const [portalName, setPortalName] = useState("Cámara Costa");
+  const [memberLabel, setMemberLabel] = useState("Socios");
 
-  // Cargar nombre del portal desde la configuración
+  // Cargar nombre del portal y labels desde la configuración
   useEffect(() => {
-    async function loadPortalName() {
+    async function loadConfig() {
       try {
         const res = await fetch("/api/admin/config/portal", {
           cache: "no-store",
@@ -79,14 +80,19 @@ export default function Sidebar() {
         } else if (json?.data?.nombre_camara) {
           setPortalName(json.data.nombre_camara);
         }
+        
+        // Cargar label de miembros
+        if (json?.data?.label_member_plural) {
+          setMemberLabel(json.data.label_member_plural);
+        }
       } catch {
-        // Fallback a "Cámara Costa" si falla
+        // Fallback a defaults si falla
       }
     }
-    loadPortalName();
+    loadConfig();
 
     // Escuchar eventos de actualización
-    const handleUpdate = () => loadPortalName();
+    const handleUpdate = () => loadConfig();
     window.addEventListener("portal-config-updated", handleUpdate);
     return () => window.removeEventListener("portal-config-updated", handleUpdate);
   }, []);
@@ -95,7 +101,7 @@ export default function Sidebar() {
     { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
     { label: "Entidades", href: "/admin/empresas", icon: Building2 },
     { label: "Leads", href: "/admin/leads", icon: Target },
-    { label: "Socios", href: "/admin/socios", icon: Users },
+    { label: memberLabel, href: "/admin/socios", icon: Users },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },
     { label: "Eventos", href: "/admin/eventos", icon: CalendarDays },
     { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles },

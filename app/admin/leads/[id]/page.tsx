@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
 
 type Empresa = {
   id: string;
@@ -350,6 +351,9 @@ export default function LeadDetailPage() {
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
   const [editingContact, setEditingContact] = useState<{ id: string; nombre: string; cargo: string; telefono: string | null; email: string | null; is_primary: boolean; notas: string | null } | null>(null);
+  
+  // ✅ Labels personalizados
+  const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
   const [contactForm, setContactForm] = useState<{
     nombre: string;
     cargo: string;
@@ -687,7 +691,7 @@ export default function LeadDetailPage() {
     if (!id || !lead) return;
 
     const ok = window.confirm(
-      "¿Convertir este lead en socio? Se creará un registro en la tabla de socios."
+      `¿Convertir este lead en ${labels.memberSingular.toLowerCase()}? Se creará un registro en la tabla de ${labels.memberPlural.toLowerCase()}.`
     );
     if (!ok) return;
 
@@ -779,6 +783,18 @@ export default function LeadDetailPage() {
     fetchLead();
     fetchLeadOptions();
     fetchActiveSession();
+    
+    // Cargar labels personalizados
+    fetchLabels().then(setLabels).catch(() => {
+      // Fallback a defaults si falla
+    });
+    
+    // Escuchar actualizaciones de config
+    const handleUpdate = () => {
+      fetchLabels().then(setLabels).catch(() => {});
+    };
+    window.addEventListener("portal-config-updated", handleUpdate);
+    return () => window.removeEventListener("portal-config-updated", handleUpdate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -1083,9 +1099,9 @@ export default function LeadDetailPage() {
                   onClick={convertToMember}
                   className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                   disabled={disabled || !lead}
-                  title="Convertir este lead en socio"
+                  title={`Convertir este lead en ${labels.memberSingular.toLowerCase()}`}
                 >
-                  Convertir en socio
+                  Convertir en {labels.memberSingular.toLowerCase()}
                 </button>
               )}
 

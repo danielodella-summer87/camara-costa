@@ -23,6 +23,8 @@ type PortalConfig = {
   timezone?: string;
   titulo_header?: string | null;
   logo_url?: string | null;
+  label_member_singular?: string | null;
+  label_member_plural?: string | null;
 };
 
 const DEFAULT_CONFIG: PortalConfig = {
@@ -31,6 +33,8 @@ const DEFAULT_CONFIG: PortalConfig = {
   timezone: "America/Montevideo",
   titulo_header: null,
   logo_url: null,
+  label_member_singular: "Socio",
+  label_member_plural: "Socios",
 };
 
 /**
@@ -95,7 +99,7 @@ export async function GET() {
  * Actualiza la configuración del portal en public.config
  * 
  * Body esperado:
- * { "nombre_camara": "string", "moneda": "USD"|"UYU", "timezone": "string", "titulo_header": "string|null", "logo_url": "string|null" }
+ * { "nombre_camara": "string", "moneda": "USD"|"UYU", "timezone": "string", "titulo_header": "string|null", "logo_url": "string|null", "label_member_singular": "string|null", "label_member_plural": "string|null" }
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -124,6 +128,18 @@ export async function PATCH(req: NextRequest) {
     
     if (body.logo_url === null || typeof body.logo_url === "string") {
       updates.logo_url = body.logo_url === "" ? null : body.logo_url;
+    }
+    
+    if (body.label_member_singular === null || typeof body.label_member_singular === "string") {
+      updates.label_member_singular = body.label_member_singular === "" || !body.label_member_singular.trim()
+        ? DEFAULT_CONFIG.label_member_singular
+        : body.label_member_singular.trim();
+    }
+    
+    if (body.label_member_plural === null || typeof body.label_member_plural === "string") {
+      updates.label_member_plural = body.label_member_plural === "" || !body.label_member_plural.trim()
+        ? DEFAULT_CONFIG.label_member_plural
+        : body.label_member_plural.trim();
     }
 
     // Obtener config actual para mergear

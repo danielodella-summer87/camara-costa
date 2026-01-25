@@ -27,7 +27,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
     return (
       <div className="p-10">
         <Link href="/admin/socios" className="text-sm text-slate-600 hover:underline">
-          ← Volver a socios
+          ← Volver
         </Link>
 
         <div className="mt-6 rounded-xl border bg-white p-6">
@@ -53,7 +53,7 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
   return (
     <div className="p-10">
       <Link href="/admin/socios" className="text-sm text-slate-600 hover:underline">
-        ← Volver a socios
+        ← Volver
       </Link>
 
       <div className="mt-6 rounded-2xl border bg-white p-6">

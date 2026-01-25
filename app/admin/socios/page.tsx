@@ -1,21 +1,62 @@
+"use client";
+
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { useEffect, useState } from "react";
+import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
 
-// ✅ Evita cache estático
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
+type Socio = {
+  id: string;
+  codigo: string | null;
+  plan: string | null;
+  estado: string | null;
+  fecha_alta: string | null;
+  proxima_accion: string | null;
+  empresa_id: string | null;
+  empresas: {
+    id: string;
+    nombre: string | null;
+  } | null;
+};
 
-export default async function SociosPage() {
-  // Consultar socios con join a empresas
-  const { data, error } = await supabaseServer
-    .from("socios")
-    .select("id, codigo, plan, estado, fecha_alta, proxima_accion, empresa_id, empresas:empresa_id(id,nombre)")
-    .order("fecha_alta", { ascending: false });
+export default function SociosPage() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<Socio[]>([]);
+  const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
+
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/admin/socios", {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store" },
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error ?? "Error cargando datos");
+        setData(json?.data || []);
+      } catch (e: any) {
+        setError(e?.message ?? "Error cargando datos");
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    loadData();
+    fetchLabels().then(setLabels).catch(() => {});
+    
+    const handleUpdate = () => {
+      fetchLabels().then(setLabels).catch(() => {});
+    };
+    window.addEventListener("portal-config-updated", handleUpdate);
+    return () => window.removeEventListener("portal-config-updated", handleUpdate);
+  }, []);
 
   if (error) {
     return (
       <div className="p-10 text-red-600">
-        Error cargando socios: {error.message}
+        Error cargando {labels.memberPlural.toLowerCase()}: {error}
       </div>
     );
   }
@@ -24,7 +65,7 @@ export default async function SociosPage() {
     <div className="max-w-[1200px]">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Socios</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">{labels.memberPlural}</h1>
           <p className="text-slate-600">Gestión con inteligencia comercial</p>
         </div>
       </div>
@@ -75,13 +116,19 @@ export default async function SociosPage() {
               </tr>
             ))}
 
-            {(!data || data.length === 0) && (
+            {loading ? (
               <tr>
                 <td className="p-6 text-slate-500" colSpan={7}>
-                  No hay socios para mostrar.
+                  Cargando...
                 </td>
               </tr>
-            )}
+            ) : (!data || data.length === 0) ? (
+              <tr>
+                <td className="p-6 text-slate-500" colSpan={7}>
+                  No hay {labels.memberPlural.toLowerCase()} para mostrar.
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

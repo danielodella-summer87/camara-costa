@@ -134,6 +134,8 @@ export async function POST(req: Request) {
     // Validar tipo
     const tipo = body.tipo === "ganado" || body.tipo === "perdido" ? body.tipo : "normal";
 
+    const supabase = supabaseAdmin();
+
     // Validar que solo existe 1 tipo=ganado y 1 tipo=perdido
     if (tipo === "ganado" || tipo === "perdido") {
       const { data: existing } = await supabase
@@ -151,7 +153,6 @@ export async function POST(req: Request) {
     }
 
     const color = cleanStr(body.color);
-    const supabase = supabaseAdmin();
 
     // si no mandan posicion, la ponemos al final (max+1)
     let posicion = body.posicion === undefined || body.posicion === null ? null : safeInt(body.posicion, 0);

@@ -7,8 +7,9 @@ import RubrosTab from "./components/RubrosTab";
 import PipelinesTab from "./components/PipelinesTab";
 import EstadosTab from "./components/EstadosTab";
 import RolesTab from "./components/RolesTab";
+import PersonalizacionTab from "./components/PersonalizacionTab";
 
-type Tab = "rubros" | "pipelines" | "estados" | "roles";
+type Tab = "rubros" | "pipelines" | "estados" | "roles" | "personalizacion";
 
 function ConfiguracionContent() {
   const searchParams = useSearchParams();
@@ -24,6 +25,7 @@ function ConfiguracionContent() {
     { id: "pipelines", label: "Pipelines" },
     { id: "estados", label: "Estados" },
     { id: "roles", label: "Roles" },
+    { id: "personalizacion", label: "Personalización" },
   ];
 
   return (
@@ -66,6 +68,7 @@ function ConfiguracionContent() {
           {tab === "pipelines" && <PipelinesTab />}
           {tab === "estados" && <EstadosTab />}
           {tab === "roles" && <RolesTab />}
+          {tab === "personalizacion" && <PersonalizacionTab />}
         </div>
       </div>
     </PageContainer>
