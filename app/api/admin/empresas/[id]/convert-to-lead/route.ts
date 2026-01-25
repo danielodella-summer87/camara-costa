@@ -61,7 +61,7 @@ export async function POST(
 
     // Insert del lead (vinculando empresa_id)
     const payload: any = {
-      empresa_id: empresaId, // ✅ usar el id real (aunque sea "1")
+      empresa_id: empresa.id,
       nombre: empresa.nombre,
       email: empresa.email ?? null,
       telefono: empresa.telefono ?? null,
