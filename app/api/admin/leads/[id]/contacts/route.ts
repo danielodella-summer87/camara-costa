@@ -15,9 +15,9 @@ function supabaseAdmin() {
 type ContactCreateInput = {
   nombre: string;
   cargo: string;
-  celular?: string | null;
+  telefono?: string | null;
   email?: string | null;
-  es_principal?: boolean;
+  is_primary?: boolean;
   notas?: string | null;
 };
 
@@ -42,7 +42,7 @@ export async function GET(
       .from("lead_contacts")
       .select("*")
       .eq("lead_id", leadId)
-      .order("es_principal", { ascending: false })
+      .order("is_primary", { ascending: false })
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -97,13 +97,13 @@ export async function POST(
 
     const supabase = supabaseAdmin();
 
-    // Si es_principal=true, primero desmarcar otros contactos principales
-    if (body.es_principal) {
+    // Si is_primary=true, primero desmarcar otros contactos principales
+    if (body.is_primary) {
       await supabase
         .from("lead_contacts")
-        .update({ es_principal: false })
+        .update({ is_primary: false })
         .eq("lead_id", leadId)
-        .eq("es_principal", true);
+        .eq("is_primary", true);
     }
 
     // Crear el nuevo contacto
@@ -113,9 +113,9 @@ export async function POST(
         lead_id: leadId,
         nombre: body.nombre.trim(),
         cargo: body.cargo.trim(),
-        celular: body.celular?.trim() || null,
+        telefono: body.telefono?.trim() || null,
         email: body.email?.trim() || null,
-        es_principal: body.es_principal || false,
+        is_primary: body.is_primary || false,
         notas: body.notas?.trim() || null,
       })
       .select()

@@ -339,9 +339,9 @@ export default function LeadDetailPage() {
     id: string;
     nombre: string;
     cargo: string;
-    celular: string | null;
+    telefono: string | null;
     email: string | null;
-    es_principal: boolean;
+    is_primary: boolean;
     notas: string | null;
     created_at: string;
     updated_at: string;
@@ -349,13 +349,13 @@ export default function LeadDetailPage() {
   const [contactsLoading, setContactsLoading] = useState(false);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
-  const [editingContact, setEditingContact] = useState<{ id: string; nombre: string; cargo: string; celular: string | null; email: string | null; es_principal: boolean; notas: string | null } | null>(null);
+  const [editingContact, setEditingContact] = useState<{ id: string; nombre: string; cargo: string; telefono: string | null; email: string | null; is_primary: boolean; notas: string | null } | null>(null);
   const [contactForm, setContactForm] = useState({
     nombre: "",
     cargo: "",
-    celular: "",
+    telefono: "",
     email: "",
-    es_principal: false,
+    is_primary: false,
     notas: "",
   });
 
@@ -821,9 +821,9 @@ export default function LeadDetailPage() {
       setContactForm({
         nombre: contact.nombre,
         cargo: contact.cargo,
-        celular: contact.celular || "",
+        telefono: contact.telefono || "",
         email: contact.email || "",
-        es_principal: contact.es_principal,
+        is_primary: contact.is_primary,
         notas: contact.notas || "",
       });
     } else {
@@ -831,9 +831,9 @@ export default function LeadDetailPage() {
       setContactForm({
         nombre: "",
         cargo: "",
-        celular: "",
+        telefono: "",
         email: "",
-        es_principal: false,
+        is_primary: false,
         notas: "",
       });
     }
@@ -848,7 +848,7 @@ export default function LeadDetailPage() {
       cargo: "",
       celular: "",
       email: "",
-      es_principal: false,
+      is_primary: false,
       notas: "",
     });
   }
@@ -865,9 +865,9 @@ export default function LeadDetailPage() {
       const payload = {
         nombre: contactForm.nombre.trim(),
         cargo: contactForm.cargo.trim(),
-        celular: contactForm.celular.trim() || null,
+        telefono: contactForm.telefono.trim() || null,
         email: contactForm.email.trim() || null,
-        es_principal: contactForm.es_principal,
+        is_primary: contactForm.is_primary,
         notas: contactForm.notas.trim() || null,
       };
 
@@ -1261,12 +1261,6 @@ export default function LeadDetailPage() {
                     label="Nombre"
                     editing={false}
                     value={lead?.empresas?.nombre ?? ""}
-                    onChange={() => {}}
-                  />
-                  <Field
-                    label="Contacto"
-                    editing={false}
-                    value={lead?.empresas?.contacto_nombre ?? ""}
                     onChange={() => {}}
                   />
                   <Field
@@ -1758,7 +1752,7 @@ export default function LeadDetailPage() {
                             className="grid grid-cols-[60px_1fr_1fr_1fr_1fr_120px] px-4 py-3 text-sm items-center"
                           >
                             <div>
-                              {contact.es_principal ? (
+                              {contact.is_primary ? (
                                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
                                   ✓
                                 </span>
@@ -1768,7 +1762,7 @@ export default function LeadDetailPage() {
                             </div>
                             <div className="font-medium text-slate-900">{contact.nombre}</div>
                             <div className="text-slate-700">{contact.cargo}</div>
-                            <div className="text-slate-700">{contact.celular || "—"}</div>
+                            <div className="text-slate-700">{contact.telefono || "—"}</div>
                             <div className="text-slate-700">{contact.email || "—"}</div>
                             <div className="flex items-center gap-2">
                               <button
@@ -1848,8 +1842,8 @@ export default function LeadDetailPage() {
                 </label>
                 <input
                   type="text"
-                  value={contactForm.celular}
-                  onChange={(e) => setContactForm((f) => ({ ...f, celular: e.target.value }))}
+                  value={contactForm.telefono}
+                  onChange={(e) => setContactForm((f) => ({ ...f, telefono: e.target.value }))}
                   className="w-full rounded-xl border px-3 py-2 text-sm"
                   placeholder="Ej: 099123456"
                 />
@@ -1881,12 +1875,12 @@ export default function LeadDetailPage() {
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  checked={contactForm.es_principal}
-                  onChange={(e) => setContactForm((f) => ({ ...f, es_principal: e.target.checked }))}
+                  checked={contactForm.is_primary}
+                  onChange={(e) => setContactForm((f) => ({ ...f, is_primary: e.target.checked }))}
                   className="rounded border"
-                  id="es_principal"
+                  id="is_primary"
                 />
-                <label htmlFor="es_principal" className="text-sm text-slate-700">
+                <label htmlFor="is_primary" className="text-sm text-slate-700">
                   Contacto principal
                 </label>
               </div>

@@ -262,8 +262,6 @@ export async function POST(req: NextRequest) {
         direccion: row.direccion.trim(),
         web: normalizeWebsite(row.web),
         instagram: cleanStr(row.instagram),
-        import_batch_id: batch.id,
-        import_row_number: row.row_number,
       });
     });
 

@@ -87,62 +87,46 @@ export default function ImportarEntidadesPage() {
     }
   }
 
-  async function handleImport() {
+  const handleImport = async () => {
+    console.log("[IMPORT] click");
+
     if (!batchId) {
-      setError("No hay batch válido. Validá el archivo primero.");
+      console.warn("[IMPORT] No hay batchId");
       return;
     }
 
-    if (!isValid) {
-      setError("Corregí los errores antes de importar");
-      return;
-    }
-
-    // Si hay solo warnings, requerir confirmación
-    if (validation?.warnings && validation.warnings.length > 0 && !confirmImportWithWarnings) {
-      setError("Hay advertencias. Confirmá que querés importar igual.");
-      return;
-    }
-
-    setError(null);
     setImporting(true);
 
     try {
       const res = await fetch("/api/admin/empresas/import/commit", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          batch_id: batchId,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_id: batchId }),
       });
 
-      const json = (await res.json().catch(() => ({}))) as CommitResponse;
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Error importando entidades");
-      }
+      const data = await res.json();
+      console.log("[IMPORT] response", data);
 
-      setCommitResult(json?.data ?? null);
-      setError(null); // Limpiar errores previos
-
-      // Mostrar mensaje de éxito o error
-      if ((json?.data?.inserted ?? 0) > 0) {
-        // Si importó algo, redirigir al listado después de mostrar el resultado
-        setTimeout(() => {
-          router.push("/admin/empresas");
-        }, 3000);
-      } else if (json?.error) {
-        setError(json.error);
-      } else {
-        setError("No hay filas válidas para importar. Volvé a validar el archivo.");
-      }
-    } catch (e: any) {
-      setError(e?.message ?? "Error importando entidades");
+      setCommitResult(data.data ?? null);
+    } catch (e) {
+      console.error("[IMPORT] error", e);
     } finally {
       setImporting(false);
     }
-  }
+  };
+
+  const disabledReasons = {
+    noFile: !file,
+    noConcepto: !concepto?.trim?.(),
+    noBatchId: !batchId,
+    notValid: !isValid,
+    importing,
+    alreadyInserted: (commitResult?.inserted ?? 0) > 0,
+  };
+
+  const isImportDisabled = Object.values(disabledReasons).some(Boolean);
+
+  console.log("[IMPORT] disabledReasons:", disabledReasons, "=> disabled:", isImportDisabled);
 
   return (
     <PageContainer>
@@ -180,8 +164,7 @@ export default function ImportarEntidadesPage() {
               value={concepto}
               onChange={(e) => setConcepto(e.target.value)}
               placeholder="Ej: Importación masiva desde Excel - Enero 2024"
-              className="w-full rounded-xl border px-4 py-2 text-sm"
-              disabled={importing}
+              className="w-full rounded-lg border px-3 py-2 text-sm"
             />
             <p className="mt-1 text-xs text-slate-500">
               Describe el origen o propósito de esta importación.
@@ -264,17 +247,10 @@ export default function ImportarEntidadesPage() {
             <button
               type="button"
               onClick={handleImport}
-              disabled={
-                !file ||
-                !concepto.trim() ||
-                !batchId ||
-                !isValid ||
-                importing ||
-                ((commitResult?.inserted ?? 0) > 0)
-              }
+              disabled={isImportDisabled}
               className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
             >
-              {importing ? "Importando…" : ((commitResult?.inserted ?? 0) > 0) ? "✓ Importado" : "Importar"}
+              Importar
             </button>
           </div>
         </div>

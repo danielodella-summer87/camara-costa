@@ -15,9 +15,9 @@ function supabaseAdmin() {
 type ContactUpdateInput = {
   nombre?: string;
   cargo?: string;
-  celular?: string | null;
+  telefono?: string | null;
   email?: string | null;
-  es_principal?: boolean;
+  is_primary?: boolean;
   notas?: string | null;
 };
 
@@ -68,14 +68,14 @@ export async function PATCH(
     const supabase = supabaseAdmin();
 
     // Si se está marcando como principal, desmarcar otros
-    if (body.es_principal === true) {
+    if (body.is_primary === true) {
       const leadId = await getLeadIdFromContact(contactId);
       if (leadId) {
         await supabase
           .from("lead_contacts")
-          .update({ es_principal: false })
+          .update({ is_primary: false })
           .eq("lead_id", leadId)
-          .eq("es_principal", true)
+          .eq("is_primary", true)
           .neq("id", contactId);
       }
     }
@@ -84,9 +84,9 @@ export async function PATCH(
     const update: any = {};
     if (body.nombre !== undefined) update.nombre = body.nombre.trim();
     if (body.cargo !== undefined) update.cargo = body.cargo.trim();
-    if (body.celular !== undefined) update.celular = body.celular?.trim() || null;
+    if (body.telefono !== undefined) update.telefono = body.telefono?.trim() || null;
     if (body.email !== undefined) update.email = body.email?.trim() || null;
-    if (body.es_principal !== undefined) update.es_principal = body.es_principal;
+    if (body.is_primary !== undefined) update.is_primary = body.is_primary;
     if (body.notas !== undefined) update.notas = body.notas?.trim() || null;
 
     const { data, error } = await supabase
