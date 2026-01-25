@@ -838,7 +838,7 @@ export default function LeadDetailPage() {
       setContactForm({
         nombre: "",
         cargo: "",
-        celular: "",
+        telefono: "",
         email: "",
         is_primary: false,
         notas: "",
