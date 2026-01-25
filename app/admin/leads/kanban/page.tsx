@@ -58,6 +58,7 @@ type PipelineRow = {
   id: string;
   nombre: string;
   posicion: number;
+  tipo: "normal" | "ganado" | "perdido";
   color: string | null;
   created_at?: string;
   updated_at?: string;
@@ -68,7 +69,6 @@ type ApiResp<T> = {
   error?: string | null;
 };
 
-const NONE_COLUMN_ID = "__none__";
 
 function norm(s: string | null | undefined) {
   return (s ?? "").trim().toLowerCase();
@@ -133,10 +133,9 @@ function activityMeta(t: unknown) {
 }
 
 type Column = {
-  id: string; // pipeline id o NONE_COLUMN_ID
+  id: string; // pipeline id
   nombre: string;
   color: string;
-  isNone?: boolean;
 };
 
 type ActiveDrag =
@@ -206,7 +205,7 @@ export default function LeadsKanbanPage() {
       // inicializar orden local de cards por columna (si no existe aún)
       setCardOrder((prev) => {
         const next = { ...prev };
-        const colIds = [...pData.map((p) => p.id), NONE_COLUMN_ID];
+        const colIds = pData.map((p) => p.id);
 
         for (const cid of colIds) if (!next[cid]) next[cid] = [];
 
@@ -216,9 +215,17 @@ export default function LeadsKanbanPage() {
         const nameToId = new Map<string, string>();
         pData.forEach((p) => nameToId.set(norm(p.nombre), p.id));
 
+        // Buscar pipeline "Nuevo" para asignar leads sin pipeline
+        const nuevoPipeline = pData.find((p) => norm(p.nombre) === "nuevo");
+        const nuevoId = nuevoPipeline?.id;
+
         for (const ld of lData) {
-          const pid = nameToId.get(norm(ld.pipeline)) ?? NONE_COLUMN_ID;
-          byCol[pid].push(ld.id);
+          // Asignar "Nuevo" si no tiene pipeline (solo para render, no se guarda)
+          const normalizedPipeline = ld.pipeline ?? "Nuevo";
+          const pid = nameToId.get(norm(normalizedPipeline)) ?? nuevoId;
+          if (pid) {
+            byCol[pid].push(ld.id);
+          }
         }
 
         for (const cid of colIds) {
@@ -252,20 +259,11 @@ export default function LeadsKanbanPage() {
   }, []);
 
   const columns: Column[] = useMemo(() => {
-    const cols: Column[] = pipelines.map((p) => ({
+    return pipelines.map((p) => ({
       id: p.id,
       nombre: p.nombre,
       color: safeColor(p.color),
     }));
-
-    cols.push({
-      id: NONE_COLUMN_ID,
-      nombre: "Sin pipeline",
-      color: "#e2e8f0",
-      isNone: true,
-    });
-
-    return cols;
   }, [pipelines]);
 
   const columnIds = useMemo(() => columns.map((c) => c.id), [columns]);
@@ -313,7 +311,7 @@ export default function LeadsKanbanPage() {
 
   async function persistLeadPipeline(leadId: string, targetColumnId: string) {
     const target = columns.find((c) => c.id === targetColumnId);
-    const pipelineValue = target?.isNone ? null : target?.nombre ?? null;
+    const pipelineValue = target?.nombre ?? "Nuevo";
 
     const res = await fetch(`/api/admin/leads/${leadId}`, {
       method: "PATCH",
@@ -446,27 +444,16 @@ export default function LeadsKanbanPage() {
       const fromIndex = columnIds.indexOf(activeId);
       const toIndex = columnIds.indexOf(String(e.over.id));
 
-      // no permitir mover "Sin pipeline"
-      if (activeId === NONE_COLUMN_ID || String(e.over.id) === NONE_COLUMN_ID) {
-        setActiveDrag(null);
-        return;
-      }
-
       if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
         setActiveDrag(null);
         return;
       }
 
       const newCols = arrayMove(columns, fromIndex, toIndex);
-      const fixed = [
-        ...newCols.filter((c) => c.id !== NONE_COLUMN_ID),
-        newCols.find((c) => c.id === NONE_COLUMN_ID)!,
-      ];
 
       setPipelines((prev) => {
         const map = new Map(prev.map((p) => [p.id, p]));
-        const onlyPipes = fixed.filter((c) => c.id !== NONE_COLUMN_ID);
-        return onlyPipes.map((c, idx) => ({
+        return newCols.map((c, idx) => ({
           ...(map.get(c.id)!),
           posicion: idx,
         }));
@@ -475,7 +462,7 @@ export default function LeadsKanbanPage() {
       setBusy(true);
       setError(null);
       try {
-        const orderIds = fixed.filter((c) => c.id !== NONE_COLUMN_ID).map((c) => c.id);
+        const orderIds = newCols.map((c) => c.id);
         await persistColumnOrder(orderIds);
       } catch (err: any) {
         setError(err?.message ?? "No se pudo guardar el orden");
@@ -544,25 +531,6 @@ export default function LeadsKanbanPage() {
     if (!res.ok) throw new Error(json?.error ?? "No se pudo crear la columna");
   }
 
-  async function addColumnFromUI() {
-    const nombre = window.prompt("Nombre de la columna (pipeline):");
-    if (!nombre) return;
-
-    const color = window.prompt("Color HEX (opcional). Ej: #3b82f6", "#3b82f6") ?? "";
-    const c = color.trim();
-    const finalColor = c.length ? c : null;
-
-    setBusy(true);
-    setError(null);
-    try {
-      await createPipeline(nombre.trim(), finalColor);
-      await fetchAll();
-    } catch (e: any) {
-      setError(e?.message ?? "Error creando columna");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function ensureBaseColumns() {
     setBusy(true);
@@ -608,16 +576,6 @@ export default function LeadsKanbanPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={addColumnFromUI}
-              disabled={loading || busy}
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-              title="Crear una columna nueva"
-            >
-              + Columna
-            </button>
-
             {showBaseHint && (
               <button
                 type="button"
@@ -744,7 +702,7 @@ function KanbanColumn({
 }) {
   const sortable = useSortable({
     id: column.id,
-    disabled: disabled || column.id === NONE_COLUMN_ID,
+    disabled: disabled,
     data: { type: "column" },
   });
 
@@ -770,13 +728,14 @@ function KanbanColumn({
       >
         <div className="flex items-center gap-2">
           <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: column.color }} aria-hidden />
+          <span className="text-xs text-slate-400">▼</span>
           <div className="font-semibold text-slate-900">{column.nombre}</div>
           <span className="rounded-full border bg-slate-50 px-2 py-0.5 text-xs text-slate-700">
             {count}
           </span>
         </div>
 
-        {!column.isNone && <span className="text-xs text-slate-400">⠿</span>}
+        <span className="text-xs text-slate-400">⠿</span>
       </div>
 
       <div className="p-3">

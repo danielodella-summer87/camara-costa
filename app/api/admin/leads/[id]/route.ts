@@ -180,6 +180,102 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       updateData.member_since = null;
     }
 
+    // Detectar cambio de pipeline a "Ganado" y crear socio automáticamente
+    if (body.pipeline !== undefined) {
+      const newPipeline = safeStr(body.pipeline);
+      const normalizedNewPipeline = newPipeline ? newPipeline.trim().toLowerCase() : null;
+      
+      if (normalizedNewPipeline === "ganado") {
+        // Obtener lead actual para verificar pipeline anterior y si ya es miembro
+        const currentLead = await sb
+          .from("leads")
+          .select("pipeline, is_member, nombre, email, telefono, empresa_id")
+          .eq("id", id)
+          .maybeSingle();
+
+        if (currentLead.data) {
+          const currentPipeline = safeStr(currentLead.data.pipeline);
+          const normalizedCurrentPipeline = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
+          const wasGanado = normalizedCurrentPipeline === "ganado";
+          const isAlreadyMember = currentLead.data.is_member === true;
+
+          // Si no era "Ganado" antes y no es miembro todavía, crear socio
+          if (!wasGanado && !isAlreadyMember) {
+            const lead = currentLead.data;
+            const now = new Date().toISOString();
+            const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+
+            // Actualizar lead: is_member=true, member_since=now()
+            updateData.is_member = true;
+            updateData.member_since = now;
+
+            // Buscar socio existente por lead_id
+            const existingSocio = await sb
+              .from("socios")
+              .select("id")
+              .eq("lead_id", id)
+              .maybeSingle();
+
+            let socioId: string;
+
+            if (existingSocio.data?.id) {
+              socioId = existingSocio.data.id;
+            } else {
+              // Generar nuevo id tipo S-001, S-002...
+              const lastSocio = await sb
+                .from("socios")
+                .select("id")
+                .order("id", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              socioId = "S-001";
+              if (lastSocio.data?.id) {
+                const match = String(lastSocio.data.id).match(/^S-(\d+)$/);
+                if (match) {
+                  const num = parseInt(match[1], 10);
+                  const nextNum = num + 1;
+                  socioId = `S-${String(nextNum).padStart(3, "0")}`;
+                }
+              }
+            }
+
+            // Preparar datos del socio
+            const socioDataBase: any = {
+              id: socioId,
+              lead_id: id,
+              nombre: lead.nombre ?? null,
+              email: lead.email ?? null,
+              telefono: lead.telefono ?? null,
+              empresa_id: lead.empresa_id ?? null,
+              plan: "Bronce",
+              estado: "Activo",
+              fecha_alta: today,
+              proxima_accion: null,
+            };
+
+            // Intentar upsert con codigo
+            let socioData = { ...socioDataBase, codigo: socioId };
+            let upsertSocio = await sb
+              .from("socios")
+              .upsert(socioData, { onConflict: "lead_id" })
+              .select("id")
+              .maybeSingle();
+
+            // Si falla por columna codigo, reintentar sin codigo
+            if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
+              socioData = socioDataBase;
+              await sb
+                .from("socios")
+                .upsert(socioData, { onConflict: "lead_id" })
+                .select("id")
+                .maybeSingle();
+            }
+          }
+        }
+      }
+    }
+
     // Intento principal: "leads"
     const u1 = await sb.from("leads").update(updateData).eq("id", id).select("*").maybeSingle();
     if (!u1.error && u1.data) {

@@ -13,7 +13,7 @@ function supabaseAdmin() {
 }
 
 const TABLE = "leads_pipelines";
-const SELECT = "id,created_at,updated_at,nombre,posicion,color";
+const SELECT = "id,created_at,updated_at,nombre,posicion,tipo,color";
 
 type PipelineRow = {
   id: string;
@@ -21,6 +21,7 @@ type PipelineRow = {
   updated_at: string;
   nombre: string;
   posicion: number;
+  tipo: "normal" | "ganado" | "perdido";
   color: string | null;
 };
 
@@ -60,6 +61,32 @@ export async function GET() {
   try {
     const supabase = supabaseAdmin();
 
+    // Ensure pipelines básicos existen
+    const requiredPipelines = [
+      { nombre: "Nuevo", posicion: 0, tipo: "normal" as const },
+      { nombre: "Perdido", posicion: 999, tipo: "perdido" as const },
+      { nombre: "Ganado", posicion: 1000, tipo: "ganado" as const },
+    ];
+
+    for (const req of requiredPipelines) {
+      const { data: existing } = await supabase
+        .from(TABLE)
+        .select("id")
+        .eq("nombre", req.nombre)
+        .maybeSingle();
+
+      if (!existing) {
+        const now = new Date().toISOString();
+        await supabase.from(TABLE).insert({
+          nombre: req.nombre,
+          posicion: req.posicion,
+          tipo: req.tipo,
+          color: null,
+          updated_at: now,
+        });
+      }
+    }
+
     const { data, error } = await supabase
       .from(TABLE)
       .select(SELECT)
@@ -88,6 +115,7 @@ export async function GET() {
 type CreateInput = {
   nombre?: string | null;
   posicion?: number | null;
+  tipo?: "normal" | "ganado" | "perdido" | null;
   color?: string | null;
 };
 
@@ -101,6 +129,25 @@ export async function POST(req: Request) {
         { data: null, error: "El nombre es obligatorio." } satisfies OneResponse,
         { status: 400, headers: { "Cache-Control": "no-store", "x-handler": "pipelines-v1" } }
       );
+    }
+
+    // Validar tipo
+    const tipo = body.tipo === "ganado" || body.tipo === "perdido" ? body.tipo : "normal";
+
+    // Validar que solo existe 1 tipo=ganado y 1 tipo=perdido
+    if (tipo === "ganado" || tipo === "perdido") {
+      const { data: existing } = await supabase
+        .from(TABLE)
+        .select("id, nombre")
+        .eq("tipo", tipo)
+        .maybeSingle();
+
+      if (existing) {
+        return NextResponse.json(
+          { data: null, error: `Ya existe un pipeline de tipo "${tipo}" (${existing.nombre}). Solo puede haber uno.` } satisfies OneResponse,
+          { status: 400, headers: { "Cache-Control": "no-store", "x-handler": "pipelines-v1" } }
+        );
+      }
     }
 
     const color = cleanStr(body.color);
@@ -128,6 +175,7 @@ export async function POST(req: Request) {
       .insert({
         nombre,
         posicion,
+        tipo,
         color,
         updated_at: now,
       })

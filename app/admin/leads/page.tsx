@@ -406,9 +406,9 @@ export default function LeadsPage() {
     const term = q.trim().toLowerCase();
     let list = [...rows];
 
-    // Filtro de socios: si showMembers es false, ocultar leads con is_member=true
+    // Filtro de ganados: si showMembers es false, ocultar leads con pipeline = "Ganado"
     if (!showMembers) {
-      list = list.filter((r) => !r.is_member);
+      list = list.filter((r) => (norm(r.pipeline) !== norm("Ganado")));
     }
 
     if (pipelineFilter !== "Todos") {
@@ -434,6 +434,29 @@ export default function LeadsPage() {
           .toLowerCase();
         return haystack.includes(term);
       });
+    }
+
+    // Deduplicación cuando showMembers === true
+    if (showMembers) {
+      const map = new Map<string, typeof list[number]>();
+
+      for (const r of list) {
+        const key =
+          (r as any).empresa_id ??
+          `${norm(r.nombre ?? "")}|${norm(r.email ?? "")}|${norm(r.telefono ?? "")}`;
+
+        const prev = map.get(key);
+        if (!prev) {
+          map.set(key, r);
+        } else {
+          // preferir ganado
+          const prevIsGanado = norm(prev.pipeline) === norm("Ganado");
+          const rIsGanado = norm(r.pipeline) === norm("Ganado");
+          if (!prevIsGanado && rIsGanado) map.set(key, r);
+        }
+      }
+
+      list = Array.from(map.values());
     }
 
     list.sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? "") * -1);
@@ -642,7 +665,7 @@ export default function LeadsPage() {
                   onChange={(e) => setShowMembers(e.target.checked)}
                   className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                 />
-                <span className="text-xs text-slate-700">Mostrar socios</span>
+                <span className="text-xs text-slate-700">Mostrar ganados</span>
               </label>
             </div>
           </div>
@@ -823,7 +846,7 @@ export default function LeadsPage() {
                         <div className="hidden md:flex flex-1 items-center gap-6 min-w-0">
                           {/* Columna izquierda: Empresa + Contacto */}
                           <div className="flex min-w-0 flex-col gap-0.5 flex-[2]">
-                            <div className="truncate font-semibold text-slate-900">
+                            <div className={`truncate font-semibold ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
                               {l.nombre ?? <span className="text-slate-400">—</span>}
                             </div>
                             {l.contacto && (
@@ -886,7 +909,7 @@ export default function LeadsPage() {
                           {/* Línea 1: Empresa + Acción */}
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex min-w-0 flex-col gap-0.5 flex-1">
-                              <div className="truncate font-semibold text-slate-900">
+                              <div className={`truncate font-semibold ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
                                 {l.nombre ?? <span className="text-slate-400">—</span>}
                               </div>
                               {l.contacto && (

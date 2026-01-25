@@ -350,7 +350,14 @@ export default function LeadDetailPage() {
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
   const [editingContact, setEditingContact] = useState<{ id: string; nombre: string; cargo: string; telefono: string | null; email: string | null; is_primary: boolean; notas: string | null } | null>(null);
-  const [contactForm, setContactForm] = useState({
+  const [contactForm, setContactForm] = useState<{
+    nombre: string;
+    cargo: string;
+    telefono: string;
+    email: string;
+    is_primary: boolean;
+    notas: string;
+  }>({
     nombre: "",
     cargo: "",
     telefono: "",
@@ -831,7 +838,7 @@ export default function LeadDetailPage() {
       setContactForm({
         nombre: "",
         cargo: "",
-        telefono: "",
+        celular: "",
         email: "",
         is_primary: false,
         notas: "",
@@ -846,7 +853,7 @@ export default function LeadDetailPage() {
     setContactForm({
       nombre: "",
       cargo: "",
-      celular: "",
+      telefono: "",
       email: "",
       is_primary: false,
       notas: "",
