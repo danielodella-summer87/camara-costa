@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { createHash } from "crypto";
+import * as XLSX from "xlsx";
 
 export const dynamic = "force-dynamic";
 
@@ -13,82 +13,44 @@ function supabaseAdmin() {
   });
 }
 
-type CommitRequest = {
-  token: string;
-  concepto: string;
-  filename?: string | null;
-  rows: Array<{
-    nombre: string;
-    tipo: string;
-    rubro: string;
-    telefono: string;
-    email: string;
-    direccion: string;
-    contacto?: string | null;
-    web?: string | null;
-    instagram?: string | null;
-    ciudad?: string | null;
-    pais?: string | null;
-  }>;
-};
-
 type CommitResponse = {
   data?: {
     batch_id: string;
     inserted: number;
     failed: number;
     errors: Array<{ row: number; message: string }>;
+    total_rows?: number;
+    inserted_rows?: number;
+    errors_count?: number;
   } | null;
   error?: string | null;
 };
 
-// Detectar separador CSV
-function detectSeparator(headerLine: string): string {
-  const candidates: Array<{ sep: string; count: number }> = [
-    { sep: ",", count: (headerLine.match(/,/g) ?? []).length },
-    { sep: ";", count: (headerLine.match(/;/g) ?? []).length },
-    { sep: "\t", count: (headerLine.match(/\t/g) ?? []).length },
-  ];
-  candidates.sort((a, b) => b.count - a.count);
-  return candidates[0]?.count ? candidates[0].sep : ",";
-}
-
-// Parser simple (soporta comillas dobles)
-function parseDelimitedLine(line: string, sep: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (!inQuotes && ch === sep) {
-      out.push(cur.trim());
-      cur = "";
-      continue;
-    }
-
-    cur += ch;
-  }
-
-  out.push(cur.trim());
-  return out;
+// Normalizar texto (NFC, eliminar nbsp, trim)
+function normalizeText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  return str
+    .normalize("NFC")
+    .replace(/\u00A0/g, " ") // Reemplazar non-breaking space
+    .trim();
 }
 
 function cleanStr(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  return s.length ? s : null;
+  const normalized = normalizeText(v);
+  return normalized.length ? normalized : null;
+}
+
+function isValidEmail(email: string | null): boolean {
+  if (!email) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+function isValidTipo(tipo: string | null): boolean {
+  if (!tipo) return false;
+  const validTipos = ["empresa", "profesional", "institucion"];
+  return validTipos.includes(tipo.toLowerCase());
 }
 
 function normalizeWebsite(url?: string | null): string | null {
@@ -99,57 +61,148 @@ function normalizeWebsite(url?: string | null): string | null {
   return `https://${u}`;
 }
 
+// Normalizar headers: lowercase, trim, espacios a _, eliminar tildes, eliminar no-alfanuméricos salvo _
+function normalizeHeader(header: string): string {
+  return header
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[áéíóúñ]/g, (m) => {
+      const map: Record<string, string> = {
+        á: "a",
+        é: "e",
+        í: "i",
+        ó: "o",
+        ú: "u",
+        ñ: "n",
+      };
+      return map[m] || m;
+    })
+    .replace(/[^a-z0-9_]/g, ""); // Eliminar caracteres no alfanuméricos salvo _
+}
+
+// Mapear variaciones de headers a campos normalizados
+function mapHeaderToField(normalizedHeader: string): string {
+  const equivalences: Record<string, string> = {
+    // Variaciones de tipo
+    tipo_empresa: "tipo",
+    tipo_entidad: "tipo",
+    tipo: "tipo",
+    // Variaciones de web
+    web: "web",
+    website: "web",
+    sitio_web: "web",
+    // Variaciones de instagram
+    instagram: "instagram",
+    ig: "instagram",
+  };
+
+  return equivalences[normalizedHeader] || normalizedHeader;
+}
+
 export async function POST(req: NextRequest) {
+  console.log("[COMMIT] Iniciando importación...");
   try {
-    const body = (await req.json().catch(() => ({}))) as CommitRequest;
+    const body = await req.json().catch(async () => {
+      // Fallback: intentar FormData si JSON falla (compatibilidad)
+      const form = await req.formData();
+      return {
+        batch_id: form.get("batch_id"),
+        concepto: form.get("concepto"),
+      };
+    });
 
-    if (!body.token || typeof body.token !== "string") {
-      return NextResponse.json(
-        { data: null, error: "Falta token de validación" } satisfies CommitResponse,
-        { status: 400 }
-      );
-    }
+    const batchId = body?.batch_id;
+    console.log("[COMMIT] Batch ID recibido:", batchId);
 
-    if (!body.concepto || typeof body.concepto !== "string" || !body.concepto.trim()) {
+    if (!batchId || typeof batchId !== "string") {
       return NextResponse.json(
-        { data: null, error: "El concepto de importación es obligatorio" } satisfies CommitResponse,
-        { status: 400 }
-      );
-    }
-
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    if (rows.length === 0) {
-      return NextResponse.json(
-        { data: null, error: "No hay filas para importar" } satisfies CommitResponse,
+        { data: null, error: "batch_id es obligatorio" } satisfies CommitResponse,
         { status: 400 }
       );
     }
 
     const supabase = supabaseAdmin();
 
-    // 1. Crear batch de importación
+    // 1. Verificar que el batch existe y está en estado "validated"
     const { data: batch, error: batchError } = await supabase
       .from("entity_import_batches")
-      .insert({
-        concepto: body.concepto.trim(),
-        filename: body.filename || null,
-        total_rows: rows.length,
-        inserted_rows: 0,
-        error_rows: 0,
-        status: "validated",
-      })
-      .select("id")
+      .select("id, status, total_rows, filename")
+      .eq("id", batchId)
       .single();
 
     if (batchError || !batch) {
+      console.error("[COMMIT] Error obteniendo batch:", batchError);
       return NextResponse.json(
-        { data: null, error: batchError?.message ?? "Error creando batch de importación" } satisfies CommitResponse,
+        { data: null, error: "Batch no encontrado" } satisfies CommitResponse,
+        { status: 404 }
+      );
+    }
+
+    if (batch.status !== "validated") {
+      return NextResponse.json(
+        { data: null, error: `El batch no está en estado validado (estado actual: ${batch.status})` } satisfies CommitResponse,
+        { status: 400 }
+      );
+    }
+
+    console.log("[COMMIT] Batch encontrado:", batch.id, "Estado:", batch.status);
+
+    // 2. Leer filas válidas desde entity_import_rows
+    const { data: rowsData, error: rowsError } = await supabase
+      .from("entity_import_rows")
+      .select("*")
+      .eq("batch_id", batchId)
+      .eq("is_valid", true)
+      .order("row_number", { ascending: true });
+
+    if (rowsError) {
+      console.error("[COMMIT] Error leyendo filas:", rowsError);
+      return NextResponse.json(
+        { data: null, error: `Error leyendo filas: ${rowsError.message}` } satisfies CommitResponse,
         { status: 500 }
       );
     }
 
-    // 2. Obtener mapeo de rubros (nombre -> id)
-    const rubrosNombres = Array.from(new Set(rows.map((r) => r.rubro).filter(Boolean)));
+    if (!rowsData || rowsData.length === 0) {
+      console.log("[COMMIT] No hay filas válidas para importar");
+      return NextResponse.json(
+        {
+          data: {
+            batch_id: batch.id,
+            inserted: 0,
+            failed: 0,
+            errors: [],
+            total_rows: batch.total_rows || 0,
+            inserted_rows: 0,
+            errors_count: 0,
+          },
+          error: "No hay filas válidas para importar. Volvé a validar el archivo.",
+        } satisfies CommitResponse,
+        { status: 200 }
+      );
+    }
+
+    console.log("[COMMIT] Filas válidas encontradas:", rowsData.length);
+
+    // 3. Extraer datos de las filas
+    const rows = rowsData.map((r: any) => ({
+      nombre: r.data.nombre,
+      tipo_empresa: r.data.tipo,
+      rubro: r.data.rubro,
+      telefono: r.data.telefono,
+      email: r.data.email,
+      direccion: r.data.direccion,
+      web: r.data.web || null,
+      instagram: r.data.instagram || null,
+      row_number: r.row_number,
+    }));
+
+    // 4. Obtener rubros únicos
+    const rubrosInFile = new Set(rows.map((r) => r.rubro).filter(Boolean));
+
+    // 3. Obtener mapeo de rubros (nombre -> id)
+    const rubrosNombres = Array.from(rubrosInFile);
     const { data: rubrosData, error: rubrosError } = await supabase
       .from("rubros")
       .select("id, nombre")
@@ -165,38 +218,52 @@ export async function POST(req: NextRequest) {
     const rubroMap = new Map<string, string>();
     (rubrosData || []).forEach((r: any) => {
       if (r.nombre) {
-        rubroMap.set(r.nombre.toLowerCase().trim(), r.id);
+        rubroMap.set(normalizeText(r.nombre).toLowerCase().trim(), r.id);
       }
     });
 
-    // 3. Preparar inserts
+    // Validar que todos los rubros existan
+    const missingRubros = new Set<string>();
+    rows.forEach((row) => {
+      const rubroNormalized = normalizeText(row.rubro).toLowerCase().trim();
+      if (!rubroMap.has(rubroNormalized)) {
+        missingRubros.add(row.rubro);
+      }
+    });
+
+    if (missingRubros.size > 0) {
+      return NextResponse.json(
+        {
+          data: null,
+          error: `Rubros faltantes: ${Array.from(missingRubros).join(", ")}. Creá los rubros en Configuración y re-validá.`,
+        } satisfies CommitResponse,
+        { status: 400 }
+      );
+    }
+
+    // 5. Preparar inserts
     const inserts: any[] = [];
     const errors: Array<{ row: number; message: string }> = [];
 
-    rows.forEach((row, index) => {
-      const rowNum = index + 1;
-
+    rows.forEach((row) => {
       // Validar rubro existe
-      const rubroId = rubroMap.get(row.rubro.toLowerCase().trim());
+      const rubroId = rubroMap.get(normalizeText(row.rubro).toLowerCase().trim());
       if (!rubroId) {
-        errors.push({ row: rowNum, message: `Rubro "${row.rubro}" no encontrado` });
+        errors.push({ row: row.row_number, message: `Rubro "${row.rubro}" no encontrado` });
         return;
       }
 
       inserts.push({
         nombre: row.nombre.trim(),
-        tipo: row.tipo.toLowerCase().trim(),
+        tipo: row.tipo_empresa.toLowerCase().trim(),
         rubro_id: rubroId,
         telefono: row.telefono.trim(),
         email: row.email.trim().toLowerCase(),
         direccion: row.direccion.trim(),
-        contacto_nombre: cleanStr(row.contacto),
         web: normalizeWebsite(row.web),
         instagram: cleanStr(row.instagram),
-        ciudad: cleanStr(row.ciudad),
-        pais: cleanStr(row.pais),
         import_batch_id: batch.id,
-        import_row_number: rowNum,
+        import_row_number: row.row_number,
       });
     });
 
@@ -208,6 +275,9 @@ export async function POST(req: NextRequest) {
             inserted: 0,
             failed: rows.length,
             errors,
+            total_rows: batch.total_rows || 0,
+            inserted_rows: 0,
+            errors_count: rows.length,
           },
           error: null,
         } satisfies CommitResponse,
@@ -215,32 +285,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Insertar en chunks
+    // 5. Insertar en chunks
+    console.log("[COMMIT] Preparando insertar", inserts.length, "filas en chunks de 200");
     let inserted = 0;
     const chunkSize = 200;
 
     for (let i = 0; i < inserts.length; i += chunkSize) {
       const chunk = inserts.slice(i, i + chunkSize);
+      console.log(`[COMMIT] Insertando chunk ${Math.floor(i / chunkSize) + 1} (${chunk.length} filas)`);
       const { error: insertError } = await supabase.from("empresas").insert(chunk);
 
       if (insertError) {
+        console.error(`[COMMIT] Error en chunk ${Math.floor(i / chunkSize) + 1}:`, insertError);
         errors.push({ row: -1, message: `Error insertando chunk: ${insertError.message}` });
       } else {
         inserted += chunk.length;
+        console.log(`[COMMIT] Chunk ${Math.floor(i / chunkSize) + 1} insertado correctamente. Total insertado: ${inserted}`);
       }
     }
 
-    // 5. Actualizar batch con resultados
+    // 6. Actualizar batch con resultados
     const failed = rows.length - inserted;
+    console.log("[COMMIT] Actualizando batch. Insertadas:", inserted, "Fallidas:", failed);
     await supabase
       .from("entity_import_batches")
       .update({
         inserted_rows: inserted,
         error_rows: failed,
-        status: failed === 0 ? "imported" : inserted > 0 ? "imported" : "failed",
+        status: "committed",
       })
       .eq("id", batch.id);
 
+    console.log("[COMMIT] Importación completada. Batch ID:", batch.id, "Insertadas:", inserted, "Fallidas:", failed);
     return NextResponse.json(
       {
         data: {
@@ -248,6 +324,9 @@ export async function POST(req: NextRequest) {
           inserted,
           failed,
           errors,
+          total_rows: batch.total_rows || 0,
+          inserted_rows: inserted,
+          errors_count: failed,
         },
         error: null,
       } satisfies CommitResponse,

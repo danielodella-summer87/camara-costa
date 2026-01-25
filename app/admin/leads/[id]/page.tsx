@@ -332,7 +332,32 @@ export default function LeadDetailPage() {
   const meetWinRef = useRef<Window | null>(null);
 
   // ✅ Tabs
-  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet">("entidad");
+  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet" | "contactos">("entidad");
+
+  // ✅ Contactos del lead
+  const [contacts, setContacts] = useState<Array<{
+    id: string;
+    nombre: string;
+    cargo: string;
+    celular: string | null;
+    email: string | null;
+    es_principal: boolean;
+    notas: string | null;
+    created_at: string;
+    updated_at: string;
+  }>>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsError, setContactsError] = useState<string | null>(null);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [editingContact, setEditingContact] = useState<{ id: string; nombre: string; cargo: string; celular: string | null; email: string | null; es_principal: boolean; notas: string | null } | null>(null);
+  const [contactForm, setContactForm] = useState({
+    nombre: "",
+    cargo: "",
+    celular: "",
+    email: "",
+    es_principal: false,
+    notas: "",
+  });
 
   // Función reutilizable para abrir Meet en ventana popup controlada
   function openMeetWindow(meetUrl: string) {
@@ -758,6 +783,136 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startingMeet]);
 
+  // ✅ Fetch contactos cuando se entra al tab
+  async function fetchContacts() {
+    if (!id) return;
+
+    setContactsError(null);
+    setContactsLoading(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/contacts`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando contactos");
+
+      setContacts(json?.data || []);
+    } catch (e: any) {
+      setContactsError(e?.message ?? "Error cargando contactos");
+      setContacts([]);
+    } finally {
+      setContactsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "contactos" && id) {
+      fetchContacts();
+    }
+  }, [activeTab, id]);
+
+  // ✅ Funciones para manejar contactos
+  function openContactModal(contact?: typeof contacts[0] | null) {
+    if (contact) {
+      setEditingContact(contact);
+      setContactForm({
+        nombre: contact.nombre,
+        cargo: contact.cargo,
+        celular: contact.celular || "",
+        email: contact.email || "",
+        es_principal: contact.es_principal,
+        notas: contact.notas || "",
+      });
+    } else {
+      setEditingContact(null);
+      setContactForm({
+        nombre: "",
+        cargo: "",
+        celular: "",
+        email: "",
+        es_principal: false,
+        notas: "",
+      });
+    }
+    setShowContactModal(true);
+  }
+
+  function closeContactModal() {
+    setShowContactModal(false);
+    setEditingContact(null);
+    setContactForm({
+      nombre: "",
+      cargo: "",
+      celular: "",
+      email: "",
+      es_principal: false,
+      notas: "",
+    });
+  }
+
+  async function saveContact() {
+    if (!id) return;
+    if (!contactForm.nombre.trim() || !contactForm.cargo.trim()) {
+      setContactsError("Nombre y cargo son obligatorios");
+      return;
+    }
+
+    setContactsError(null);
+    try {
+      const payload = {
+        nombre: contactForm.nombre.trim(),
+        cargo: contactForm.cargo.trim(),
+        celular: contactForm.celular.trim() || null,
+        email: contactForm.email.trim() || null,
+        es_principal: contactForm.es_principal,
+        notas: contactForm.notas.trim() || null,
+      };
+
+      const url = editingContact
+        ? `/api/admin/leads/${id}/contacts/${editingContact.id}`
+        : `/api/admin/leads/${id}/contacts`;
+      const method = editingContact ? "PATCH" : "POST";
+
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error guardando contacto");
+
+      closeContactModal();
+      await fetchContacts();
+      flash(editingContact ? "Contacto actualizado." : "Contacto creado.");
+    } catch (e: any) {
+      setContactsError(e?.message ?? "Error guardando contacto");
+    }
+  }
+
+  async function deleteContact(contactId: string) {
+    if (!id) return;
+    if (!confirm("¿Eliminar este contacto?")) return;
+
+    setContactsError(null);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/contacts/${contactId}`, {
+        method: "DELETE",
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error eliminando contacto");
+
+      await fetchContacts();
+      flash("Contacto eliminado.");
+    } catch (e: any) {
+      setContactsError(e?.message ?? "Error eliminando contacto");
+    }
+  }
+
   const disabled = loading || mutating || deleting;
 
   function startEdit() {
@@ -1035,6 +1190,17 @@ export default function LeadDetailPage() {
                     </span>
                   )}
                 </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("contactos")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "contactos"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Contactos
               </button>
             </div>
           )}
@@ -1543,6 +1709,93 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {activeTab === "contactos" && (
+            <div className="mt-5">
+              {lead && (
+                <div className="rounded-2xl border bg-white p-6 space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-xl font-semibold text-slate-900">Contactos del Lead</h2>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Gestioná los contactos asociados a este lead
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openContactModal(null)}
+                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                    >
+                      + Agregar contacto
+                    </button>
+                  </div>
+
+                  {contactsError && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                      {contactsError}
+                    </div>
+                  )}
+
+                  {contactsLoading ? (
+                    <div className="text-sm text-slate-500">Cargando contactos…</div>
+                  ) : contacts.length === 0 ? (
+                    <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
+                      No hay contactos. Agregá el primero usando el botón "+ Agregar contacto".
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-xl border">
+                      <div className="grid grid-cols-[60px_1fr_1fr_1fr_1fr_120px] bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600">
+                        <div>Principal</div>
+                        <div>Nombre</div>
+                        <div>Cargo</div>
+                        <div>Celular</div>
+                        <div>Email</div>
+                        <div>Acciones</div>
+                      </div>
+                      <div className="divide-y">
+                        {contacts.map((contact) => (
+                          <div
+                            key={contact.id}
+                            className="grid grid-cols-[60px_1fr_1fr_1fr_1fr_120px] px-4 py-3 text-sm items-center"
+                          >
+                            <div>
+                              {contact.es_principal ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                                  ✓
+                                </span>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </div>
+                            <div className="font-medium text-slate-900">{contact.nombre}</div>
+                            <div className="text-slate-700">{contact.cargo}</div>
+                            <div className="text-slate-700">{contact.celular || "—"}</div>
+                            <div className="text-slate-700">{contact.email || "—"}</div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openContactModal(contact)}
+                                className="rounded border px-2 py-1 text-xs hover:bg-slate-50"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => deleteContact(contact.id)}
+                                className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100"
+                              >
+                                Eliminar
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {!loading && !lead && (
             <div className="mt-5 rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
               No se encontró el lead.
@@ -1556,6 +1809,106 @@ export default function LeadDetailPage() {
           leadId={id ?? ""}
           leadName={lead?.nombre ?? null}
         />
+
+        {/* Modal de contacto */}
+        {showContactModal && (
+          <Modal
+            open={showContactModal}
+            title={editingContact ? "Editar contacto" : "Agregar contacto"}
+            onClose={closeContactModal}
+          >
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  Nombre *
+                </label>
+                <input
+                  type="text"
+                  value={contactForm.nombre}
+                  onChange={(e) => setContactForm((f) => ({ ...f, nombre: e.target.value }))}
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Ej: Juan Pérez"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  Cargo *
+                </label>
+                <input
+                  type="text"
+                  value={contactForm.cargo}
+                  onChange={(e) => setContactForm((f) => ({ ...f, cargo: e.target.value }))}
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Ej: CEO, Director, Gerente"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  Celular
+                </label>
+                <input
+                  type="text"
+                  value={contactForm.celular}
+                  onChange={(e) => setContactForm((f) => ({ ...f, celular: e.target.value }))}
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Ej: 099123456"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={contactForm.email}
+                  onChange={(e) => setContactForm((f) => ({ ...f, email: e.target.value }))}
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Ej: juan@empresa.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-2">
+                  Notas
+                </label>
+                <textarea
+                  value={contactForm.notas}
+                  onChange={(e) => setContactForm((f) => ({ ...f, notas: e.target.value }))}
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  rows={3}
+                  placeholder="Notas adicionales sobre el contacto"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={contactForm.es_principal}
+                  onChange={(e) => setContactForm((f) => ({ ...f, es_principal: e.target.checked }))}
+                  className="rounded border"
+                  id="es_principal"
+                />
+                <label htmlFor="es_principal" className="text-sm text-slate-700">
+                  Contacto principal
+                </label>
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeContactModal}
+                  className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={saveContact}
+                  className="rounded-xl border bg-blue-600 text-white px-4 py-2 text-sm hover:bg-blue-700"
+                >
+                  {editingContact ? "Actualizar" : "Crear"}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
       </div>
     </PageContainer>
   );

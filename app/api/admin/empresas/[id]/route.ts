@@ -72,7 +72,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
     const { data, error } = await supabase
       .from("empresas")
-      .select("*,rubro_id,rubros:rubro_id(id,nombre),entity_import_batches:import_batch_id(id,concepto,created_at,filename)")
+      .select("*,rubro_id,rubros:rubro_id(id,nombre),import_batch_id")
       .eq("id", id)
       .maybeSingle();
 
@@ -88,6 +88,19 @@ export async function GET(req: Request, ctx: Ctx) {
         { data: null, error: "Empresa no encontrada" },
         { status: 404, headers: { "Cache-Control": "no-store" } }
       );
+    }
+
+    // Si tiene import_batch_id, traer los datos del batch
+    if (data.import_batch_id) {
+      const { data: batchData, error: batchError } = await supabase
+        .from("entity_import_batches")
+        .select("id,concepto,created_at,filename")
+        .eq("id", data.import_batch_id)
+        .maybeSingle();
+
+      if (!batchError && batchData) {
+        (data as any).entity_import_batches = batchData;
+      }
     }
 
     return NextResponse.json(

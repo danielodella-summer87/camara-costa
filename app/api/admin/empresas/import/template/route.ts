@@ -1,18 +1,67 @@
 import { NextResponse } from "next/server";
+import * as XLSX from "xlsx";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const csv = `nombre,tipo,rubro,telefono,email,direccion,contacto,web,instagram,ciudad,pais
-Empresa Ejemplo,empresa,Construcción,099123456,ejemplo@test.com,Av. Principal 123,Juan Pérez,https://ejemplo.com,@ejemplo,Montevideo,Uruguay
-Profesional Ejemplo,profesional,Servicios,098765432,prof@test.com,Calle 456,María García,,@prof,Canelones,Uruguay
-Institución Ejemplo,institucion,Educación,097654321,inst@test.com,Boulevard 789,Pedro López,https://institucion.edu.uy,,Montevideo,Uruguay`;
+  // Crear worksheet con headers exactos y una fila de ejemplo
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["nombre", "tipo_empresa", "rubro", "telefono", "email", "direccion", "web", "instagram"],
+    [
+      "Empresa Ejemplo",
+      "empresa", // Valor válido: empresa, profesional o institucion
+      "Tecnología",
+      "099123123",
+      "contacto@empresa.com",
+      "Av. Principal 123",
+      "https://empresa.com",
+      "@empresa",
+    ],
+  ]);
 
-  return new NextResponse(csv, {
+  // Crear hoja de ayuda con valores permitidos
+  const wsAyuda = XLSX.utils.aoa_to_sheet([
+    ["Campo", "Valores permitidos", "Descripción"],
+    ["tipo_empresa", "empresa", "Empresa comercial"],
+    ["tipo_empresa", "profesional", "Profesional independiente"],
+    ["tipo_empresa", "institucion", "Institución u organización"],
+    ["", "", ""],
+    ["Notas:", "", ""],
+    [
+      "",
+      "",
+      "• Los valores deben escribirse exactamente como se muestran (en minúsculas)",
+    ],
+    [
+      "",
+      "",
+      "• El campo tipo_empresa también acepta: tipo_entidad, tipo",
+    ],
+    [
+      "",
+      "",
+      "• El campo web también acepta: website, sitio_web",
+    ],
+    [
+      "",
+      "",
+      "• El campo instagram también acepta: ig",
+    ],
+  ]);
+
+  // Crear workbook
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Entidades");
+  XLSX.utils.book_append_sheet(wb, wsAyuda, "Ayuda");
+
+  // Generar buffer
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  return new NextResponse(buffer, {
     status: 200,
     headers: {
-      "Content-Type": "text/csv;charset=utf-8",
-      "Content-Disposition": 'attachment; filename="plantilla_entidades.csv"',
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": 'attachment; filename="plantilla_entidades.xlsx"',
     },
   });
 }

@@ -7,9 +7,11 @@ import { PageContainer } from "@/components/layout/PageContainer";
 
 type ValidateResponse = {
   ok: boolean;
+  batch_id?: string;
   total_rows: number;
   valid_rows: number;
   row_errors: Array<{ row: number; field: string; message: string }>;
+  warnings?: Array<{ row: number; field: string; message: string }>;
   missing_rubros: string[];
   preview?: Array<Record<string, any>>;
   token: string;
@@ -34,8 +36,17 @@ export default function ImportarEntidadesPage() {
   const [validating, setValidating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [validation, setValidation] = useState<ValidateResponse | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
   const [commitResult, setCommitResult] = useState<CommitResponse["data"] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [confirmImportWithWarnings, setConfirmImportWithWarnings] = useState(false);
+  
+  // Derivar isValid del validation
+  const isValid = validation 
+    && validation.ok 
+    && validation.valid_rows > 0 
+    && validation.missing_rubros.length === 0;
 
   function downloadTemplate() {
     window.open("/api/admin/empresas/import/template", "_blank");
@@ -43,12 +54,13 @@ export default function ImportarEntidadesPage() {
 
   async function handleValidate() {
     if (!file) {
-      setError("Seleccioná un archivo CSV");
+      setError("Seleccioná un archivo Excel (.xlsx)");
       return;
     }
 
     setError(null);
     setValidation(null);
+    setConfirmImportWithWarnings(false);
     setValidating(true);
 
     try {
@@ -66,6 +78,8 @@ export default function ImportarEntidadesPage() {
       }
 
       setValidation(json);
+      setBatchId(json.batch_id || null);
+      setConfirmImportWithWarnings(false); // Reset confirmación
     } catch (e: any) {
       setError(e?.message ?? "Error validando archivo");
     } finally {
@@ -74,13 +88,19 @@ export default function ImportarEntidadesPage() {
   }
 
   async function handleImport() {
-    if (!file || !validation || !concepto.trim()) {
-      setError("Completá el concepto de importación");
+    if (!batchId) {
+      setError("No hay batch válido. Validá el archivo primero.");
       return;
     }
 
-    if (!validation.ok || validation.missing_rubros.length > 0) {
+    if (!isValid) {
       setError("Corregí los errores antes de importar");
+      return;
+    }
+
+    // Si hay solo warnings, requerir confirmación
+    if (validation?.warnings && validation.warnings.length > 0 && !confirmImportWithWarnings) {
+      setError("Hay advertencias. Confirmá que querés importar igual.");
       return;
     }
 
@@ -88,54 +108,13 @@ export default function ImportarEntidadesPage() {
     setImporting(true);
 
     try {
-      // Leer el archivo para obtener las filas
-      const fileContent = await file.text();
-      const lines = fileContent
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      if (lines.length < 2) {
-        throw new Error("El archivo debe tener al menos un header y una fila");
-      }
-
-      // Parsear CSV (simplificado, asumiendo que ya fue validado)
-      const sep = lines[0].includes(";") ? ";" : lines[0].includes("\t") ? "\t" : ",";
-      const header = lines[0].split(sep).map((h) => h.toLowerCase().trim().replace(/^"|"$/g, ""));
-
-      const colIndex: Record<string, number> = {};
-      header.forEach((h, i) => {
-        colIndex[h] = i;
-      });
-
-      const rows: any[] = [];
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""));
-        rows.push({
-          nombre: cols[colIndex["nombre"]] || "",
-          tipo: cols[colIndex["tipo"]] || "",
-          rubro: cols[colIndex["rubro"]] || "",
-          telefono: cols[colIndex["telefono"]] || "",
-          email: cols[colIndex["email"]] || "",
-          direccion: cols[colIndex["direccion"]] || "",
-          contacto: cols[colIndex["contacto"]] || null,
-          web: cols[colIndex["web"]] || null,
-          instagram: cols[colIndex["instagram"]] || null,
-          ciudad: cols[colIndex["ciudad"]] || null,
-          pais: cols[colIndex["pais"]] || null,
-        });
-      }
-
       const res = await fetch("/api/admin/empresas/import/commit", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          token: validation.token,
-          concepto: concepto.trim(),
-          filename: file.name,
-          rows,
+          batch_id: batchId,
         }),
       });
 
@@ -145,12 +124,18 @@ export default function ImportarEntidadesPage() {
       }
 
       setCommitResult(json?.data ?? null);
+      setError(null); // Limpiar errores previos
 
-      // Si importó algo, redirigir al listado
+      // Mostrar mensaje de éxito o error
       if ((json?.data?.inserted ?? 0) > 0) {
+        // Si importó algo, redirigir al listado después de mostrar el resultado
         setTimeout(() => {
           router.push("/admin/empresas");
-        }, 2000);
+        }, 3000);
+      } else if (json?.error) {
+        setError(json.error);
+      } else {
+        setError("No hay filas válidas para importar. Volvé a validar el archivo.");
       }
     } catch (e: any) {
       setError(e?.message ?? "Error importando entidades");
@@ -165,10 +150,10 @@ export default function ImportarEntidadesPage() {
         <div className="rounded-2xl border bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Importar Entidades (CSV)</h1>
+              <h1 className="text-2xl font-semibold text-slate-900">Importar Entidades (Excel)</h1>
               <p className="mt-2 text-sm text-slate-600">
-                Subí un archivo CSV con las entidades a importar. Columnas obligatorias:{" "}
-                <span className="font-semibold">nombre, tipo, rubro, telefono, email, direccion</span>.
+                Subí el archivo Excel (.xlsx) usando la plantilla oficial. Columnas obligatorias:{" "}
+                <span className="font-semibold">nombre, tipo_empresa, rubro, telefono, email, direccion</span>.
               </p>
             </div>
 
@@ -216,13 +201,55 @@ export default function ImportarEntidadesPage() {
             </button>
 
             <div className="flex-1">
+              <label
+                htmlFor="file-input"
+                className="inline-block rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Seleccionar archivo
+              </label>
               <input
+                id="file-input"
                 type="file"
-                accept=".csv,text/csv"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                className="text-sm"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => {
+                  const selectedFile = e.target.files?.[0];
+                  if (!selectedFile) {
+                    setFile(null);
+                    setFileError(null);
+                    setValidation(null);
+                    setBatchId(null);
+                    return;
+                  }
+
+                  const fileName = selectedFile.name.toLowerCase();
+                  const isXlsx =
+                    fileName.endsWith(".xlsx") ||
+                    selectedFile.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+                  if (!isXlsx) {
+                    setFile(null);
+                    setFileError("Solo se aceptan archivos Excel (.xlsx). CSV y otros formatos no son compatibles.");
+                    e.target.value = ""; // Limpiar el input
+                    setValidation(null);
+                    setBatchId(null);
+                  } else {
+                    setFile(selectedFile);
+                    setFileError(null);
+                    setValidation(null);
+                    setBatchId(null);
+                  }
+                }}
+                className="hidden"
                 disabled={validating || importing}
               />
+              {file && (
+                <span className="ml-3 text-sm text-slate-600">{file.name}</span>
+              )}
+              {fileError && (
+                <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                  {fileError}
+                </div>
+              )}
             </div>
 
             <button
@@ -238,15 +265,16 @@ export default function ImportarEntidadesPage() {
               type="button"
               onClick={handleImport}
               disabled={
-                !validation ||
-                !validation.ok ||
-                validation.missing_rubros.length > 0 ||
+                !file ||
                 !concepto.trim() ||
-                importing
+                !batchId ||
+                !isValid ||
+                importing ||
+                ((commitResult?.inserted ?? 0) > 0)
               }
               className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
             >
-              {importing ? "Importando…" : "Importar"}
+              {importing ? "Importando…" : ((commitResult?.inserted ?? 0) > 0) ? "✓ Importado" : "Importar"}
             </button>
           </div>
         </div>
@@ -261,10 +289,14 @@ export default function ImportarEntidadesPage() {
                   Estado:{" "}
                   <span
                     className={`font-semibold ${
-                      validation.ok ? "text-emerald-700" : "text-red-700"
+                      validation.row_errors.length === 0 && validation.missing_rubros.length === 0
+                        ? "text-emerald-700"
+                        : "text-red-700"
                     }`}
                   >
-                    {validation.ok ? "✓ Válido" : "✗ Con errores"}
+                    {validation.row_errors.length === 0 && validation.missing_rubros.length === 0
+                      ? "✓ Válido"
+                      : "✗ Con errores"}
                   </span>
                 </div>
                 <div>
@@ -276,6 +308,11 @@ export default function ImportarEntidadesPage() {
                 <div>
                   Errores: <span className="font-semibold">{validation.row_errors.length}</span>
                 </div>
+                {validation.warnings && validation.warnings.length > 0 && (
+                  <div>
+                    Advertencias: <span className="font-semibold text-amber-700">{validation.warnings.length}</span>
+                  </div>
+                )}
                 <div>
                   Rubros faltantes: <span className="font-semibold">{validation.missing_rubros.length}</span>
                 </div>
@@ -302,6 +339,48 @@ export default function ImportarEntidadesPage() {
                     ))}
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Advertencias (no bloquean la importación) */}
+            {validation.warnings && validation.warnings.length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <h3 className="text-sm font-semibold text-amber-900 mb-2">
+                  Advertencias ({validation.warnings.length}) — No bloquean la importación
+                </h3>
+                <p className="text-xs text-amber-800 mb-3">
+                  Se detectaron problemas menores que no impiden la importación, pero deberías revisarlos.
+                </p>
+                <div className="overflow-hidden rounded-xl border border-amber-300">
+                  <div className="grid grid-cols-[80px_120px_1fr] bg-amber-100 px-4 py-2 text-xs font-semibold text-amber-900">
+                    <div>Fila</div>
+                    <div>Campo</div>
+                    <div>Mensaje</div>
+                  </div>
+                  <div className="divide-y divide-amber-200 bg-white">
+                    {validation.warnings.map((warn, i) => (
+                      <div key={i} className="grid grid-cols-[80px_120px_1fr] px-4 py-2 text-sm">
+                        <div className="text-amber-800">{warn.row}</div>
+                        <div className="text-amber-800">{warn.field}</div>
+                        <div className="text-amber-900">{warn.message}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {validation.row_errors.length === 0 && validation.missing_rubros.length === 0 && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="confirm-warnings"
+                      checked={confirmImportWithWarnings}
+                      onChange={(e) => setConfirmImportWithWarnings(e.target.checked)}
+                      className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                    />
+                    <label htmlFor="confirm-warnings" className="text-sm text-amber-900">
+                      Entiendo las advertencias y quiero importar igual
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 
@@ -340,7 +419,7 @@ export default function ImportarEntidadesPage() {
                   <div className="grid grid-cols-[80px_1fr_100px_1fr_1fr_1fr] bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600">
                     <div>#</div>
                     <div>Nombre</div>
-                    <div>Tipo</div>
+                    <div>Tipo_empresa</div>
                     <div>Rubro</div>
                     <div>Email</div>
                     <div>Teléfono</div>
@@ -350,7 +429,7 @@ export default function ImportarEntidadesPage() {
                       <div key={i} className="grid grid-cols-[80px_1fr_100px_1fr_1fr_1fr] px-4 py-2 text-sm">
                         <div className="text-slate-500">{i + 1}</div>
                         <div className="font-medium text-slate-900">{row.nombre || "—"}</div>
-                        <div className="text-slate-700">{row.tipo || "—"}</div>
+                        <div className="text-slate-700">{(row as any).tipo_empresa || "—"}</div>
                         <div className="text-slate-700">{row.rubro || "—"}</div>
                         <div className="text-slate-700">{row.email || "—"}</div>
                         <div className="text-slate-700">{row.telefono || "—"}</div>
@@ -365,16 +444,32 @@ export default function ImportarEntidadesPage() {
 
         {/* Resultado de importación */}
         {commitResult && (
-          <div className="rounded-2xl border bg-white p-6">
-            <h2 className="text-lg font-semibold text-slate-900 mb-2">Resultado de importación</h2>
-            <div className="mt-2 text-sm text-slate-700">
-              Insertadas: <span className="font-semibold">{commitResult.inserted}</span> · Fallidas:{" "}
-              <span className="font-semibold">{commitResult.failed}</span>
+          <div className={`rounded-2xl border p-6 ${
+            commitResult.inserted > 0 
+              ? "border-emerald-200 bg-emerald-50" 
+              : "border-red-200 bg-red-50"
+          }`}>
+            <h2 className={`text-lg font-semibold mb-2 ${
+              commitResult.inserted > 0 ? "text-emerald-900" : "text-red-900"
+            }`}>
+              {commitResult.inserted > 0 ? "✓ Importación exitosa" : "✗ Importación fallida"}
+            </h2>
+            <div className="mt-2 text-sm space-y-2">
+              <div className={`font-semibold ${
+                commitResult.inserted > 0 ? "text-emerald-700" : "text-red-700"
+              }`}>
+                Insertadas: {commitResult.inserted} {commitResult.failed > 0 && `· Fallidas: ${commitResult.failed}`}
+              </div>
+              {commitResult.batch_id && (
+                <div className="text-xs text-slate-600">
+                  Batch ID: {commitResult.batch_id}
+                </div>
+              )}
             </div>
             {commitResult.errors && commitResult.errors.length > 0 && (
               <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                 <div className="text-xs font-semibold text-amber-900 mb-2">Errores durante la importación</div>
-                <div className="space-y-1">
+                <div className="space-y-1 max-h-40 overflow-y-auto">
                   {commitResult.errors.map((e, i) => (
                     <div key={i}>
                       • {e.row === -1 ? "Sistema" : `Fila ${e.row}`}: {e.message}
@@ -384,8 +479,13 @@ export default function ImportarEntidadesPage() {
               </div>
             )}
             {commitResult.inserted > 0 && (
-              <div className="mt-3 text-sm text-emerald-700">
-                Redirigiendo al listado de entidades...
+              <div className="mt-3 text-sm text-emerald-700 font-medium">
+                ✓ Importación completada: {commitResult.inserted} entidad(es) creada(s) correctamente. Redirigiendo al listado...
+              </div>
+            )}
+            {commitResult.inserted === 0 && !commitResult.errors?.length && (
+              <div className="mt-3 text-sm text-red-700 font-medium">
+                No hay filas válidas para importar. Volvé a validar el archivo.
               </div>
             )}
           </div>
