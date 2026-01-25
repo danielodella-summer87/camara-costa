@@ -22,6 +22,14 @@ type Empresa = {
   direccion?: string | null;
   created_at?: string;
   updated_at?: string;
+  import_batch_id?: string | null;
+  import_row_number?: number | null;
+  entity_import_batches?: {
+    id: string;
+    concepto: string | null;
+    created_at: string;
+    filename: string | null;
+  } | null;
 };
 
 type EmpresaApiResponse = {
@@ -575,6 +583,44 @@ export default function EmpresaDetailPage() {
                   Abrir Instagram
                 </a>
               ) : null}
+            </div>
+
+            {/* Origen de importación */}
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <div className="text-xs font-semibold text-slate-600 mb-2">
+                Origen
+              </div>
+              {empresa.entity_import_batches ? (
+                <div className="text-sm text-slate-700">
+                  <div>
+                    Importada el{" "}
+                    {new Date(empresa.entity_import_batches.created_at).toLocaleDateString("es-UY", {
+                      year: "numeric",
+                      month: "long",
+                      day: "numeric",
+                    })}
+                  </div>
+                  {empresa.entity_import_batches.concepto && (
+                    <div className="mt-1 text-slate-600">
+                      {empresa.entity_import_batches.concepto}
+                    </div>
+                  )}
+                  {empresa.entity_import_batches.filename && (
+                    <div className="mt-1 text-xs text-slate-500">
+                      Archivo: {empresa.entity_import_batches.filename}
+                    </div>
+                  )}
+                  {empresa.import_row_number && (
+                    <div className="mt-1 text-xs text-slate-500">
+                      Fila: {empresa.import_row_number}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-700">
+                  Creada manualmente
+                </div>
+              )}
             </div>
           </div>
         )}
