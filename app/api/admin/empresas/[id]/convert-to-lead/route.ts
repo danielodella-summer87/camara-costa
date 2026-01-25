@@ -67,7 +67,7 @@ export async function POST(
       telefono: empresa.telefono ?? null,
       website: normalizeWebsite(empresa.web),
       notas: empresa.instagram ? `IG: ${empresa.instagram}` : null,
-      origen: "EMPRESAS",
+      origen: "Desde entidad",
       pipeline: "Nuevo",
     };
 

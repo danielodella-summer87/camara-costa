@@ -838,7 +838,14 @@ export default function LeadDetailPage() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+                  {lead?.origen === "Desde entidad" && (
+                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">
+                      Desde Entidad
+                    </span>
+                  )}
+                </div>
                 {lead?.is_member && (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                     <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
