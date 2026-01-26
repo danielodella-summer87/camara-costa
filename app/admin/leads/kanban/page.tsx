@@ -156,6 +156,7 @@ export default function LeadsKanbanPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [pipelines, setPipelines] = useState<PipelineRow[]>([]);
@@ -164,6 +165,11 @@ export default function LeadsKanbanPage() {
   // orden local de cards por columna
   const [cardOrder, setCardOrder] = useState<Record<string, string[]>>({});
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null);
+
+  // ✅ Estados para feedback visual de guardado
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [lastSavedId, setLastSavedId] = useState<string | null>(null);
+  const [lastSavedEtapa, setLastSavedEtapa] = useState<string | null>(null);
 
   // ✅ anti-loop: evita setState repetido en preview move durante drag
   const lastPreviewMoveRef = useRef<{ cardId: string; toCol: string } | null>(null);
@@ -258,6 +264,20 @@ export default function LeadsKanbanPage() {
     fetchAll();
   }, []);
 
+  // Limpiar "Guardado" después de 2s
+  useEffect(() => {
+    if (!lastSavedId) return;
+    const t = setTimeout(() => setLastSavedId(null), 2000);
+    return () => clearTimeout(t);
+  }, [lastSavedId]);
+
+  // Limpiar notice después de 3s
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   const columns: Column[] = useMemo(() => {
     return pipelines.map((p) => ({
       id: p.id,
@@ -308,6 +328,18 @@ export default function LeadsKanbanPage() {
 
     return result;
   }, [cardOrder, columnIds, filteredLeads]);
+
+  async function persistEtapa(leadId: string, etapa: string) {
+    const res = await fetch(`/api/admin/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      body: JSON.stringify({ pipeline: etapa }), // ← IGUAL que ficha lead
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error ?? "Error guardando etapa");
+    return json;
+  }
 
   async function persistLeadPipeline(leadId: string, targetColumnId: string) {
     const target = columns.find((c) => c.id === targetColumnId);
@@ -379,13 +411,31 @@ export default function LeadsKanbanPage() {
   }
 
   function resolveOverColumn(e: DragOverEvent | DragEndEvent): string | null {
-    if (!e.over) return null;
-    const overType = e.over.data.current?.type as string | undefined;
-    const overId = String(e.over.id);
+    const over = e.over;
+    if (!over) return null;
 
-    if (overType === "column") return overId;
-    if (overType === "column-drop") return (e.over.data.current?.columnId as string) ?? null;
-    if (overType === "card") return findColumnIdByCardId(overId);
+    const overType = over.data.current?.type as string | undefined;
+
+    // Caso 1: si estoy sobre una columna
+    if (overType === "column") return String(over.id);
+
+    // Caso 2: si estoy sobre una card, la columna es la de esa card
+    if (overType === "card") {
+      return findColumnIdByCardId(String(over.id));
+    }
+
+    // Caso 3: si estoy sobre un "dropzone" dentro de la columna
+    // (suele venir con data.current.columnId o pipelineId)
+    const columnId =
+      (over.data.current as any)?.columnId ??
+      (over.data.current as any)?.pipelineId ??
+      (over.data.current as any)?.containerId;
+
+    if (columnId) return String(columnId);
+
+    // Caso 4 (fallback): si el id del droppable coincide con un column id
+    const overId = String(over.id);
+    if (columnIds.includes(overId)) return overId;
 
     return null;
   }
@@ -423,6 +473,14 @@ export default function LeadsKanbanPage() {
   }
 
   async function handleDragEnd(e: DragEndEvent) {
+    // ✅ Log para debug
+    console.log("[KANBAN] dragEnd", {
+      activeId: String(e.active?.id),
+      activeType: e.active?.data?.current?.type,
+      overId: e.over ? String(e.over.id) : null,
+      overType: e.over?.data?.current?.type,
+    });
+
     // ✅ limpiar preview para evitar loops en próximos drags
     lastPreviewMoveRef.current = null;
 
@@ -476,43 +534,55 @@ export default function LeadsKanbanPage() {
 
     // 2) cards
     if (activeType === "card") {
-      const overType = e.over.data.current?.type as string | undefined;
+      const activeId = String(e.active.id);
+
       const fromCol = findColumnIdByCardId(activeId);
-      const toCol = resolveOverColumn(e);
+
+      const overId = String(e.over.id);
+      const overCardCol = findColumnIdByCardId(overId);
+      const toCol = overCardCol ?? resolveOverColumn(e);
 
       if (!fromCol || !toCol) {
         setActiveDrag(null);
         return;
       }
 
-      // reorder dentro de la misma columna (cuando suelto sobre otra card)
-      if (toCol === fromCol && overType === "card") {
-        const overId = String(e.over.id);
-        setCardOrder((prev) => {
-          const next = { ...prev };
-          const full = [...(next[fromCol] ?? [])];
-          const oldIndex = full.indexOf(activeId);
-          const newIndex = full.indexOf(overId);
-          if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return prev;
-          next[fromCol] = arrayMove(full, oldIndex, newIndex);
-          return next;
-        });
+      // Si es la misma columna, no persistir
+      if (fromCol === toCol) {
         setActiveDrag(null);
         return;
       }
 
-      // persistir cambio de columna
+      const targetColumn = columns.find((c) => c.id === toCol);
+      const targetEtapaNombre = targetColumn?.nombre ?? "Nuevo";
+
       setBusy(true);
+      setSavingId(activeId);
       setError(null);
+      setNotice(null);
+
       try {
-        await persistLeadPipeline(activeId, toCol);
+        await persistEtapa(activeId, targetEtapaNombre);
+
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === activeId ? { ...l, pipeline: targetEtapaNombre } : l
+          )
+        );
+
+        setNotice(`Etapa guardada: ${targetEtapaNombre}`);
+
+        await fetchAll();
       } catch (err: any) {
         setError(err?.message ?? "No se pudo mover el lead");
         await fetchAll();
       } finally {
         setBusy(false);
+        setSavingId(null);
         setActiveDrag(null);
       }
+
+      return;
     }
   }
 
@@ -619,6 +689,18 @@ export default function LeadsKanbanPage() {
           </div>
         )}
 
+        {notice && (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+            {notice}
+          </div>
+        )}
+
+        {busy && (
+          <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+            Guardando cambios…
+          </div>
+        )}
+
         <div className="mt-5 flex items-center justify-between gap-3">
           <input
             value={q}
@@ -653,6 +735,8 @@ export default function LeadsKanbanPage() {
                         leadsIds={cardsByColumn[col.id] ?? []}
                         leadById={leadById}
                         disabled={loading || busy}
+                        savingId={savingId}
+                        lastSavedId={lastSavedId}
                         onPatchLead={async (id, patch) => {
                           setBusy(true);
                           setError(null);
@@ -689,12 +773,16 @@ function KanbanColumn({
   leadsIds,
   leadById,
   disabled,
+  savingId,
+  lastSavedId,
   onPatchLead,
 }: {
   column: Column;
   leadsIds: string[];
   leadById: Map<string, Lead>;
   disabled: boolean;
+  savingId: string | null;
+  lastSavedId: string | null;
   onPatchLead: (
     leadId: string,
     patch: Partial<Pick<Lead, "rating" | "next_activity_type" | "next_activity_at">>
@@ -754,7 +842,14 @@ function KanbanColumn({
                   const lead = leadById.get(id);
                   if (!lead) return null;
                   return (
-                    <LeadCard key={id} lead={lead} disabled={disabled} onPatchLead={onPatchLead} />
+                    <LeadCard
+                      key={id}
+                      lead={lead}
+                      disabled={disabled}
+                      savingId={savingId}
+                      lastSavedId={lastSavedId}
+                      onPatchLead={onPatchLead}
+                    />
                   );
                 })
               )}
@@ -769,10 +864,14 @@ function KanbanColumn({
 function LeadCard({
   lead,
   disabled,
+  savingId,
+  lastSavedId,
   onPatchLead,
 }: {
   lead: Lead;
   disabled: boolean;
+  savingId: string | null;
+  lastSavedId: string | null;
   onPatchLead: (
     leadId: string,
     patch: Partial<Pick<Lead, "rating" | "next_activity_type" | "next_activity_at">>
@@ -820,7 +919,12 @@ function LeadCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-semibold text-slate-900 truncate">{nombre}</div>
+          <div className="font-semibold text-slate-900 truncate flex items-center gap-1">
+            {nombre}
+            {savingId === lead.id && (
+              <span className="ml-2 text-xs text-slate-500">Guardando…</span>
+            )}
+          </div>
           <div className="mt-0.5 text-sm text-slate-600 truncate">{contacto}</div>
         </div>
 

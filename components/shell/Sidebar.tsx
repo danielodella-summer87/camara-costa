@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import { 
@@ -15,7 +14,8 @@ import {
   Building2,
   Target,
   BarChart3,
-  CalendarDays
+  CalendarDays,
+  SlidersHorizontal
 } from "lucide-react";
 
 // TODO: Conectar con el rol real del usuario desde autenticación
@@ -105,6 +105,7 @@ export default function Sidebar() {
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },
     { label: "Eventos", href: "/admin/eventos", icon: CalendarDays },
     { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles },
+    { label: "Personalización", href: "/admin/personalizacion", icon: SlidersHorizontal },
     { label: "Configuración", href: "/admin/configuracion", icon: SettingsIcon },
   ];
 
@@ -118,13 +119,10 @@ export default function Sidebar() {
         </div>
         <div className="flex justify-center">
           <div className="h-20 w-20 overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <Image
-              src="/ciudaddelacosta.png"
-              alt="Logo Cámara"
-              width={80}
-              height={80}
-              className="h-full w-full object-contain"
-              priority
+            <img
+              src="/licencia.png"
+              alt="Logo Licenciatario"
+              className="h-20 w-20 object-contain"
             />
           </div>
         </div>
@@ -149,9 +147,20 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="p-4 border-t border-white/10 text-xs text-slate-400">
-        Admin Cámara<br />
-        v1.0
+      <div className="flex flex-col items-center justify-center gap-2 py-4 border-t border-white/10">
+        <img
+          src="/summer87.png"
+          alt="SUMMER87"
+          className="h-16 w-auto object-contain"
+        />
+
+        <div className="text-xs font-semibold tracking-wide text-white">
+          SUMMER87.AI
+        </div>
+
+        <div className="text-[10px] text-slate-300">
+          2026
+        </div>
       </div>
     </aside>
   );

@@ -354,6 +354,11 @@ export default function LeadDetailPage() {
   
   // ✅ Labels personalizados
   const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
+  
+  // ✅ Etapas (pipelines)
+  type EtapaRow = { id: string; nombre: string };
+  const [etapas, setEtapas] = useState<string[]>([]);
+  const [loadingEtapas, setLoadingEtapas] = useState(false);
   const [contactForm, setContactForm] = useState<{
     nombre: string;
     cargo: string;
@@ -779,6 +784,37 @@ export default function LeadDetailPage() {
     }
   }
 
+  async function fetchEtapas() {
+    setLoadingEtapas(true);
+    try {
+      const res = await fetch("/api/admin/leads/pipelines", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+      const json = await res.json();
+
+      // Soporta varios formatos (por si el endpoint devuelve data directo)
+      const rows: EtapaRow[] =
+        json?.data?.pipelines ??
+        json?.data ??
+        json?.pipelines ??
+        [];
+
+      const names = (rows || [])
+        .map((r) => (r?.nombre ?? "").trim())
+        .filter(Boolean);
+
+      // fallback mínimo por si no hay nada aún
+      const fallback = ["Nuevo", "Perdido", "Ganado"];
+
+      setEtapas(Array.from(new Set([...names, ...fallback])));
+    } catch {
+      setEtapas(["Nuevo", "Perdido", "Ganado"]);
+    } finally {
+      setLoadingEtapas(false);
+    }
+  }
+
   useEffect(() => {
     fetchLead();
     fetchLeadOptions();
@@ -797,6 +833,11 @@ export default function LeadDetailPage() {
     return () => window.removeEventListener("portal-config-updated", handleUpdate);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    fetchEtapas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Refrescar sesión activa después de iniciar una nueva
   useEffect(() => {
@@ -1432,17 +1473,35 @@ export default function LeadDetailPage() {
                       value={(editing ? (draft.origen as any) : lead?.origen) ?? ""}
                       onChange={(v) => setDraft((p) => ({ ...p, origen: v }))}
                     />
-                    <Field
-                      label="Pipeline"
-                      editing={editing}
-                      value={
-                        editing
-                          ? ((draft.pipeline as any) ?? "Nuevo")
-                          : (pipelineValue ?? "")
-                      }
-                      onChange={(v) => setDraft((p) => ({ ...p, pipeline: v }))}
-                      placeholder="Nuevo"
-                    />
+                    <div>
+                      <div className="text-xs font-semibold text-slate-500">Etapa</div>
+
+                      {editing ? (
+                        <select
+                          value={((draft.pipeline as any) ?? "Nuevo") as string}
+                          onChange={(e) => setDraft((p) => ({ ...p, pipeline: e.target.value }))}
+                          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                          disabled={mutating || loadingEtapas}
+                        >
+                          <option value="Nuevo">Nuevo</option>
+                          {etapas
+                            .filter((x) => x !== "Nuevo")
+                            .map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                        </select>
+                      ) : (
+                        <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                          {(pipelineValue ?? lead?.pipeline ?? "Nuevo") || "Nuevo"}
+                        </div>
+                      )}
+
+                      {editing && loadingEtapas && (
+                        <div className="mt-1 text-xs text-slate-500">Cargando etapas…</div>
+                      )}
+                    </div>
 
                     <Field
                       label="LinkedIn Empresa"
