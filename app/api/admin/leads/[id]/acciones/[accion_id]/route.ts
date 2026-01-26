@@ -17,17 +17,17 @@ type Ctx =
   | { params: Promise<{ id: string; accion_id: string }> };
 
 /**
- * PATCH /api/admin/socios/[id]/acciones/[accion_id]
+ * PATCH /api/admin/leads/[id]/acciones/[accion_id]
  * Marca una acción como ejecutada (actualiza realizada_at si no estaba)
  */
 export async function PATCH(_req: NextRequest, ctx: Ctx) {
   const params = await Promise.resolve((ctx as any).params);
-  const socioIdRaw = params?.id ? String(params.id) : "";
+  const leadIdRaw = params?.id ? String(params.id) : "";
   const accionIdRaw = params?.accion_id ? String(params.accion_id) : "";
 
-  if (!socioIdRaw || !accionIdRaw) {
+  if (!leadIdRaw || !accionIdRaw) {
     return NextResponse.json(
-      { data: null, error: "Missing socio id or accion id" } satisfies ApiResp<null>,
+      { data: null, error: "Missing lead id or accion id" } satisfies ApiResp<null>,
       { status: 400 }
     );
   }
@@ -43,7 +43,7 @@ export async function PATCH(_req: NextRequest, ctx: Ctx) {
       realizada_at: now,
     })
     .eq("id", accionIdRaw)
-    .eq("socio_id", socioIdRaw)
+    .eq("lead_id", leadIdRaw)
     .select("id,socio_id,lead_id,tipo,nota,realizada_at,created_at")
     .maybeSingle();
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 
 export const dynamic = "force-dynamic";
 
@@ -57,10 +58,10 @@ export async function POST(
 
     if (existingLead?.id) {
       // Asegurar que empresa_id esté seteado (por si quedó nulo por alguna corrida anterior)
-      await sb
-        .from("leads")
-        .update({ empresa_id: empresa.id })
-        .eq("id", existingLead.id);
+      // Usar helper seguro (aquí queremos SETEAR empresa_id explícitamente, es un cambio intencional)
+      await updateLeadSafe(sb, existingLead.id, { empresa_id: empresa.id }, {
+        force_unlink_entity: false, // Estamos vinculando, no desvinculando
+      });
       
       return NextResponse.json({ data: { lead_id: existingLead.id, already_existed: true } });
     }

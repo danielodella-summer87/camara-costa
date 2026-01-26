@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 
 export const dynamic = "force-dynamic";
 
@@ -123,17 +124,24 @@ export async function PATCH(req: Request) {
           }
 
           // Actualizar pipeline y empresa_id si se resolvió
+          // NOTA: Aquí empresaIdResolved se agrega explícitamente cuando se resuelve (creación de socio)
+          // Esto es válido porque es un cambio explícito e intencional
           const updatePayload: any = { pipeline };
           if (empresaIdResolved) {
             updatePayload.empresa_id = empresaIdResolved;
           }
 
-          const updateRes = await supabase
-            .from("leads")
-            .update(updatePayload)
-            .eq("id", leadId)
-            .select("id,pipeline,updated_at")
-            .maybeSingle();
+          // Usar helper seguro que preserva empresa_id si no viene en payload
+          const updateRes = await updateLeadSafe(supabase, leadId, updatePayload, {
+            force_unlink_entity: false, // Nunca desvincular en bulk update
+          });
+          
+          // Adaptar resultado al formato esperado
+          const adaptedResult = updateRes.data 
+            ? { data: { id: updateRes.data.id, pipeline: updateRes.data.pipeline, updated_at: updateRes.data.updated_at }, error: null }
+            : { data: null, error: updateRes.error };
+          
+          const updateResAdapted = adaptedResult as { data: { id: string; pipeline: string; updated_at: string } | null; error: any };
 
           if (updateRes.error) {
             warnings.push(`Lead ${leadId}: Error actualizando pipeline: ${updateRes.error.message}`);
@@ -150,10 +158,10 @@ export async function PATCH(req: Request) {
             const today = new Date().toISOString().split("T")[0];
 
             // Actualizar lead: is_member=true, member_since=now()
-            await supabase
-              .from("leads")
-              .update({ is_member: true, member_since: now })
-              .eq("id", leadId);
+            // Usar helper seguro que preserva empresa_id (no incluimos empresa_id en payload, se preserva)
+            await updateLeadSafe(supabase, leadId, { is_member: true, member_since: now }, {
+              force_unlink_entity: false,
+            });
 
             // Buscar socio existente por lead_id
             const existingSocio = await supabase
@@ -239,12 +247,28 @@ export async function PATCH(req: Request) {
       );
     }
 
-    // Para otros pipelines, actualización directa (más rápido)
-    const { data, error } = await supabase
-      .from("leads")
-      .update({ pipeline })
-      .in("id", ids)
-      .select("id,pipeline,updated_at");
+    // Para otros pipelines, actualizar cada lead individualmente preservando empresa_id
+    // NOTA: Solo actualizamos pipeline, NO incluimos empresa_id en el payload (se preserva automáticamente)
+    const results: any[] = [];
+    const errors: string[] = [];
+    
+    for (const leadId of ids) {
+      const updateResult = await updateLeadSafe(supabase, leadId, { pipeline }, {
+        force_unlink_entity: false, // Nunca desvincular en bulk update
+      });
+      if (updateResult.error) {
+        errors.push(`Lead ${leadId}: ${updateResult.error.message}`);
+      } else if (updateResult.data) {
+        results.push({
+          id: updateResult.data.id,
+          pipeline: updateResult.data.pipeline,
+          updated_at: updateResult.data.updated_at,
+        });
+      }
+    }
+    
+    const data = results;
+    const error = errors.length > 0 ? { message: errors.join("; ") } : null;
 
     if (error) {
       return NextResponse.json({ data: null, error: error.message }, { status: 500 });

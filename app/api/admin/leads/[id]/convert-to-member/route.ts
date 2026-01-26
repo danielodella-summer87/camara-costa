@@ -145,6 +145,38 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       );
     }
 
+    // 6. Migrar acciones del lead al socio
+    // Buscar todas las acciones del lead
+    const accionesLead = await sb
+      .from("socio_acciones")
+      .select("id")
+      .eq("lead_id", id)
+      .is("socio_id", null);
+
+    if (accionesLead.error) {
+      console.error(`[convert-to-member] Error obteniendo acciones del lead: ${accionesLead.error.message}`);
+      // No fallar la conversión si hay error obteniendo acciones, solo loguear
+    } else if (accionesLead.data && accionesLead.data.length > 0) {
+      // Actualizar todas las acciones: limpiar lead_id y setear socio_id
+      const accionesIds = accionesLead.data.map((a) => a.id);
+      
+      const updateAcciones = await sb
+        .from("socio_acciones")
+        .update({
+          lead_id: null,
+          socio_id: socioId,
+        })
+        .in("id", accionesIds)
+        .select("id");
+
+      if (updateAcciones.error) {
+        console.error(`[convert-to-member] Error migrando acciones: ${updateAcciones.error.message}`);
+        // No fallar la conversión si hay error migrando acciones, solo loguear
+      } else {
+        console.log(`[convert-to-member] Migradas ${updateAcciones.data?.length ?? 0} acciones del lead al socio`);
+      }
+    }
+
     return NextResponse.json(
       {
         data: {

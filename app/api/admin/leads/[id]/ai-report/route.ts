@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -978,14 +979,15 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const existingReport = leadRow.ai_report?.trim() || "";
         const updatedReport = updateReportTab(existingReport, newTabContent, only_module);
 
-        // Guardar el informe actualizado
-        const { error: updateErr } = await sb
-          .from("leads")
-          .update({
-            ai_report: updatedReport,
-            ai_report_updated_at: new Date().toISOString(),
-          })
-          .eq("id", id);
+        // Guardar el informe actualizado usando helper seguro que preserva empresa_id
+        // NOTA: No incluimos empresa_id en el payload, se preserva automáticamente
+        const updateResult = await updateLeadSafe(sb, id, {
+          ai_report: updatedReport,
+          ai_report_updated_at: new Date().toISOString(),
+        }, {
+          force_unlink_entity: false, // Nunca desvincular al actualizar informe IA
+        });
+        const updateErr = updateResult.error;
 
         if (updateErr) {
           throw updateErr;
@@ -1182,7 +1184,13 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       score_categoria: extractedCategoria,
     };
 
-    const { data: updated, error: upErr } = await sb.from("leads").update(patch).eq("id", id).select("*").maybeSingle();
+    // Usar helper seguro que preserva empresa_id
+    // NOTA: patch puede incluir empresa_id si viene del body, pero normalmente no lo incluye
+    const updateResult = await updateLeadSafe(sb, id, patch, {
+      force_unlink_entity: false, // Nunca desvincular al actualizar informe IA
+    });
+    const updated = updateResult.data;
+    const upErr = updateResult.error;
     if (upErr) throw upErr;
 
     const row = (updated ?? null) as LeadRow | null;

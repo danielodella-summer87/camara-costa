@@ -17,17 +17,17 @@ type Ctx =
   | { params: Promise<{ id: string }> };
 
 /**
- * GET /api/admin/socios/[id]/acciones
- * Lista acciones del socio ordenadas por created_at desc
+ * GET /api/admin/leads/[id]/acciones
+ * Lista acciones del lead ordenadas por created_at desc
  */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const params = await Promise.resolve((ctx as any).params);
-  const socioIdRaw = params?.id ? String(params.id) : "";
-  const socioId = socioIdRaw ? decodeURIComponent(socioIdRaw) : "";
+  const leadIdRaw = params?.id ? String(params.id) : "";
+  const leadId = leadIdRaw ? decodeURIComponent(leadIdRaw) : "";
 
-  if (!socioId) {
+  if (!leadId) {
     return NextResponse.json(
-      { data: [], error: "Missing socio id" } satisfies ApiResp<any[]>,
+      { data: [], error: "Missing lead id" } satisfies ApiResp<any[]>,
       { status: 400 }
     );
   }
@@ -37,7 +37,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   const { data, error } = await supabase
     .from("socio_acciones")
     .select("id,socio_id,lead_id,tipo,nota,realizada_at,created_at")
-    .eq("socio_id", socioId)
+    .eq("lead_id", leadId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -51,23 +51,39 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 }
 
 /**
- * POST /api/admin/socios/[id]/acciones
- * Crea una nueva acción planificada
+ * POST /api/admin/leads/[id]/acciones
+ * Crea una nueva acción planificada para el lead
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const params = await Promise.resolve((ctx as any).params);
-  const socioIdRaw = params?.id ? String(params.id) : "";
-  const socioId = socioIdRaw ? decodeURIComponent(socioIdRaw) : "";
+  const leadIdRaw = params?.id ? String(params.id) : "";
+  const leadId = leadIdRaw ? decodeURIComponent(leadIdRaw) : "";
 
-  if (!socioId) {
+  if (!leadId) {
     return NextResponse.json(
-      { data: null, error: "Missing socio id" } satisfies ApiResp<null>,
+      { data: null, error: "Missing lead id" } satisfies ApiResp<null>,
       { status: 400 }
     );
   }
 
   const body = await req.json().catch(() => ({}));
   const { tipo, nota, realizada_at } = body;
+
+  // Validación: NO permitir que se intente setear socio_id en acciones de lead
+  if (body.socio_id !== undefined && body.socio_id !== null) {
+    return NextResponse.json(
+      { data: null, error: "No se puede setear socio_id en acciones de lead. Las acciones de lead deben tener socio_id=null." } satisfies ApiResp<null>,
+      { status: 400 }
+    );
+  }
+
+  // Validación: NO permitir que se intente setear lead_id diferente al del params
+  if (body.lead_id !== undefined && body.lead_id !== leadId) {
+    return NextResponse.json(
+      { data: null, error: "No se puede setear lead_id diferente al del parámetro de la URL." } satisfies ApiResp<null>,
+      { status: 400 }
+    );
+  }
 
   // Validaciones
   if (!tipo || typeof tipo !== "string") {
@@ -98,13 +114,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Normalizar nota: nunca null, siempre string (vacío si no hay valor)
   const notaNormalizada = nota ? String(nota).trim() : "";
 
-  const insertData = {
-    socio_id: socioId,
-    lead_id: null, // Acción de socio, no de lead
+  // Asegurar que lead_id nunca sea undefined antes de construir el payload
+  // (Ya validado arriba, pero doble verificación para seguridad)
+  if (!leadId || leadId.trim().length === 0) {
+    return NextResponse.json(
+      { data: null, error: "lead_id es requerido y no puede ser undefined o vacío" } satisfies ApiResp<null>,
+      { status: 400 }
+    );
+  }
+
+  // Payload de inserción: socio_id SIEMPRE null, lead_id SIEMPRE del params
+  // Tipo explícito para garantizar que lead_id nunca sea undefined
+  const insertData: {
+    lead_id: string;
+    socio_id: null;
+    tipo: string;
+    nota: string;
+    realizada_at: string;
+  } = {
+    lead_id: leadId, // SIEMPRE usar el id del params, nunca undefined
+    socio_id: null, // SIEMPRE null para acciones de lead
     tipo: tipo.trim(),
     nota: notaNormalizada,
     realizada_at: realizada_at,
   };
+
+  // Log temporal del payload antes del insert
+  console.log(`[POST /api/admin/leads/${leadId}/acciones] Payload antes del insert:`, JSON.stringify(insertData, null, 2));
+  console.log(`[POST /api/admin/leads/${leadId}/acciones] Verificando lead_id:`, insertData.lead_id, typeof insertData.lead_id);
+  console.log(`[POST /api/admin/leads/${leadId}/acciones] Verificando socio_id:`, insertData.socio_id);
 
   const { data, error } = await supabase
     .from("socio_acciones")

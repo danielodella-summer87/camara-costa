@@ -3,6 +3,7 @@
 import { AiLeadReport } from "@/components/leads/AiLeadReport";
 import { LeadDocsModal } from "@/components/leads/LeadDocsModal";
 import { PageContainer } from "@/components/layout/PageContainer";
+import Acciones from "@/components/acciones/Acciones";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -333,7 +334,7 @@ export default function LeadDetailPage() {
   const meetWinRef = useRef<Window | null>(null);
 
   // ✅ Tabs
-  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet" | "contactos">("entidad");
+  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet" | "contactos" | "acciones">("entidad");
 
   // ✅ Contactos del lead
   const [contacts, setContacts] = useState<Array<{
@@ -526,6 +527,7 @@ export default function LeadDetailPage() {
       return; // No hay cambios, no hace nada
     }
 
+    // Construir payload: solo incluir empresa_id si realmente cambió
     const normalized: PatchPayload = {
       nombre: norm(draft.nombre),
       contacto: norm(draft.contacto),
@@ -542,10 +544,31 @@ export default function LeadDetailPage() {
       linkedin_empresa: norm(draft.linkedin_empresa),
       linkedin_director: norm(draft.linkedin_director),
       meet_url: norm(draft.meet_url),
-      empresa_id: draft.empresa_id ?? null,
       score: draft.score ?? null,
       score_categoria: draft.score_categoria ?? null,
     };
+
+    // REGLA: Solo incluir empresa_id en el payload si realmente cambió
+    // Comparar con el valor actual del lead
+    if (draft.empresa_id !== undefined) {
+      const currentEmpresaId = lead?.empresa_id ?? null;
+      const newEmpresaId = draft.empresa_id?.trim() || null;
+      
+      if (currentEmpresaId !== newEmpresaId) {
+        // Solo incluir si cambió
+        if (newEmpresaId) {
+          // Vincular a nueva empresa
+          normalized.empresa_id = newEmpresaId;
+        } else {
+          // Intentando desvincular (de un valor a null)
+          // No permitir desvincular desde el formulario normal sin flag
+          // El usuario debe usar un botón específico para desvincular
+          console.warn("[Frontend] Intento de desvincular empresa_id desde formulario normal, ignorando. Use el botón específico para desvincular.");
+          // No incluir empresa_id en el payload, se preservará el valor actual
+        }
+      }
+      // Si no cambió, no incluirlo en el payload (se preserva automáticamente en backend)
+    }
 
     await patchLead(normalized);
   }
@@ -1279,6 +1302,17 @@ export default function LeadDetailPage() {
               </button>
               <button
                 type="button"
+                onClick={() => setActiveTab("acciones")}
+                className={`px-4 py-2 text-sm font-semibold transition ${
+                  activeTab === "acciones"
+                    ? "bg-slate-900 text-white"
+                    : "text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Acciones
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveTab("contactos")}
                 className={`px-4 py-2 text-sm font-semibold transition ${
                   activeTab === "contactos"
@@ -1316,11 +1350,22 @@ export default function LeadDetailPage() {
                       type="button"
                       onClick={async () => {
                         if (!empresaIdInput.trim()) return;
-                        setDraft((p) => ({ ...p, empresa_id: empresaIdInput.trim() || null }));
+                        const empresaId = empresaIdInput.trim();
+                        setDraft((p) => ({ ...p, empresa_id: empresaId || null }));
                         setEmpresaIdInput("");
                         // Guardar inmediatamente
+                        // NOTA: Si empresaId está vacío, no enviamos empresa_id: null sin flag
+                        // El usuario debería usar un botón específico para desvincular
                         try {
-                          await patchLead({ empresa_id: empresaIdInput.trim() || null });
+                          if (empresaId) {
+                            // Vincular: enviar empresa_id con valor
+                            await patchLead({ empresa_id: empresaId });
+                          } else {
+                            // Desvincular: requerir flag force_unlink_entity
+                            // Por ahora, no permitimos desvincular desde este botón
+                            setError("Para desvincular una empresa, contacta al administrador");
+                            return;
+                          }
                           await fetchLead();
                         } catch (e: any) {
                           setError(e?.message ?? "Error vinculando empresa");
@@ -1826,6 +1871,9 @@ export default function LeadDetailPage() {
             </div>
           )}
 
+          {activeTab === "acciones" && id && (
+            <Acciones leadId={id} />
+          )}
           {activeTab === "contactos" && (
             <div className="mt-5">
               {lead && (

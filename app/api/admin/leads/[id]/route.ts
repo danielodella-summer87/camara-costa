@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -148,16 +149,42 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       }
     }
 
-    // Manejar is_member y member_since
+    // Validar empresa_id ANTES de construir updateData
+    // REGLA: Si empresa_id viene como null, SOLO aceptar si force_unlink_entity: true
+    if (body.empresa_id === null && body.force_unlink_entity !== true) {
+      // Log temporal para detectar intentos
+      console.error(`[PATCH lead] ⚠️ INTENTO DE SETEAR empresa_id A NULL SIN force_unlink_entity: Lead ${id}`);
+      console.error(`[PATCH lead] Body recibido:`, JSON.stringify(body, null, 2));
+      
+      return NextResponse.json(
+        { 
+          data: null, 
+          error: "No se puede desvincular empresa_id sin el flag force_unlink_entity: true. Si realmente deseas desvincular, incluye force_unlink_entity: true en el request." 
+        } satisfies ApiResp<null>,
+        { status: 400 }
+      );
+    }
+
+    // Construir updateData: solo incluir empresa_id si viene explícitamente en el body
     const updateData: any = {
-      ...body,
       linkedin_empresa: body.linkedin_empresa ?? null,
       linkedin_director: body.linkedin_director ?? null,
-      empresa_id: body.empresa_id ?? null, // Permitir actualizar empresa_id
       ai_custom_prompt: normalizeCustomPrompt(body.ai_custom_prompt), // Normalizar: trim, si queda vacío -> null
       score: body.score === null || body.score === undefined ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null),
       score_categoria: body.score_categoria === null || body.score_categoria === undefined ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null),
     };
+
+    // Incluir otros campos del body (excepto force_unlink_entity que es solo para validación)
+    for (const [key, value] of Object.entries(body)) {
+      if (key !== "force_unlink_entity" && key !== "empresa_id") {
+        updateData[key] = value;
+      }
+    }
+
+    // Solo incluir empresa_id si viene explícitamente en el body
+    if (body.empresa_id !== undefined) {
+      updateData.empresa_id = body.empresa_id;
+    }
 
     // Agregar meet_url normalizado si fue proporcionado
     if (body.meet_url !== undefined) {
@@ -375,43 +402,29 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       }
     }
 
-    // Intento principal: "leads"
-    const u1 = await sb.from("leads").update(updateData).eq("id", id).select("*").maybeSingle();
-    if (!u1.error && u1.data) {
+    // Actualizar usando helper seguro que preserva empresa_id
+    const updateResult = await updateLeadSafe(sb, id, updateData, {
+      force_unlink_entity: body.force_unlink_entity === true,
+    });
+    
+    if (!updateResult.error && updateResult.data) {
       // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
       if (socioCreationError) {
         return NextResponse.json(
           { 
-            data: u1.data, 
+            data: updateResult.data, 
             error: null,
             warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
           } satisfies ApiResp<any> & { warning?: string },
           { status: 200 }
         );
       }
-      return NextResponse.json({ data: u1.data, error: null } satisfies ApiResp<any>, { status: 200 });
+      return NextResponse.json({ data: updateResult.data, error: null } satisfies ApiResp<any>, { status: 200 });
     }
 
-    // Fallback: "lead"
-    const u2 = await sb.from("lead").update(updateData).eq("id", id).select("*").maybeSingle();
-    if (u2.error) {
-      const msg = u1.error?.message || u2.error.message || "Error";
-      return NextResponse.json({ data: null, error: msg } satisfies ApiResp<null>, { status: 500 });
-    }
-
-    // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
-    if (socioCreationError) {
-      return NextResponse.json(
-        { 
-          data: u2.data ?? null, 
-          error: null,
-          warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
-        } satisfies ApiResp<any> & { warning?: string },
-        { status: 200 }
-      );
-    }
-
-    return NextResponse.json({ data: u2.data ?? null, error: null } satisfies ApiResp<any>, { status: 200 });
+    // Si falló, retornar error
+    const msg = updateResult.error?.message || "Error actualizando lead";
+    return NextResponse.json({ data: null, error: msg } satisfies ApiResp<null>, { status: 500 });
   } catch (e: any) {
     return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
   }
