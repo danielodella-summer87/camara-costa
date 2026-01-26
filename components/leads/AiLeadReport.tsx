@@ -584,24 +584,34 @@ export function AiLeadReport({
       // Leer prompts desde localStorage usando helper
       const promptsFromStorage = getAiPromptsFromLocalStorage();
 
-      // Crear body - incluir personalización IA siempre
-      const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
-      const body: {
-        custom_prompt: string | null;
-        personalization?: string | null;
-        force_regenerate: boolean;
-        module_id?: string | null;
-        prompts?: { base?: string; modules?: Record<string, string> };
-      } = {
-        custom_prompt: customPromptValue, // Personalización IA siempre incluida (backward compatibility)
-        personalization: customPromptValue, // Nuevo campo explícito
-        force_regenerate: force,
-        module_id: moduleId || null,
+      // Tipos para el body
+      type AiPromptsPayload = {
+        base?: string;
+        modules?: Record<string, string>;
+      };
+
+      type AiReportBody = {
+        personalization?: string;
+        force_regenerate?: boolean;
+        module?: string;
+        prompts?: AiPromptsPayload;
+      };
+
+      // Personalización IA siempre incluida
+      const personalizationText = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+      const forceRegenerate = force;
+      const moduleIdParam = moduleId;
+
+      // body tipado (acepta prompts)
+      const body: AiReportBody = {
+        personalization: personalizationText || undefined,
+        force_regenerate: !!forceRegenerate,
+        module: moduleIdParam || undefined,
       };
 
       // Agregar prompts si existen
       if (promptsFromStorage) {
-        body.prompts = promptsFromStorage;
+        body.prompts = promptsFromStorage.prompts as AiPromptsPayload;
       }
 
       console.log("[AI] llamando endpoint", `/api/admin/leads/${leadId}/ai-report`);
