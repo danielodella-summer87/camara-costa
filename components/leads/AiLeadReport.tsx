@@ -39,6 +39,76 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Extrae una sección específica del informe markdown por título
+ */
+function extractSection(report: string, section: string): string {
+  if (!report || !report.trim()) return "";
+  
+  // Mapeo de tabs a patrones de búsqueda (case-insensitive)
+  const sectionPatterns: Record<string, RegExp[]> = {
+    foda: [
+      /^##\s+FODA\s+/mi,
+      /^##\s+\d+[\.\)]\s*FODA\s+/mi,
+      /^##\s+FODA\s+como/mi,
+    ],
+    oportunidades: [
+      /^##\s+OPORTUNIDADES\s+/mi,
+      /^##\s+\d+[\.\)]\s*OPORTUNIDADES\s+/mi,
+      /^##\s+Oportunidades\s+priorizadas/mi,
+    ],
+    acciones: [
+      /^##\s+ACCIONES\s+/mi,
+      /^##\s+\d+[\.\)]\s*ACCIONES\s+/mi,
+      /^##\s+Plan\s+de\s+acci[oó]n/mi,
+      /^##\s+Acciones\s+en\s+72\s+horas/mi,
+    ],
+    materiales: [
+      /^##\s+MATERIALES\s+LISTOS\s+/mi,
+      /^##\s+MATERIALES\s+/mi,
+      /^##\s+Recursos\s+/mi,
+      /^##\s+Copys\s+/mi,
+      /^##\s+Scripts\s+/mi,
+    ],
+    siguientes: [
+      /^##\s+SIGUIENTES\s+PASOS\s+/mi,
+      /^##\s+Siguientes\s+pasos\s+/mi,
+      /^##\s+Pr[oó]ximos\s+pasos\s+/mi,
+      /^##\s+Recomendaci[oó]n\s+/mi,
+    ],
+  };
+  
+  const patterns = sectionPatterns[section] || [];
+  if (patterns.length === 0) return "";
+  
+  // Buscar el patrón que coincida
+  let match: RegExpMatchArray | null = null;
+  let matchedPattern: RegExp | null = null;
+  
+  for (const pattern of patterns) {
+    match = report.match(pattern);
+    if (match) {
+      matchedPattern = pattern;
+      break;
+    }
+  }
+  
+  if (!match || !matchedPattern) return ""; // No se encontró la sección
+  
+  const startIdx = match.index!;
+  
+  // Buscar el siguiente título de nivel 2 (##) o el final del documento
+  const remaining = report.slice(startIdx);
+  const nextSectionMatch = remaining.match(/\n##\s+/);
+  
+  if (nextSectionMatch && nextSectionMatch.index !== null) {
+    return remaining.slice(0, nextSectionMatch.index).trim();
+  }
+  
+  // Si no hay siguiente sección, devolver hasta el final
+  return remaining.trim();
+}
+
 async function textToPdfBytes(title: string, content: string) {
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([595.28, 841.89]); // A4
@@ -145,6 +215,7 @@ export function AiLeadReport({
   const [aiPromptExtra, setAiPromptExtra] = useState<string>("");
   const [savingPrompt, setSavingPrompt] = useState(false);
   const [reportExpanded, setReportExpanded] = useState(false);
+  const [activeReportTab, setActiveReportTab] = useState<"foda" | "oportunidades" | "acciones" | "materiales" | "siguientes">("foda");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const canRun = !!(leadId && leadId.trim());
@@ -154,6 +225,7 @@ export function AiLeadReport({
     const initialReport = (lead as any)?.ai_report ?? "";
     if (initialReport && initialReport.trim()) {
       setReport(initialReport);
+      setReportExpanded(true); // Auto-expandir cuando hay informe
     }
   }, [lead]);
 
@@ -271,6 +343,7 @@ export function AiLeadReport({
 
       setReport(next);
       setStatus("done");
+      setReportExpanded(true); // Auto-expandir cuando se genera nuevo informe
     } catch (e: any) {
       // Si el error viene del guardado, mostrar mensaje específico
       const errorMsg = e?.message ?? "Error generando informe IA";
@@ -422,97 +495,163 @@ export function AiLeadReport({
 
             {reportExpanded ? (
               <div className="mt-4">
-                {viewMode === "raw" ? (
-                  <pre className="whitespace-pre-wrap rounded-xl border bg-slate-50 p-3 text-sm text-slate-700 font-mono">
-                    {String(report ?? "")}
-                  </pre>
-                ) : (
-                  <div className="rounded-xl border bg-white p-6">
+                {/* Tabs del informe */}
+                <div className="mb-4 inline-flex overflow-hidden rounded-xl border bg-white">
+                  <button
+                    type="button"
+                    onClick={() => setActiveReportTab("foda")}
+                    className={`px-4 py-2 text-sm font-semibold transition ${
+                      activeReportTab === "foda"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    FODA
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveReportTab("oportunidades")}
+                    className={`px-4 py-2 text-sm font-semibold transition ${
+                      activeReportTab === "oportunidades"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Oportunidades
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveReportTab("acciones")}
+                    className={`px-4 py-2 text-sm font-semibold transition ${
+                      activeReportTab === "acciones"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Acciones
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveReportTab("materiales")}
+                    className={`px-4 py-2 text-sm font-semibold transition ${
+                      activeReportTab === "materiales"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Materiales Listos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveReportTab("siguientes")}
+                    className={`px-4 py-2 text-sm font-semibold transition ${
+                      activeReportTab === "siguientes"
+                        ? "bg-slate-900 text-white"
+                        : "text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    Siguientes Pasos
+                  </button>
+                </div>
+
+                {/* Contenido del tab activo */}
+                <div className="rounded-xl border bg-white p-6">
+                  {viewMode === "raw" ? (
+                    <pre className="whitespace-pre-wrap text-sm text-slate-700 font-mono">
+                      {extractSection(report, activeReportTab) || "No hay contenido para esta sección."}
+                    </pre>
+                  ) : (
                     <div className="prose max-w-none">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          h1: ({ children }) => (
-                            <h1 className="text-2xl font-bold text-slate-900 mt-6 mb-4 pb-2 border-b border-slate-200">
-                              {children}
-                            </h1>
-                          ),
-                          h2: ({ children }) => (
-                            <h2 className="text-xl font-semibold text-slate-800 mt-6 mb-3">
-                              {children}
-                            </h2>
-                          ),
-                          h3: ({ children }) => (
-                            <h3 className="text-lg font-semibold text-slate-700 mt-4 mb-2">
-                              {children}
-                            </h3>
-                          ),
-                          p: ({ children }) => <p className="text-slate-700 mb-3 leading-relaxed">{children}</p>,
-                          ul: ({ children }) => <ul className="list-disc list-inside mb-4 space-y-1 text-slate-700">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal list-inside mb-4 space-y-1 text-slate-700">{children}</ol>,
-                          li: ({ children }) => <li className="ml-4">{children}</li>,
-                          table: ({ children }) => (
-                            <div className="overflow-x-auto my-4">
-                              <table className="min-w-full border-collapse border border-slate-300 text-sm">
+                      {extractSection(report, activeReportTab) ? (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            h1: ({ children }) => (
+                              <h1 className="text-2xl font-bold text-slate-900 mt-6 mb-4 pb-2 border-b border-slate-200">
                                 {children}
-                              </table>
-                            </div>
-                          ),
-                          thead: ({ children }) => (
-                            <thead className="bg-slate-100">{children}</thead>
-                          ),
-                          tbody: ({ children }) => <tbody>{children}</tbody>,
-                          tr: ({ children }) => (
-                            <tr className="border-b border-slate-200 hover:bg-slate-50">{children}</tr>
-                          ),
-                          th: ({ children }) => (
-                            <th className="border border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">
-                              {children}
-                            </th>
-                          ),
-                          td: ({ children }) => (
-                            <td className="border border-slate-300 px-3 py-2 text-slate-700">{children}</td>
-                          ),
-                          a: ({ href, children }) => (
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 underline"
-                            >
-                              {children}
-                            </a>
-                          ),
-                          blockquote: ({ children }) => (
-                            <blockquote className="border-l-4 border-slate-300 pl-4 my-4 italic text-slate-600">
-                              {children}
-                            </blockquote>
-                          ),
-                          code: ({ children, className }) => {
-                            const isInline = !className;
-                            return isInline ? (
-                              <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
+                              </h1>
+                            ),
+                            h2: ({ children }) => (
+                              <h2 className="text-xl font-semibold text-slate-800 mt-6 mb-3">
                                 {children}
-                              </code>
-                            ) : (
-                              <code className={className}>{children}</code>
-                            );
-                          },
-                          pre: ({ children }) => (
-                            <pre className="bg-slate-100 p-4 rounded-lg overflow-x-auto my-4 text-sm">
-                              {children}
-                            </pre>
-                          ),
-                          hr: () => <hr className="my-6 border-slate-300" />,
-                          strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
-                          em: ({ children }) => <em className="italic">{children}</em>,
-                        }}
-                      >
-                        {String(report ?? "")}
-                      </ReactMarkdown>
+                              </h2>
+                            ),
+                            h3: ({ children }) => (
+                              <h3 className="text-lg font-semibold text-slate-700 mt-4 mb-2">
+                                {children}
+                              </h3>
+                            ),
+                            p: ({ children }) => <p className="text-slate-700 mb-3 leading-relaxed">{children}</p>,
+                            ul: ({ children }) => <ul className="list-disc list-inside mb-4 space-y-1 text-slate-700">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal list-inside mb-4 space-y-1 text-slate-700">{children}</ol>,
+                            li: ({ children }) => <li className="ml-4">{children}</li>,
+                            table: ({ children }) => (
+                              <div className="overflow-x-auto my-4">
+                                <table className="min-w-full border-collapse border border-slate-300 text-sm">
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+                            thead: ({ children }) => (
+                              <thead className="bg-slate-100">{children}</thead>
+                            ),
+                            tbody: ({ children }) => <tbody>{children}</tbody>,
+                            tr: ({ children }) => (
+                              <tr className="border-b border-slate-200 hover:bg-slate-50">{children}</tr>
+                            ),
+                            th: ({ children }) => (
+                              <th className="border border-slate-300 px-3 py-2 text-left font-semibold text-slate-900">
+                                {children}
+                              </th>
+                            ),
+                            td: ({ children }) => (
+                              <td className="border border-slate-300 px-3 py-2 text-slate-700">{children}</td>
+                            ),
+                            a: ({ href, children }) => (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 underline"
+                              >
+                                {children}
+                              </a>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="border-l-4 border-slate-300 pl-4 my-4 italic text-slate-600">
+                                {children}
+                              </blockquote>
+                            ),
+                            code: ({ children, className }) => {
+                              const isInline = !className;
+                              return isInline ? (
+                                <code className="bg-slate-100 px-1.5 py-0.5 rounded text-sm font-mono text-slate-800">
+                                  {children}
+                                </code>
+                              ) : (
+                                <code className={className}>{children}</code>
+                              );
+                            },
+                            pre: ({ children }) => (
+                              <pre className="bg-slate-100 p-4 rounded-lg overflow-x-auto my-4 text-sm">
+                                {children}
+                              </pre>
+                            ),
+                            hr: () => <hr className="my-6 border-slate-300" />,
+                            strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
+                            em: ({ children }) => <em className="italic">{children}</em>,
+                          }}
+                        >
+                          {extractSection(report, activeReportTab)}
+                        </ReactMarkdown>
+                      ) : (
+                        <div className="text-slate-500 italic">
+                          No hay contenido para esta sección en el informe.
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ) : (
               <div className="mt-4 text-sm text-slate-500 italic">

@@ -4,6 +4,12 @@ import { createClient } from "@supabase/supabase-js";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+console.log(
+  "[AI DEBUG] OPENAI_API_KEY presente:",
+  !!process.env.OPENAI_API_KEY
+);
+
+
 function supabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -86,9 +92,9 @@ Lead ID: ${leadId}
 
 ## Resumen ejecutivo (decisión)
 - Completar información faltante en la ficha para habilitar diagnóstico completo (impacto: alto — permite identificar oportunidades reales)
-- ${website ? `Validar rubro y propuesta de valor mediante análisis de ${website}` : "Solicitar website para validar rubro y propuesta de valor"} (impacto: alto — confirma fit con la Cámara)
-- Mapear socios compatibles por objetivos y audiencia (impacto: medio — acelera networking efectivo)
-- Definir métricas de éxito para la afiliación (impacto: medio — permite medir ROI)
+- ${website ? `Validar rubro y propuesta de valor mediante análisis de ${website}` : "Solicitar website para validar rubro y propuesta de valor"} (impacto: alto — confirma fit estratégico)
+- Mapear contactos compatibles por objetivos y audiencia (impacto: medio — acelera networking efectivo)
+- Definir métricas de éxito para la relación (impacto: medio — permite medir ROI)
 - Agendar welcome call para validar expectativas y objetivos (impacto: alto — establece relación desde el inicio)
 
 ## Diagnóstico técnico
@@ -97,14 +103,14 @@ Lead ID: ${leadId}
 ${objetivos ? `- Objetivos declarados: ${objetivos}` : "- No se especificaron objetivos"}
 ${audiencia ? `- Audiencia objetivo: ${audiencia}` : "- No se especificó audiencia"}
 ${website ? `- Website disponible: ${website}` : "- No se proporcionó website"}
-${oferta ? `- Oferta a la Cámara: ${oferta}` : "- No se especificó oferta"}
+${oferta ? `- Oferta: ${oferta}` : "- No se especificó oferta"}
 - Pipeline: ${pipeline}
 - Tamaño: ${tamano}
 - Origen: ${origen}
 
 ### Hipótesis
 - ${!objetivos ? "Falta definir objetivos claros de afiliación — limita identificación de oportunidades específicas" : "Objetivos identificados — requiere validación y priorización"}
-- ${!audiencia ? "Falta definir audiencia objetivo — dificulta mapeo de socios compatibles" : "Audiencia definida — posible mapeo de socios con fit"}
+- ${!audiencia ? "Falta definir audiencia objetivo — dificulta mapeo de contactos compatibles" : "Audiencia definida — posible mapeo de contactos con fit"}
 - ${!website ? "Falta website — no se puede validar rubro ni propuesta de valor sin análisis" : "Website disponible — requiere análisis de contenido para inferir rubro y propuesta"}
 - ${!oferta ? "Falta oferta específica — no se puede evaluar valor para la comunidad" : "Oferta definida — requiere validación de impacto y viabilidad"}
 
@@ -114,14 +120,14 @@ ${oferta ? `- Oferta a la Cámara: ${oferta}` : "- No se especificó oferta"}
 |-----------|-------------|---------|-----------------|-------------|---------|
 | Alta | Completar información faltante | Alto — habilita diagnóstico completo | Campos vacíos en ficha | Solicitar datos faltantes al lead | % de campos completados |
 | Alta | ${website ? `Validar rubro y propuesta mediante ${website}` : "Solicitar website para análisis"} | Alto — confirma fit estratégico | ${website ? "Website disponible" : "Website faltante"} | ${website ? `Revisar ${website}` : "Solicitar URL"} | Validación de rubro (sí/no) |
-| Media | Mapear socios compatibles | Medio — acelera networking | Objetivos y audiencia ${audiencia ? "definidos" : "faltantes"} | Identificar 3-5 socios con fit | Número de socios mapeados |
+| Media | Mapear contactos compatibles | Medio — acelera networking | Objetivos y audiencia ${audiencia ? "definidos" : "faltantes"} | Identificar 3-5 contactos con fit | Número de contactos mapeados |
 | Media | Definir métricas de éxito | Medio — permite medir ROI | Objetivos ${objetivos ? "identificados" : "pendientes"} | Establecer KPIs con el lead | Métricas definidas (número) |
 | Baja | Plan de contenido y visibilidad | Bajo — complementa estrategia | Oferta ${oferta ? "disponible" : "pendiente"} | Evaluar oportunidades de co-marketing | Acciones de contenido (número) |
 
 ## Acciones en 72 horas
 - [ ] Validar información faltante en la ficha del lead
 - [ ] ${website ? `Revisar website: ${website}` : "Solicitar website al lead"}
-- [ ] Identificar 3-5 socios potenciales con fit por objetivos y audiencia
+- [ ] Identificar 3-5 contactos potenciales con fit por objetivos y audiencia
 - [ ] Agendar welcome call inicial para validar expectativas
 - [ ] Definir métricas de éxito preliminares
 
@@ -130,13 +136,13 @@ ${oferta ? `- Oferta a la Cámara: ${oferta}` : "- No se especificó oferta"}
 ### 30 días
 - Onboarding completo del lead
 - Validación de objetivos y priorización
-- Primeras conexiones con 3-5 socios identificados
+- Primeras conexiones con 3-5 contactos identificados
 - Establecimiento de métricas base
 
 ### 60 días
 - Activación de beneficios principales
 - Seguimiento de métricas y ajuste de estrategia
-- Segunda ronda de conexiones con socios
+- Segunda ronda de conexiones con contactos
 - Evaluación de impacto inicial
 
 ### 90 días
@@ -147,14 +153,14 @@ ${oferta ? `- Oferta a la Cámara: ${oferta}` : "- No se especificó oferta"}
 
 ## Riesgos y bloqueos
 - **Información incompleta:** La ficha tiene campos faltantes que limitan el diagnóstico (mitigación: solicitar datos faltantes prioritarios)
-- **Falta de contexto:** Sin website o información adicional, es difícil validar fit con la Cámara (mitigación: solicitar website y contexto adicional)
+- **Falta de contexto:** Sin website o información adicional, es difícil validar fit estratégico (mitigación: solicitar website y contexto adicional)
 - **Objetivos no priorizados:** ${objetivos ? "Objetivos identificados pero requieren priorización" : "Falta definir objetivos"} (mitigación: welcome call para validar y priorizar)
 
 ## Datos faltantes
 ${!website ? "- ¿Cuál es el website de la empresa? (crítico para validar rubro y propuesta)" : ""}
-${!objetivos ? "- ¿Cuáles son los objetivos principales de afiliación a la Cámara?" : ""}
+${!objetivos ? "- ¿Cuáles son los objetivos principales?" : ""}
 ${!audiencia ? "- ¿A qué audiencia le vende la empresa? (B2B, B2C, Gobierno, etc.)" : ""}
-${!oferta ? "- ¿Qué ofrece específicamente a la Cámara/comunidad?" : ""}
+${!oferta ? "- ¿Qué ofrece específicamente?" : ""}
 ${!notas ? "- ¿Hay notas adicionales o contexto relevante sobre el lead?" : ""}
 ${website && objetivos && audiencia && oferta ? "- Todos los campos principales están completos" : ""}
 
@@ -166,7 +172,7 @@ ${website ? `## Hipótesis por website
 - Posible rubro: Inferir basado en dominio (requiere análisis de contenido)
 - Propuesta de valor: Requiere revisión de contenido del sitio
 - Audiencia objetivo: Validar con análisis de website
-- Fit con Cámara: Requiere validación con información completa
+- Fit estratégico: Requiere validación con información completa
 
 *Nota: Estas son inferencias preliminares. Se requiere análisis real del contenido del website para confirmar.*` : ""}
 
@@ -210,9 +216,16 @@ async function generateAiReportAI(lead: LeadRow & { custom_prompt?: string | nul
     throw new Error("OPENAI_API_KEY no configurada");
   }
 
-  // Leer prompt base desde config
+  // PRIORIDAD 1: Leer prompt base desde DB (Configuración · IA)
   const promptBase = await getPromptBase();
 
+  // FALLBACK: Prompt neutro (solo si promptBase está vacío)
+  const fallbackNeutro = `Eres un consultor senior experto en identificar oportunidades estratégicas. Generas informes técnicos con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.`;
+
+  // PRIORIDAD 1: Usar promptBase si existe, sino fallbackNeutro
+  const systemPrompt = promptBase.trim() || fallbackNeutro;
+
+  // Construir datos del lead para el user prompt
   const nombre = lead.nombre ?? "Lead";
   const leadId = lead.id;
   const origen = lead.origen ?? "No especificado";
@@ -236,34 +249,10 @@ async function generateAiReportAI(lead: LeadRow & { custom_prompt?: string | nul
     day: "numeric",
   });
 
-  // Prompt por defecto (si no hay prompt base configurado)
-  const defaultPrompt = `Actuás como Director de Desarrollo Institucional y Membresías de una Cámara Comercial internacional.
-
-Tu rol NO es marketing.
-Tu rol es institucional–estratégico.
-
-OBJETIVO DEL INFORME:
-1) Evaluar si esta empresa es un BUEN CANDIDATO para ser socio de la Cámara.
-2) Detectar fortalezas, prestigio, riesgos y encaje institucional.
-3) Definir la MEJOR ESTRATEGIA para convertirlo en socio (argumentos, propuesta y próximos pasos).
-
-Tono: profesional, ejecutivo, claro.
-Estilo: punto medio entre institucional y comercial.
-Enfoque: criterio, decisión y acción. Sin humo.
-
----
-
-## FUENTES DE INFORMACIÓN DISPONIBLES
-- Datos cargados en el CRM
-- Website oficial del lead (análisis conceptual del contenido, propuesta y posicionamiento)
-- Perfil de LinkedIn de la empresa
-- Perfil de LinkedIn del director / decisor
-⚠️ No realizar scraping técnico ni navegación profunda.
-⚠️ Basarse en señales públicas típicas de estos canales.
-
----
-
-## DATOS DEL LEAD (CRM)
+  // Construir user prompt con datos del lead
+  const userPromptParts: string[] = [];
+  
+  userPromptParts.push(`## DATOS DEL LEAD (CRM)
 - Empresa: ${nombre}
 - Lead ID: ${leadId}
 - Origen: ${origen}
@@ -272,146 +261,22 @@ Enfoque: criterio, decisión y acción. Sin humo.
 - Tamaño de empresa: ${tamano}
 - Objetivos declarados: ${objetivos || "No especificados"}
 - A quién le vende: ${audiencia || "No especificado"}
-- Qué ofrece a la Cámara / comunidad: ${oferta || "No especificado"}
+- Qué ofrece: ${oferta || "No especificado"}
 - Perfil LinkedIn Empresa: ${linkedinEmpresa || "No proporcionado"}
 - Perfil LinkedIn Director / Decisor: ${linkedinDirector || "No proporcionado"}
 - Notas internas: ${notas || "Sin notas"}
 
----
+Fecha: ${fecha}`);
 
-## FORMATO OBLIGATORIO (Markdown)
-
-El informe DEBE comenzar exactamente así:
-
-# Informe de Evaluación y Captación de Socio — ${nombre}
-
-Fecha: ${fecha}  
-Lead ID: ${leadId}
-
----
-
-## 1) Resumen ejecutivo (decisión)
-- 5 bullets exactos
-- Cada bullet debe cerrar con una recomendación:
-  [Avanzar] / [Validar] / [Descartar]
-- Enfoque: decisión institucional, no marketing
-
----
-
-## 2) Perfil institucional del lead (hechos confirmados)
-- Rubro y tipo de empresa (según website y LinkedIn)
-- Tamaño y nivel de madurez
-- Tipo de audiencia a la que vende
-- Posicionamiento público (institucional vs comercial)
-⚠️ No inventar datos. Si algo no es claro, indicar "A confirmar".
-
----
-
-## 3) Análisis de reputación y señales públicas
-### Website
-- Nivel de profesionalismo percibido
-- Claridad de propuesta
-- Enfoque local / regional / internacional
-
-### LinkedIn Empresa
-- Actividad (alta / media / baja)
-- Tipo de contenido (institucional, comercial, técnico)
-- Señales de crecimiento o estancamiento
-
-### LinkedIn Director / Decisor
-- Rol y seniority
-- Perfil institucional vs comercial
-- Señales de liderazgo, red y apertura a cámaras
-
----
-
-## 4) FODA como potencial socio de la Cámara
-### Fortalezas (para la Cámara)
-### Oportunidades (para la red de socios)
-### Debilidades (en relación a expectativas de Cámara)
-### Riesgos / Alertas (reputación, fit, conflictos potenciales)
-
-Regla:
-- Si no hay evidencia suficiente → escribir "A confirmar".
-- No suavizar riesgos.
-
----
-
-## 5) Score de candidatura (priorización interna)
-Asignar puntaje 0–5 y justificar:
-- Prestigio / reputación percibida
-- Fit institucional con la Cámara
-- Potencial de aporte a la red
-- Probabilidad de cierre como socio en 30 días
-
-Luego indicar:
-- Score final: X/5 (SIEMPRE usar formato X/5, NUNCA usar /10)
-- Categoría: Prioridad Alta / Media / Baja
-
----
-
-## 6) Oportunidades priorizadas para la Cámara (tabla)
-Tabla Markdown con columnas EXACTAS:
-| Prioridad | Oportunidad para la Cámara | Valor esperado | Señal/Evidencia | Primer paso | Métrica |
-
-- Enfocadas en beneficio para la Cámara, no para el lead.
-
----
-
-## 7) Estrategia recomendada de captación como socio
-Debe incluir:
-- Argumento central de valor institucional
-- Qué tipo de membresía o vínculo proponer
-- Qué beneficio destacar primero
-- Qué error evitar en el acercamiento
-- Perfil ideal del interlocutor
-
----
-
-## 8) Plan de acción sugerido
-### Acciones en 72 horas
-Checklist concreto
-
-### Estrategia 30–90 días
-- 30 días: validación y acercamiento
-- 60 días: involucramiento
-- 90 días: cierre o descarte
-
----
-
-## 9) Información a validar antes de avanzar
-- Preguntas concretas que la Cámara debería confirmar
-- Enfocadas en decisión institucional, no marketing
-
----
-
-REGLAS ESTRICTAS:
-- NO usar lenguaje de marketing.
-- NO hablar de campañas, funnels o leads.
-- El foco es: ¿conviene sumarlo como socio?, ¿por qué?, ¿cómo?
-- No inventes información no respaldada por los datos.
-- Si la información es insuficiente, indicarlo claramente.
-
-Generá el informe completo siguiendo EXACTAMENTE este formato.`;
-
-  // Construir prompt final combinando:
-  // 1. Prompt base desde config (si existe)
-  // 2. Prompt con datos del lead (defaultPrompt)
-  // 3. Custom prompt del usuario (si existe)
-  const promptParts: string[] = [];
-  
-  if (promptBase) {
-    promptParts.push(promptBase.trim());
-  }
-  
-  promptParts.push(defaultPrompt);
-  
-  // Agregar personalización del usuario SI existe
+  // PRIORIDAD 2: Agregar personalización del lead SI existe
   if (lead.custom_prompt && lead.custom_prompt.trim()) {
-    promptParts.push(`**INSTRUCCIONES ADICIONALES DEL USUARIO:**\n${lead.custom_prompt.trim()}`);
+    userPromptParts.push(`**INSTRUCCIONES ADICIONALES DEL USUARIO:**\n${lead.custom_prompt.trim()}`);
   }
   
-  const promptFinal = promptParts.join("\n\n");
+  const userPrompt = userPromptParts.join("\n\n");
+
+  // Log temporal antes de llamar a OpenAI (para validar que arranca con texto de MODO EASY)
+  console.log("SYSTEM_PROMPT_HEAD:", systemPrompt.slice(0, 120));
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -425,12 +290,11 @@ Generá el informe completo siguiendo EXACTAMENTE este formato.`;
         messages: [
           {
             role: "system",
-            content:
-              "Eres un consultor senior experto en identificar oportunidades estratégicas para Cámaras de Comercio. Generas informes técnicos de oportunidades con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.",
+            content: systemPrompt,
           },
           {
             role: "user",
-            content: promptFinal,
+            content: userPrompt,
           },
         ],
         temperature: 0.7,
@@ -526,6 +390,9 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
  * POST: genera informe técnico con IA y guarda ai_context + ai_report en el lead
  */
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  console.log("[BOOT] ai-report route loaded");
+  console.log("[BOOT] OPENAI_API_KEY length:", process.env.OPENAI_API_KEY?.length);
+  
   try {
     const sb = supabaseAdmin();
     const { id: rawId } = await context.params;
@@ -643,6 +510,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       ].join("\n");
     } catch (error: any) {
       // Fallback: generar informe técnico básico
+      console.log("[AI] Entrando en modo FALLBACK (sin OpenAI)");
+      console.log("[AI] OPENAI_API_KEY:", process.env.OPENAI_API_KEY ? "PRESENTE" : "AUSENTE");
+      console.log("[AI] NODE_ENV:", process.env.NODE_ENV);
+      
       report = generateFallbackReport({
         ...leadRow,
         ai_context: leadRow.ai_context || null,
