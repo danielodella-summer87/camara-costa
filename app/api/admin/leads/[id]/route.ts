@@ -180,16 +180,40 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       updateData.member_since = null;
     }
 
+    // Validar que no se pueda cambiar la etapa si el lead está cerrado (Ganado/Perdido)
+    if (body.pipeline !== undefined) {
+      // Primero obtener el pipeline actual del lead
+      const currentLead = await sb
+        .from("leads")
+        .select("pipeline")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (currentLead.data?.pipeline) {
+        const currentPipeline = safeStr(currentLead.data.pipeline);
+        const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
+        
+        // Si el lead está en Ganado o Perdido, rechazar cualquier cambio
+        if (normalizedCurrent === "ganado" || normalizedCurrent === "perdido") {
+          return NextResponse.json(
+            { data: null, error: "Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido." } satisfies ApiResp<null>,
+            { status: 409 }
+          );
+        }
+      }
+    }
+
     // Detectar cambio de pipeline a "Ganado" y crear socio automáticamente
+    let socioCreationError: string | null = null;
     if (body.pipeline !== undefined) {
       const newPipeline = safeStr(body.pipeline);
       const normalizedNewPipeline = newPipeline ? newPipeline.trim().toLowerCase() : null;
       
       if (normalizedNewPipeline === "ganado") {
-        // Obtener lead actual para verificar pipeline anterior y si ya es miembro
+        // Obtener lead completo para verificar pipeline anterior y si ya es miembro
         const currentLead = await sb
           .from("leads")
-          .select("pipeline, is_member, nombre, email, telefono, empresa_id")
+          .select("pipeline, is_member, nombre, email, telefono, empresa_id, website")
           .eq("id", id)
           .maybeSingle();
 
@@ -199,8 +223,9 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
           const wasGanado = normalizedCurrentPipeline === "ganado";
           const isAlreadyMember = currentLead.data.is_member === true;
 
-          // Si no era "Ganado" antes y no es miembro todavía, crear socio
-          if (!wasGanado && !isAlreadyMember) {
+          // Si no era "Ganado" antes o no es miembro todavía, crear/actualizar socio
+          // Esto hace que sea idempotente: si ya existe, solo actualiza
+          if (!wasGanado || !isAlreadyMember) {
             const lead = currentLead.data;
             const now = new Date().toISOString();
             const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
@@ -209,67 +234,141 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
             updateData.is_member = true;
             updateData.member_since = now;
 
-            // Buscar socio existente por lead_id
-            const existingSocio = await sb
-              .from("socios")
-              .select("id")
-              .eq("lead_id", id)
-              .maybeSingle();
+            try {
+              // Resolver empresa_id: si no existe, buscar o crear empresa
+              let empresaIdResolved: string | null = lead.empresa_id ?? null;
+              let empresaCreated = false;
 
-            let socioId: string;
+              if (!empresaIdResolved && lead.nombre) {
+                console.log(`[PATCH lead] Lead ${id} sin empresa_id, buscando/creando empresa...`);
+                
+                // Buscar empresa existente por nombre (case-insensitive)
+                const existingEmpresa = await sb
+                  .from("empresas")
+                  .select("id")
+                  .ilike("nombre", lead.nombre.trim())
+                  .limit(1)
+                  .maybeSingle();
 
-            if (existingSocio.data?.id) {
-              socioId = existingSocio.data.id;
-            } else {
-              // Generar nuevo id tipo S-001, S-002...
-              const lastSocio = await sb
-                .from("socios")
-                .select("id")
-                .order("id", { ascending: false })
-                .limit(1)
-                .maybeSingle();
+                if (existingEmpresa.data?.id) {
+                  empresaIdResolved = existingEmpresa.data.id;
+                  console.log(`[PATCH lead] Empresa encontrada: ${empresaIdResolved}`);
+                  
+                  // Actualizar lead con empresa_id encontrada
+                  updateData.empresa_id = empresaIdResolved;
+                } else {
+                  // Crear nueva empresa con datos del lead
+                  const empresaPayload: any = {
+                    nombre: lead.nombre.trim(),
+                    tipo: "empresa",
+                    email: lead.email ?? null,
+                    telefono: lead.telefono ?? null,
+                    web: lead.website ?? null,
+                    estado: "Pendiente",
+                    aprobada: false,
+                  };
 
-              socioId = "S-001";
-              if (lastSocio.data?.id) {
-                const match = String(lastSocio.data.id).match(/^S-(\d+)$/);
-                if (match) {
-                  const num = parseInt(match[1], 10);
-                  const nextNum = num + 1;
-                  socioId = `S-${String(nextNum).padStart(3, "0")}`;
+                  const newEmpresa = await sb
+                    .from("empresas")
+                    .insert(empresaPayload)
+                    .select("id")
+                    .single();
+
+                  if (newEmpresa.data?.id) {
+                    empresaIdResolved = newEmpresa.data.id;
+                    empresaCreated = true;
+                    console.log(`[PATCH lead] Empresa creada: ${empresaIdResolved}`);
+                    
+                    // Actualizar lead con empresa_id creada
+                    updateData.empresa_id = empresaIdResolved;
+                  } else {
+                    console.error(`[PATCH lead] Error creando empresa:`, newEmpresa.error);
+                    socioCreationError = `Error creando empresa: ${newEmpresa.error?.message ?? "Unknown error"}`;
+                  }
                 }
               }
-            }
 
-            // Preparar datos del socio
-            const socioDataBase: any = {
-              id: socioId,
-              lead_id: id,
-              nombre: lead.nombre ?? null,
-              email: lead.email ?? null,
-              telefono: lead.telefono ?? null,
-              empresa_id: lead.empresa_id ?? null,
-              plan: "Bronce",
-              estado: "Activo",
-              fecha_alta: today,
-              proxima_accion: null,
-            };
+              // Buscar socio existente por lead_id (idempotencia)
+              const existingSocio = await sb
+                .from("socios")
+                .select("id")
+                .eq("lead_id", id)
+                .maybeSingle();
 
-            // Intentar upsert con codigo
-            let socioData = { ...socioDataBase, codigo: socioId };
-            let upsertSocio = await sb
-              .from("socios")
-              .upsert(socioData, { onConflict: "lead_id" })
-              .select("id")
-              .maybeSingle();
+              let socioId: string;
 
-            // Si falla por columna codigo, reintentar sin codigo
-            if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
-              socioData = socioDataBase;
-              await sb
+              if (existingSocio.data?.id) {
+                // Ya existe, usar su id
+                socioId = existingSocio.data.id;
+                console.log(`[PATCH lead] Socio existente: ${socioId}`);
+              } else {
+                // Generar nuevo id tipo S-001, S-002...
+                const lastSocio = await sb
+                  .from("socios")
+                  .select("id")
+                  .order("id", { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+
+                socioId = "S-001";
+                if (lastSocio.data?.id) {
+                  const match = String(lastSocio.data.id).match(/^S-(\d+)$/);
+                  if (match) {
+                    const num = parseInt(match[1], 10);
+                    const nextNum = num + 1;
+                    socioId = `S-${String(nextNum).padStart(3, "0")}`;
+                  }
+                }
+                console.log(`[PATCH lead] Nuevo socio ID generado: ${socioId}`);
+              }
+
+              // Preparar datos del socio (con empresa_id resuelto)
+              const socioDataBase: any = {
+                id: socioId,
+                lead_id: id,
+                nombre: lead.nombre ?? null,
+                email: lead.email ?? null,
+                telefono: lead.telefono ?? null,
+                empresa_id: empresaIdResolved, // Usar empresa_id resuelto (puede ser null si falló)
+                plan: "Bronce",
+                estado: "Activo",
+                fecha_alta: today,
+                proxima_accion: null,
+              };
+
+              // Intentar upsert con codigo (idempotente: onConflict="lead_id")
+              let socioData = { ...socioDataBase, codigo: socioId };
+              let upsertSocio = await sb
                 .from("socios")
                 .upsert(socioData, { onConflict: "lead_id" })
-                .select("id")
+                .select("id, empresa_id")
                 .maybeSingle();
+
+              // Si falla por columna codigo, reintentar sin codigo
+              if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
+                socioData = socioDataBase;
+                upsertSocio = await sb
+                  .from("socios")
+                  .upsert(socioData, { onConflict: "lead_id" })
+                  .select("id, empresa_id")
+                  .maybeSingle();
+              }
+
+              // Log de confirmación
+              if (upsertSocio.data) {
+                console.log(`[PATCH lead] Socio upsert OK: leadId=${id}, socioId=${socioId}, empresaId=${upsertSocio.data.empresa_id ?? "null"}, empresaCreated=${empresaCreated}`);
+              }
+
+              // Si aún hay error, guardarlo pero NO revertir el cambio de etapa
+              if (upsertSocio.error) {
+                socioCreationError = `Error creando socio: ${upsertSocio.error.message}`;
+                console.error(`[PATCH lead] Error creando socio: leadId=${id}`, upsertSocio.error);
+              }
+            } catch (e: any) {
+              // Error inesperado al crear socio
+              socioCreationError = `Error inesperado creando socio: ${e?.message ?? "Unknown error"}`;
+              console.error(`[PATCH lead] Error inesperado creando socio: leadId=${id}`, e);
+              // NO revertimos el cambio de etapa, pero guardamos el error para reportarlo
             }
           }
         }
@@ -279,6 +378,17 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     // Intento principal: "leads"
     const u1 = await sb.from("leads").update(updateData).eq("id", id).select("*").maybeSingle();
     if (!u1.error && u1.data) {
+      // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
+      if (socioCreationError) {
+        return NextResponse.json(
+          { 
+            data: u1.data, 
+            error: null,
+            warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
+          } satisfies ApiResp<any> & { warning?: string },
+          { status: 200 }
+        );
+      }
       return NextResponse.json({ data: u1.data, error: null } satisfies ApiResp<any>, { status: 200 });
     }
 
@@ -287,6 +397,18 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     if (u2.error) {
       const msg = u1.error?.message || u2.error.message || "Error";
       return NextResponse.json({ data: null, error: msg } satisfies ApiResp<null>, { status: 500 });
+    }
+
+    // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
+    if (socioCreationError) {
+      return NextResponse.json(
+        { 
+          data: u2.data ?? null, 
+          error: null,
+          warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
+        } satisfies ApiResp<any> & { warning?: string },
+        { status: 200 }
+      );
     }
 
     return NextResponse.json({ data: u2.data ?? null, error: null } satisfies ApiResp<any>, { status: 200 });

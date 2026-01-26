@@ -53,7 +53,193 @@ export async function PATCH(req: Request) {
     }
 
     const supabase = supabaseAdmin();
+    const normalizedPipeline = pipeline.trim().toLowerCase();
 
+    // Si el pipeline es "Ganado", procesar cada lead individualmente para crear socios
+    if (normalizedPipeline === "ganado") {
+      const results: any[] = [];
+      const warnings: string[] = [];
+
+      for (const leadId of ids) {
+        try {
+          // Obtener lead completo
+          const currentLead = await supabase
+            .from("leads")
+            .select("pipeline, is_member, nombre, email, telefono, empresa_id, website")
+            .eq("id", leadId)
+            .maybeSingle();
+
+          if (currentLead.error || !currentLead.data) {
+            warnings.push(`Lead ${leadId}: No encontrado`);
+            continue;
+          }
+
+          const lead = currentLead.data;
+          const currentPipeline = cleanStr(lead.pipeline);
+          const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
+          const wasGanado = normalizedCurrent === "ganado";
+          const isAlreadyMember = lead.is_member === true;
+
+          // Resolver empresa_id: si no existe, buscar o crear empresa
+          let empresaIdResolved: string | null = lead.empresa_id ?? null;
+          let empresaCreated = false;
+
+          if (!empresaIdResolved && lead.nombre) {
+            // Buscar empresa existente por nombre (case-insensitive)
+            const existingEmpresa = await supabase
+              .from("empresas")
+              .select("id")
+              .ilike("nombre", lead.nombre.trim())
+              .limit(1)
+              .maybeSingle();
+
+            if (existingEmpresa.data?.id) {
+              empresaIdResolved = existingEmpresa.data.id;
+            } else {
+              // Crear nueva empresa con datos del lead
+              const empresaPayload: any = {
+                nombre: lead.nombre.trim(),
+                tipo: "empresa",
+                email: lead.email ?? null,
+                telefono: lead.telefono ?? null,
+                web: lead.website ?? null,
+                estado: "Pendiente",
+                aprobada: false,
+              };
+
+              const newEmpresa = await supabase
+                .from("empresas")
+                .insert(empresaPayload)
+                .select("id")
+                .single();
+
+              if (newEmpresa.data?.id) {
+                empresaIdResolved = newEmpresa.data.id;
+                empresaCreated = true;
+              } else {
+                warnings.push(`Lead ${leadId}: Error creando empresa: ${newEmpresa.error?.message ?? "Unknown error"}`);
+              }
+            }
+          }
+
+          // Actualizar pipeline y empresa_id si se resolvió
+          const updatePayload: any = { pipeline };
+          if (empresaIdResolved) {
+            updatePayload.empresa_id = empresaIdResolved;
+          }
+
+          const updateRes = await supabase
+            .from("leads")
+            .update(updatePayload)
+            .eq("id", leadId)
+            .select("id,pipeline,updated_at")
+            .maybeSingle();
+
+          if (updateRes.error) {
+            warnings.push(`Lead ${leadId}: Error actualizando pipeline: ${updateRes.error.message}`);
+            continue;
+          }
+
+          if (updateRes.data) {
+            results.push(updateRes.data);
+          }
+
+          // Si no era "Ganado" antes o no es miembro todavía, crear/actualizar socio
+          if (!wasGanado || !isAlreadyMember) {
+            const now = new Date().toISOString();
+            const today = new Date().toISOString().split("T")[0];
+
+            // Actualizar lead: is_member=true, member_since=now()
+            await supabase
+              .from("leads")
+              .update({ is_member: true, member_since: now })
+              .eq("id", leadId);
+
+            // Buscar socio existente por lead_id
+            const existingSocio = await supabase
+              .from("socios")
+              .select("id")
+              .eq("lead_id", leadId)
+              .maybeSingle();
+
+            let socioId: string;
+
+            if (existingSocio.data?.id) {
+              socioId = existingSocio.data.id;
+            } else {
+              // Generar nuevo id tipo S-001, S-002...
+              const lastSocio = await supabase
+                .from("socios")
+                .select("id")
+                .order("id", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              socioId = "S-001";
+              if (lastSocio.data?.id) {
+                const match = String(lastSocio.data.id).match(/^S-(\d+)$/);
+                if (match) {
+                  const num = parseInt(match[1], 10);
+                  const nextNum = num + 1;
+                  socioId = `S-${String(nextNum).padStart(3, "0")}`;
+                }
+              }
+            }
+
+            // Preparar datos del socio (con empresa_id resuelto)
+            const socioDataBase: any = {
+              id: socioId,
+              lead_id: leadId,
+              nombre: lead.nombre ?? null,
+              email: lead.email ?? null,
+              telefono: lead.telefono ?? null,
+              empresa_id: empresaIdResolved, // Usar empresa_id resuelto
+              plan: "Bronce",
+              estado: "Activo",
+              fecha_alta: today,
+              proxima_accion: null,
+            };
+
+            // Intentar upsert con codigo
+            let socioData = { ...socioDataBase, codigo: socioId };
+            let upsertSocio = await supabase
+              .from("socios")
+              .upsert(socioData, { onConflict: "lead_id" })
+              .select("id, empresa_id")
+              .maybeSingle();
+
+            // Si falla por columna codigo, reintentar sin codigo
+            if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
+              socioData = socioDataBase;
+              upsertSocio = await supabase
+                .from("socios")
+                .upsert(socioData, { onConflict: "lead_id" })
+                .select("id, empresa_id")
+                .maybeSingle();
+            }
+
+            if (upsertSocio.error) {
+              warnings.push(`Lead ${leadId}: Error creando socio: ${upsertSocio.error.message}`);
+            } else if (upsertSocio.data) {
+              console.log(`[BULK] Socio upsert OK: leadId=${leadId}, socioId=${socioId}, empresaId=${upsertSocio.data.empresa_id ?? "null"}, empresaCreated=${empresaCreated}`);
+            }
+          }
+        } catch (e: any) {
+          warnings.push(`Lead ${leadId}: ${e?.message ?? "Error inesperado"}`);
+        }
+      }
+
+      return NextResponse.json(
+        { 
+          data: { updated: results.length, rows: results }, 
+          error: null,
+          warnings: warnings.length > 0 ? warnings : undefined
+        },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    // Para otros pipelines, actualización directa (más rápido)
     const { data, error } = await supabase
       .from("leads")
       .update({ pipeline })

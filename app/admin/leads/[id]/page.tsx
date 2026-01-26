@@ -495,14 +495,20 @@ export default function LeadDetailPage() {
         body: JSON.stringify(payload),
       });
 
-      const json = (await res.json()) as LeadApiResponse;
+      const json = (await res.json()) as LeadApiResponse & { warning?: string };
       if (!res.ok) throw new Error(json?.error ?? "Error actualizando lead");
 
       const updated = json?.data ?? null;
       if (!updated) throw new Error("No se recibió el lead actualizado");
 
       setLead(updated);
-      flash("Guardado.");
+      
+      // Si hay advertencia (ej: error al crear socio), mostrarla pero no fallar
+      if (json?.warning) {
+        setError(json.warning);
+      } else {
+        flash("Guardado.");
+      }
     } catch (e: any) {
       setError(e?.message ?? "Error actualizando lead");
       throw e; // Re-lanzar para que el caller pueda manejar el error
@@ -1012,6 +1018,22 @@ export default function LeadDetailPage() {
   }
 
   async function saveEdit() {
+    // Validar que no se intente cambiar la etapa si el lead está cerrado
+    if (draft.pipeline !== undefined && lead?.pipeline) {
+      const currentPipeline = norm(lead.pipeline);
+      const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : "";
+      const isClosed = normalizedCurrent === "ganado" || normalizedCurrent === "perdido";
+      
+      if (isClosed) {
+        const newPipeline = norm(draft.pipeline as string);
+        const normalizedNew = newPipeline ? newPipeline.trim().toLowerCase() : "";
+        if (normalizedNew !== normalizedCurrent) {
+          setError("Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido.");
+          return;
+        }
+      }
+    }
+    
     await saveDraft();
     setEditing(false);
   }
@@ -1476,27 +1498,46 @@ export default function LeadDetailPage() {
                     <div>
                       <div className="text-xs font-semibold text-slate-500">Etapa</div>
 
-                      {editing ? (
-                        <select
-                          value={((draft.pipeline as any) ?? "Nuevo") as string}
-                          onChange={(e) => setDraft((p) => ({ ...p, pipeline: e.target.value }))}
-                          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                          disabled={mutating || loadingEtapas}
-                        >
-                          <option value="Nuevo">Nuevo</option>
-                          {etapas
-                            .filter((x) => x !== "Nuevo")
-                            .map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            ))}
-                        </select>
-                      ) : (
-                        <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                          {(pipelineValue ?? lead?.pipeline ?? "Nuevo") || "Nuevo"}
-                        </div>
-                      )}
+                      {(() => {
+                        const currentPipeline = (editing ? (draft.pipeline as any) : lead?.pipeline) ?? "Nuevo";
+                        const normalizedCurrent = typeof currentPipeline === "string" ? currentPipeline.trim().toLowerCase() : "";
+                        const isClosed = normalizedCurrent === "ganado" || normalizedCurrent === "perdido";
+                        
+                        return editing ? (
+                          <>
+                            <select
+                              value={currentPipeline as string}
+                              onChange={(e) => {
+                                if (isClosed) {
+                                  setError("Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido.");
+                                  return;
+                                }
+                                setDraft((p) => ({ ...p, pipeline: e.target.value }));
+                              }}
+                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                              disabled={mutating || loadingEtapas || isClosed}
+                            >
+                              <option value="Nuevo">Nuevo</option>
+                              {etapas
+                                .filter((x) => x !== "Nuevo")
+                                .map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                            </select>
+                            {isClosed && (
+                              <div className="mt-1 text-xs text-amber-600">
+                                Este lead está cerrado (Ganado/Perdido). No se puede cambiar la etapa.
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            {(pipelineValue ?? lead?.pipeline ?? "Nuevo") || "Nuevo"}
+                          </div>
+                        );
+                      })()}
 
                       {editing && loadingEtapas && (
                         <div className="mt-1 text-xs text-slate-500">Cargando etapas…</div>

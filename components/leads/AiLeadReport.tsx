@@ -28,6 +28,21 @@ type AiResp = {
   error?: string | null;
 };
 
+// Configuración única de tabs
+const TABS_CONFIG = [
+  { id: "investigacion_digital", label: "Investigación Digital", tabId: "INVESTIGACION_DIGITAL" },
+  { id: "redes_sociales", label: "Redes Sociales", tabId: "REDES_SOCIALES" },
+  { id: "pauta_publicitaria", label: "Pauta Publicitaria", tabId: "PAUTA_PUBLICITARIA" },
+  { id: "prestigio_ia", label: "Prestigio en IA", tabId: "PRESTIGIO_IA" },
+  { id: "posicionamiento", label: "Posicionamiento en el mercado", tabId: "POSICIONAMIENTO" },
+  { id: "competencia", label: "Competencia", tabId: "COMPETENCIA" },
+  { id: "foda", label: "FODA", tabId: "FODA" },
+  { id: "oportunidades", label: "Oportunidades", tabId: "OPORTUNIDADES" },
+  { id: "acciones", label: "Acciones", tabId: "ACCIONES" },
+  { id: "materiales", label: "Materiales listos", tabId: "MATERIALES_LISTOS" },
+  { id: "cierre", label: "Cierre de la venta", tabId: "CIERRE_VENTA" },
+] as const;
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -40,73 +55,131 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 /**
- * Extrae una sección específica del informe markdown por título
+ * Extrae las secciones de datos faltantes de un contenido
  */
-function extractSection(report: string, section: string): string {
-  if (!report || !report.trim()) return "";
+function extractMissingDataSections(content: string): {
+  faltantes: string[];
+  preguntas: string[];
+  dondeCargar: string[];
+} {
+  const faltantes: string[] = [];
+  const preguntas: string[] = [];
+  const dondeCargar: string[] = [];
+
+  if (!content || !content.trim()) {
+    return { faltantes, preguntas, dondeCargar };
+  }
+
+  // Extraer sección FALTANTES
+  const faltantesMatch = content.match(/###\s+FALTANTES\s*\n([\s\S]*?)(?=###|$)/i);
+  if (faltantesMatch) {
+    const faltantesText = faltantesMatch[1].trim();
+    // Extraer líneas que empiezan con - o *
+    const lines = faltantesText.split("\n").filter(line => {
+      const trimmed = line.trim();
+      return trimmed.startsWith("-") || trimmed.startsWith("*");
+    });
+    faltantes.push(...lines.map(line => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+  }
+
+  // Extraer sección PREGUNTAS PARA COMPLETAR
+  const preguntasMatch = content.match(/###\s+PREGUNTAS PARA COMPLETAR[^\n]*\s*\n([\s\S]*?)(?=###|$)/i);
+  if (preguntasMatch) {
+    const preguntasText = preguntasMatch[1].trim();
+    // Extraer líneas numeradas o con -
+    const lines = preguntasText.split("\n").filter(line => {
+      const trimmed = line.trim();
+      return /^\d+[).]\s/.test(trimmed) || trimmed.startsWith("-") || trimmed.startsWith("*");
+    });
+    preguntas.push(...lines.map(line => line.replace(/^\d+[).]\s*/, "").replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+  }
+
+  // Extraer sección DÓNDE CARGARLO EN EL CRM
+  const dondeCargarMatch = content.match(/###\s+DÓNDE CARGARLO EN EL CRM\s*\n([\s\S]*?)(?=###|$)/i);
+  if (dondeCargarMatch) {
+    const dondeCargarText = dondeCargarMatch[1].trim();
+    // Extraer líneas que empiezan con - o *
+    const lines = dondeCargarText.split("\n").filter(line => {
+      const trimmed = line.trim();
+      return trimmed.startsWith("-") || trimmed.startsWith("*");
+    });
+    dondeCargar.push(...lines.map(line => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+  }
+
+  return { faltantes, preguntas, dondeCargar };
+}
+
+/**
+ * Remueve las secciones de datos faltantes del contenido para no duplicarlas
+ */
+function removeMissingDataSections(content: string): string {
+  if (!content || !content.trim()) return content;
+
+  let cleaned = content;
+
+  // Remover sección FALTANTES
+  cleaned = cleaned.replace(/###\s+FALTANTES\s*\n[\s\S]*?(?=###|$)/i, "");
+
+  // Remover sección PREGUNTAS PARA COMPLETAR
+  cleaned = cleaned.replace(/###\s+PREGUNTAS PARA COMPLETAR[^\n]*\s*\n[\s\S]*?(?=###|$)/i, "");
+
+  // Remover sección DÓNDE CARGARLO EN EL CRM
+  cleaned = cleaned.replace(/###\s+DÓNDE CARGARLO EN EL CRM\s*\n[\s\S]*?(?=###|$)/i, "");
+
+  return cleaned.trim();
+}
+
+/**
+ * Parsea el informe completo y extrae todas las secciones por TAB
+ * Formato esperado: ### TAB:<ID>
+ * Retorna un objeto { [tabId]: contenido }
+ */
+function parseReportTabs(report: string): Record<string, string> {
+  const tabs: Record<string, string> = {};
   
-  // Mapeo de tabs a patrones de búsqueda (case-insensitive)
-  const sectionPatterns: Record<string, RegExp[]> = {
-    foda: [
-      /^##\s+FODA\s+/mi,
-      /^##\s+\d+[\.\)]\s*FODA\s+/mi,
-      /^##\s+FODA\s+como/mi,
-    ],
-    oportunidades: [
-      /^##\s+OPORTUNIDADES\s+/mi,
-      /^##\s+\d+[\.\)]\s*OPORTUNIDADES\s+/mi,
-      /^##\s+Oportunidades\s+priorizadas/mi,
-    ],
-    acciones: [
-      /^##\s+ACCIONES\s+/mi,
-      /^##\s+\d+[\.\)]\s*ACCIONES\s+/mi,
-      /^##\s+Plan\s+de\s+acci[oó]n/mi,
-      /^##\s+Acciones\s+en\s+72\s+horas/mi,
-    ],
-    materiales: [
-      /^##\s+MATERIALES\s+LISTOS\s+/mi,
-      /^##\s+MATERIALES\s+/mi,
-      /^##\s+Recursos\s+/mi,
-      /^##\s+Copys\s+/mi,
-      /^##\s+Scripts\s+/mi,
-    ],
-    siguientes: [
-      /^##\s+SIGUIENTES\s+PASOS\s+/mi,
-      /^##\s+Siguientes\s+pasos\s+/mi,
-      /^##\s+Pr[oó]ximos\s+pasos\s+/mi,
-      /^##\s+Recomendaci[oó]n\s+/mi,
-    ],
-  };
+  if (!report || !report.trim()) {
+    return tabs;
+  }
   
-  const patterns = sectionPatterns[section] || [];
-  if (patterns.length === 0) return "";
+  // Buscar todas las ocurrencias de ### TAB:<ID>
+  const tabPattern = /###\s+TAB:\s*(\w+)\s*\n/g;
+  const matches: Array<{ tabId: string; startIndex: number; endIndex: number }> = [];
   
-  // Buscar el patrón que coincida
-  let match: RegExpMatchArray | null = null;
-  let matchedPattern: RegExp | null = null;
+  let match;
+  while ((match = tabPattern.exec(report)) !== null) {
+    const tabId = match[1];
+    const startIndex = match.index + match[0].length;
+    
+    // Buscar el siguiente ### TAB: o el final del documento
+    const remaining = report.slice(startIndex);
+    const nextTabMatch = remaining.match(/###\s+TAB:\s+/);
+    const endIndex = nextTabMatch && nextTabMatch.index !== null
+      ? startIndex + nextTabMatch.index
+      : report.length;
+    
+    matches.push({ tabId, startIndex, endIndex });
+  }
   
-  for (const pattern of patterns) {
-    match = report.match(pattern);
-    if (match) {
-      matchedPattern = pattern;
-      break;
+  // Si no hay matches, intentar buscar al final del documento (último tab sin salto de línea)
+  if (matches.length === 0) {
+    const altPattern = /###\s+TAB:\s*(\w+)\s*$/gm;
+    let altMatch;
+    while ((altMatch = altPattern.exec(report)) !== null) {
+      const tabId = altMatch[1];
+      const startIndex = altMatch.index! + altMatch[0].length;
+      matches.push({ tabId, startIndex, endIndex: report.length });
     }
   }
   
-  if (!match || !matchedPattern) return ""; // No se encontró la sección
-  
-  const startIdx = match.index!;
-  
-  // Buscar el siguiente título de nivel 2 (##) o el final del documento
-  const remaining = report.slice(startIdx);
-  const nextSectionMatch = remaining.match(/\n##\s+/);
-  
-  if (nextSectionMatch && nextSectionMatch.index !== null) {
-    return remaining.slice(0, nextSectionMatch.index).trim();
+  // Extraer contenido para cada tab encontrado
+  for (const { tabId, startIndex, endIndex } of matches) {
+    const content = report.slice(startIndex, endIndex).trim();
+    if (content) {
+      tabs[tabId] = content;
+    }
   }
   
-  // Si no hay siguiente sección, devolver hasta el final
-  return remaining.trim();
+  return tabs;
 }
 
 async function textToPdfBytes(title: string, content: string) {
@@ -215,7 +288,11 @@ export function AiLeadReport({
   const [aiPromptExtra, setAiPromptExtra] = useState<string>("");
   const [savingPrompt, setSavingPrompt] = useState(false);
   const [reportExpanded, setReportExpanded] = useState(false);
-  const [activeReportTab, setActiveReportTab] = useState<"foda" | "oportunidades" | "acciones" | "materiales" | "siguientes">("foda");
+  const [activeReportTab, setActiveReportTab] = useState<string>(TABS_CONFIG[0].id);
+  const [regeneratingTab, setRegeneratingTab] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const [missingAnswersText, setMissingAnswersText] = useState<string>("");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const canRun = !!(leadId && leadId.trim());
@@ -293,66 +370,267 @@ export function AiLeadReport({
     return `AI_Informe_${base}_${stamp}.pdf`;
   }, [lead?.nombre]);
 
-  async function generate(regenerate: boolean = false) {
-    // Log solo valores primitivos
-    console.log("generate() - leadId:", leadId?.trim() || "(vacío)", "canRun:", canRun, "regenerate:", regenerate);
-    if (!canRun) return;
-    setError(null);
-    setLoading(true);
-    setStatus("idle");
+  // Helper para leer prompts desde localStorage con timestamps
+  const getAiPromptsFromLocalStorage = (): {
+    prompts: { base?: string; modules?: Record<string, string> };
+    meta: { updated_at: { base?: number; modules?: Record<string, number> } };
+  } | null => {
     try {
-      // Guardar el lead antes de generar el informe
-      // Si el guardado falla, el error se propaga y NO se llama a la IA
-      if (onBeforeGenerate) {
-        setStatus("saving");
-        await onBeforeGenerate();
+      const stored = localStorage.getItem("camara_costa_ai_prompts_v1");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Si no tiene meta, crear estructura con timestamps actuales
+        const now = Date.now();
+        const meta = parsed.meta || {
+          updated_at: {
+            base: parsed.base ? now : undefined,
+            modules: {} as Record<string, number>,
+          },
+        };
+        
+        // Asegurar que cada módulo tenga timestamp
+        if (parsed.modules) {
+          Object.keys(parsed.modules).forEach((key) => {
+            if (!meta.updated_at.modules?.[key]) {
+              meta.updated_at.modules = meta.updated_at.modules || {};
+              meta.updated_at.modules[key] = now;
+            }
+          });
+        }
+        
+        return {
+          prompts: { base: parsed.base, modules: parsed.modules },
+          meta,
+        };
+      }
+    } catch (e) {
+      console.warn("[AI] Error leyendo prompts desde localStorage:", e);
+    }
+    return null;
+  };
+
+  // Derivar tabs desde el texto completo del informe
+  const reportTabs = useMemo(() => {
+    return parseReportTabs(report);
+  }, [report]);
+
+  // Derivar datos faltantes por tab
+  const missingDataByTab = useMemo(() => {
+    const result: Record<string, { faltantes: string[]; preguntas: string[]; dondeCargar: string[] }> = {};
+    Object.entries(reportTabs).forEach(([tabId, content]) => {
+      result[tabId] = extractMissingDataSections(content);
+    });
+    return result;
+  }, [reportTabs]);
+
+  // Función para copiar preguntas al portapapeles
+  const copyQuestions = async (preguntas: string[]) => {
+    if (preguntas.length === 0) return;
+    const text = preguntas.map((p, idx) => `${idx + 1}) ${p}`).join("\n");
+    await navigator.clipboard.writeText(text);
+    setToastMessage("Preguntas copiadas al portapapeles ✅");
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  // Función para agregar respuestas a faltantes a Personalización IA con subsecciones por módulo
+  const addMissingAnswersToPersonalization = (moduleId: string, moduleLabel: string) => {
+    if (!missingAnswersText.trim()) {
+      setToastMessage("No hay respuestas para agregar");
+      setTimeout(() => setToastMessage(null), 2000);
+      return;
+    }
+
+    // Formatear respuestas como lista con viñetas
+    const answersLines = missingAnswersText.trim().split("\n").filter(line => line.trim());
+    const formattedAnswers = answersLines.map(line => {
+      const trimmed = line.trim();
+      // Si ya empieza con -, dejarlo así; sino agregar -
+      return trimmed.startsWith("-") ? trimmed : `- ${trimmed}`;
+    }).join("\n");
+
+    // Crear subsección del módulo
+    const moduleSubsection = `#### ${moduleLabel}\n${formattedAnswers}`;
+    
+    let updatedPrompt = aiPromptExtra;
+    const sectionHeader = "### RESPUESTAS A FALTANTES";
+    
+    // Verificar si ya existe la sección "RESPUESTAS A FALTANTES"
+    const hasExistingSection = updatedPrompt.includes(sectionHeader);
+    
+    if (hasExistingSection) {
+      // Buscar la sección completa
+      const sectionPattern = /###\s+RESPUESTAS A FALTANTES([\s\S]*?)(?=###|$)/i;
+      const match = updatedPrompt.match(sectionPattern);
+      
+      if (match) {
+        const existingContent = match[1] || "";
+        const moduleSubsectionPattern = new RegExp(`####\\s+${moduleLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?(?=####|$)`, "i");
+        
+        if (moduleSubsectionPattern.test(existingContent)) {
+          // Reemplazar solo la subsección del módulo
+          const updatedContent = existingContent.replace(moduleSubsectionPattern, moduleSubsection);
+          updatedPrompt = updatedPrompt.replace(sectionPattern, `${sectionHeader}${updatedContent}`);
+        } else {
+          // Agregar la subsección al final de la sección existente
+          const updatedContent = existingContent.trim() 
+            ? `${existingContent}\n\n${moduleSubsection}`
+            : `\n${moduleSubsection}`;
+          updatedPrompt = updatedPrompt.replace(sectionPattern, `${sectionHeader}${updatedContent}`);
+        }
+      }
+    } else {
+      // Crear nueva sección con la subsección del módulo
+      const newSection = `${sectionHeader}\n${moduleSubsection}`;
+      if (updatedPrompt.trim()) {
+        updatedPrompt = `${updatedPrompt}\n\n${newSection}`;
+      } else {
+        updatedPrompt = newSection;
+      }
+    }
+    
+    setAiPromptExtra(updatedPrompt);
+    setMissingAnswersText("");
+    setToastMessage("Respuestas agregadas a Personalización IA ✅");
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  // Función para regenerar un tab específico
+  const regenerateTab = async (tabId: string) => {
+    if (!leadId?.trim()) return;
+    
+    setRegeneratingTab(tabId);
+    setError(null);
+    setToastMessage("Regenerando…");
+    
+    try {
+      // Leer prompts desde localStorage con metadata
+      const promptsData = getAiPromptsFromLocalStorage();
+      
+      if (!promptsData) {
+        throw new Error("No se encontraron prompts en localStorage");
       }
 
-      setStatus("generating");
-      
-      // Validar leadId antes de hacer el fetch
-      const validLeadId = leadId?.trim();
-      if (!validLeadId) {
-        throw new Error("Lead ID inválido o faltante");
-      }
-      
-      // Crear body con solo strings/boolean (sin objetos raros)
+      // Incluir personalización IA en el body (siempre)
       const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+      
+      // Construir body con estructura requerida
       const body: {
         custom_prompt: string | null;
+        personalization?: string | null;
         force_regenerate: boolean;
+        only_module: string;
+        prompts: { base: string; modules: Record<string, string> };
+        prompts_meta: { updated_at: { base?: number; modules?: Record<string, number> } };
       } = {
-        custom_prompt: customPromptValue,
-        force_regenerate: regenerate,
+        custom_prompt: customPromptValue, // Personalización IA siempre incluida (backward compatibility)
+        personalization: customPromptValue, // Nuevo campo explícito
+        force_regenerate: true,
+        only_module: tabId,
+        prompts: {
+          base: promptsData.prompts.base || "",
+          modules: { [tabId]: promptsData.prompts.modules?.[tabId] || "" },
+        },
+        prompts_meta: promptsData.meta,
       };
-      
-      // Log para debugging (solo valores primitivos)
-      console.log("AI REPORT leadId=", validLeadId, "custom_prompt_len=", customPromptValue?.length ?? 0, "force=", regenerate);
-      
-      const res = await fetch(`/api/admin/leads/${encodeURIComponent(validLeadId)}/ai-report`, {
+
+      const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(body),
       });
 
-      const json = (await res.json().catch(() => ({}))) as AiResp;
-      if (!res.ok) throw new Error(json?.error ?? "No se pudo generar el informe IA.");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Error regenerando módulo");
+      }
 
-      const next = json?.data?.report ?? "";
-      if (!next.trim()) throw new Error("La API devolvió un informe vacío.");
+      const data = await res.json();
+      const updatedReport = data.data?.report ?? data.report ?? "";
+      
+      if (updatedReport) {
+        setReport(updatedReport);
+        setToastMessage("Actualizado ✅");
+        setTimeout(() => setToastMessage(null), 3000);
+      }
+    } catch (err: any) {
+      console.error("[AI] ERROR regenerando módulo", err);
+      setError(err?.message ?? "Error regenerando módulo. Ver consola.");
+      setToastMessage(null);
+    } finally {
+      setRegeneratingTab(null);
+    }
+  };
 
-      setReport(next);
+  const generateAI = async () => {
+    console.log("[AI] click generar");
+    console.log("[AI] llamando endpoint");
+    await handleGenerate(false);
+  };
+
+  const handleGenerate = async (force = false, moduleId?: string) => {
+    console.log("[AI] CLICK Generar IA", { force, moduleId });
+
+    try {
+      setLoading(true);
+      setError(null);
+      setStatus("generating");
+
+      // Leer prompts desde localStorage usando helper
+      const promptsFromStorage = getAiPromptsFromLocalStorage();
+
+      // Crear body - incluir personalización IA siempre
+      const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+      const body: {
+        custom_prompt: string | null;
+        personalization?: string | null;
+        force_regenerate: boolean;
+        module_id?: string | null;
+        prompts?: { base?: string; modules?: Record<string, string> };
+      } = {
+        custom_prompt: customPromptValue, // Personalización IA siempre incluida (backward compatibility)
+        personalization: customPromptValue, // Nuevo campo explícito
+        force_regenerate: force,
+        module_id: moduleId || null,
+      };
+
+      // Agregar prompts si existen
+      if (promptsFromStorage) {
+        body.prompts = promptsFromStorage;
+      }
+
+      console.log("[AI] llamando endpoint", `/api/admin/leads/${leadId}/ai-report`);
+      
+      const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      console.log("[AI] fetch enviado", res.status);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Error generando informe IA");
+      }
+
+      const data = await res.json();
+      console.log("[AI] respuesta IA OK", data);
+
+      setReport(data.data?.report ?? data.report ?? "");
       setStatus("done");
-      setReportExpanded(true); // Auto-expandir cuando se genera nuevo informe
-    } catch (e: any) {
-      // Si el error viene del guardado, mostrar mensaje específico
-      const errorMsg = e?.message ?? "Error generando informe IA";
-      setError(errorMsg);
+      setReportExpanded(true);
+    } catch (err: any) {
+      console.error("[AI] ERROR generando informe", err);
+      setError(err?.message ?? "Error generando informe IA. Ver consola.");
       setStatus("idle");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   async function downloadPdf() {
     if (!report.trim()) return;
@@ -388,28 +666,15 @@ export function AiLeadReport({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={(e) => {
-              e?.preventDefault?.();
-              generate(false); // false = no regenerar
-            }}
-            disabled={!canRun || loading}
+            onClick={() => generateAI()}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-            title={!canRun ? "Lead ID inválido" : "Generar informe"}
           >
             {loading ? "Generando…" : "Generar IA"}
           </button>
 
           <button
             type="button"
-            onClick={(e) => {
-              e?.preventDefault?.();
-              const ok = window.confirm(
-                "Esto regenerará el informe IA y reemplazará el actual. ¿Deseas continuar?"
-              );
-              if (!ok) return;
-              generate(true); // true = regenerate
-            }}
-            disabled={!canRun || loading}
+            onClick={() => handleGenerate(true)}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
           >
             Regenerar IA
@@ -447,6 +712,17 @@ export function AiLeadReport({
           )}
         </div>
       </div>
+
+      {toastMessage && (
+        <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 flex items-center gap-2">
+          {toastMessage.includes("✅") ? (
+            <span className="text-green-600">✅</span>
+          ) : (
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></span>
+          )}
+          {toastMessage}
+        </div>
+      )}
 
       {error && (
         <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -495,77 +771,231 @@ export function AiLeadReport({
 
             {reportExpanded ? (
               <div className="mt-4">
-                {/* Tabs del informe */}
-                <div className="mb-4 inline-flex overflow-hidden rounded-xl border bg-white">
-                  <button
-                    type="button"
-                    onClick={() => setActiveReportTab("foda")}
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      activeReportTab === "foda"
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    FODA
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveReportTab("oportunidades")}
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      activeReportTab === "oportunidades"
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    Oportunidades
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveReportTab("acciones")}
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      activeReportTab === "acciones"
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    Acciones
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveReportTab("materiales")}
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      activeReportTab === "materiales"
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    Materiales Listos
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveReportTab("siguientes")}
-                    className={`px-4 py-2 text-sm font-semibold transition ${
-                      activeReportTab === "siguientes"
-                        ? "bg-slate-900 text-white"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    Siguientes Pasos
-                  </button>
+                {/* Tabs del informe (11 módulos) - iterar sobre TABS_CONFIG */}
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {TABS_CONFIG.map((tab) => {
+                    const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setActiveReportTab(tab.id)}
+                        className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition flex items-center gap-1.5 ${
+                          activeReportTab === tab.id
+                            ? "bg-slate-900 text-white border-slate-900"
+                            : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        {tab.label}
+                        {hasMissingData && (
+                          <span className="text-amber-500" title="Faltan datos para mejorar precisión">
+                            ⚠️
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Contenido del tab activo */}
                 <div className="rounded-xl border bg-white p-6">
-                  {viewMode === "raw" ? (
-                    <pre className="whitespace-pre-wrap text-sm text-slate-700 font-mono">
-                      {extractSection(report, activeReportTab) || "No hay contenido para esta sección."}
-                    </pre>
-                  ) : (
-                    <div className="prose max-w-none">
-                      {extractSection(report, activeReportTab) ? (
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
+                  {/* Header con botón regenerar y prompt preview */}
+                  <div className="mb-4 space-y-3 border-b border-slate-200 pb-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-slate-900">
+                        {TABS_CONFIG.find(t => t.id === activeReportTab)?.label || "Tab"}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                          if (activeTabConfig) {
+                            regenerateTab(activeTabConfig.tabId);
+                          }
+                        }}
+                        disabled={regeneratingTab === TABS_CONFIG.find(t => t.id === activeReportTab)?.tabId}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {regeneratingTab === TABS_CONFIG.find(t => t.id === activeReportTab)?.tabId ? (
+                          <span className="flex items-center gap-1.5">
+                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent"></span>
+                            Regenerando...
+                          </span>
+                        ) : (
+                          "Regenerar este módulo"
+                        )}
+                      </button>
+                    </div>
+                    
+                    {/* Prompt en uso */}
+                    {(() => {
+                      const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                      if (!activeTabConfig) return null;
+                      
+                      const promptsData = getAiPromptsFromLocalStorage();
+                      const modulePrompt = promptsData?.prompts.modules?.[activeTabConfig.tabId] || "";
+                      const basePrompt = promptsData?.prompts.base || "";
+                      
+                      if (!modulePrompt && !basePrompt) return null;
+                      
+                      const previewLines = modulePrompt.split("\n").slice(0, 2).join("\n");
+                      const fullPrompt = modulePrompt || basePrompt;
+                      
+                      return (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold text-blue-900 mb-1">Prompt en uso</div>
+                              {showPromptPreview ? (
+                                <pre className="text-xs text-blue-800 whitespace-pre-wrap font-mono max-h-40 overflow-y-auto">
+                                  {fullPrompt}
+                                </pre>
+                              ) : (
+                                <div className="text-xs text-blue-700 line-clamp-2">
+                                  {previewLines || "(Sin preview disponible)"}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowPromptPreview(!showPromptPreview)}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
+                            >
+                              {showPromptPreview ? "Ocultar" : "Ver completo"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {(() => {
+                    // Buscar el tab activo en TABS_CONFIG
+                    const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                    if (!activeTabConfig) {
+                      return (
+                        <div className="text-slate-500 italic">Tab no encontrado.</div>
+                      );
+                    }
+                    
+                    // Obtener contenido desde reportTabs usando tabId
+                    const rawSectionContent = reportTabs[activeTabConfig.tabId] || "";
+                    
+                    // Extraer datos faltantes
+                    const missingData = missingDataByTab[activeTabConfig.tabId] || { faltantes: [], preguntas: [], dondeCargar: [] };
+                    const hasMissingData = missingData.faltantes.length > 0 || missingData.preguntas.length > 0 || missingData.dondeCargar.length > 0;
+                    
+                    // Remover secciones de datos faltantes del contenido para no duplicarlas
+                    const sectionContent = removeMissingDataSections(rawSectionContent);
+                    const hasContent = sectionContent.trim() && 
+                      !sectionContent.includes("Error generando") && 
+                      !sectionContent.includes("Sin contenido generado");
+                    
+                    if (!hasContent && !hasMissingData) {
+                      return (
+                        <div className="text-slate-500 italic">
+                          Sin contenido aún.
+                        </div>
+                      );
+                    }
+                    
+                    if (viewMode === "raw") {
+                      return (
+                        <pre className="whitespace-pre-wrap text-sm text-slate-700 font-mono">
+                          {rawSectionContent}
+                        </pre>
+                      );
+                    }
+                    
+                    return (
+                      <div className="prose max-w-none">
+                        {/* Bloque destacado de datos faltantes */}
+                        {hasMissingData && (
+                          <div className="mb-6 rounded-xl border-2 border-amber-200 bg-amber-50 p-4">
+                            <div className="mb-3 flex items-center justify-between">
+                              <h4 className="text-sm font-semibold text-amber-900">
+                                Faltan datos para mejorar precisión
+                              </h4>
+                              {missingData.preguntas.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyQuestions(missingData.preguntas)}
+                                  className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                                >
+                                  Copiar preguntas
+                                </button>
+                              )}
+                            </div>
+                            
+                            {missingData.faltantes.length > 0 && (
+                              <div className="mb-3">
+                                <div className="text-xs font-semibold text-amber-800 mb-1.5">Faltantes:</div>
+                                <ul className="list-disc list-inside space-y-1 text-xs text-amber-700">
+                                  {missingData.faltantes.map((falta, idx) => (
+                                    <li key={idx}>{falta}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            
+                            {missingData.preguntas.length > 0 && (
+                              <div className="mb-3">
+                                <div className="text-xs font-semibold text-amber-800 mb-1.5">Preguntas para completar:</div>
+                                <ol className="list-decimal list-inside space-y-1 text-xs text-amber-700">
+                                  {missingData.preguntas.map((pregunta, idx) => (
+                                    <li key={idx}>{pregunta}</li>
+                                  ))}
+                                </ol>
+                              </div>
+                            )}
+                            
+                            {missingData.dondeCargar.length > 0 && (
+                              <div className="mb-3">
+                                <div className="text-xs font-semibold text-amber-800 mb-1.5">Dónde cargarlo en el CRM:</div>
+                                <ul className="list-disc list-inside space-y-1 text-xs text-amber-700">
+                                  {missingData.dondeCargar.map((donde, idx) => (
+                                    <li key={idx}>{donde}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Textarea para respuestas a faltantes */}
+                            <div className="mt-4 border-t border-amber-300 pt-3">
+                              <label htmlFor="missing-answers" className="block text-xs font-semibold text-amber-900 mb-1.5">
+                                Responder faltantes (se agregará a Personalización IA)
+                              </label>
+                              <textarea
+                                id="missing-answers"
+                                value={missingAnswersText}
+                                onChange={(e) => setMissingAnswersText(e.target.value)}
+                                placeholder="Ejemplo: Website: https://ejemplo.com. Objetivos: Expandir red de contactos B2B, participar en eventos sectoriales."
+                                className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-amber-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-0 resize-y min-h-[60px] disabled:opacity-50 disabled:cursor-not-allowed"
+                                rows={3}
+                                disabled={loading || regeneratingTab !== null}
+                              />
+                              <div className="mt-2 flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                                    if (activeTabConfig) {
+                                      addMissingAnswersToPersonalization(activeTabConfig.tabId, activeTabConfig.label);
+                                    }
+                                  }}
+                                  disabled={!missingAnswersText.trim() || loading || regeneratingTab !== null}
+                                  className="rounded-lg border border-amber-600 bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Agregar a Personalización IA
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {hasContent && (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
                             h1: ({ children }) => (
                               <h1 className="text-2xl font-bold text-slate-900 mt-6 mb-4 pb-2 border-b border-slate-200">
                                 {children}
@@ -640,17 +1070,14 @@ export function AiLeadReport({
                             hr: () => <hr className="my-6 border-slate-300" />,
                             strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
                             em: ({ children }) => <em className="italic">{children}</em>,
-                          }}
-                        >
-                          {extractSection(report, activeReportTab)}
-                        </ReactMarkdown>
-                      ) : (
-                        <div className="text-slate-500 italic">
-                          No hay contenido para esta sección en el informe.
-                        </div>
-                      )}
-                    </div>
-                  )}
+                            }}
+                          >
+                            {sectionContent}
+                          </ReactMarkdown>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ) : (

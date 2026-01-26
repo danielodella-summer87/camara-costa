@@ -2,6 +2,7 @@ import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import EditSocioForm from "./EditSocioForm";
 import SocioAcciones from "./SocioAcciones";
+import DeleteSocioButton from "./DeleteSocioButton";
 
 type Params = { id: string };
 
@@ -108,6 +109,11 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
 
         {/* Edición rápida */}
         <EditSocioForm id={socio.id} initialPlan={socio.plan} initialEstado={socio.estado} />
+
+        {/* Botón eliminar */}
+        <div className="mt-6">
+          <DeleteSocioButton socioId={socio.id} />
+        </div>
 
         {/* Acciones */}
         <SocioAcciones socioId={socio.id} />

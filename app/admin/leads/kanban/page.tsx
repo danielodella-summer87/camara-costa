@@ -536,6 +536,17 @@ export default function LeadsKanbanPage() {
     if (activeType === "card") {
       const activeId = String(e.active.id);
 
+      // Validar que el lead no esté cerrado (Ganado/Perdido)
+      const activeLead = leads.find((l) => l.id === activeId);
+      if (activeLead) {
+        const currentPipeline = norm(activeLead.pipeline);
+        if (currentPipeline === "ganado" || currentPipeline === "perdido") {
+          setError("Lead cerrado: Ganado/Perdido no se puede mover.");
+          setActiveDrag(null);
+          return;
+        }
+      }
+
       const fromCol = findColumnIdByCardId(activeId);
 
       const overId = String(e.over.id);
@@ -562,15 +573,20 @@ export default function LeadsKanbanPage() {
       setNotice(null);
 
       try {
-        await persistEtapa(activeId, targetEtapaNombre);
+        const result = await persistEtapa(activeId, targetEtapaNombre);
+        
+        // Verificar si hay advertencia sobre creación de socio
+        if ((result as any)?.warning) {
+          setError((result as any).warning);
+        } else {
+          setNotice(`Etapa guardada: ${targetEtapaNombre}`);
+        }
 
         setLeads((prev) =>
           prev.map((l) =>
             l.id === activeId ? { ...l, pipeline: targetEtapaNombre } : l
           )
         );
-
-        setNotice(`Etapa guardada: ${targetEtapaNombre}`);
 
         await fetchAll();
       } catch (err: any) {
@@ -877,9 +893,13 @@ function LeadCard({
     patch: Partial<Pick<Lead, "rating" | "next_activity_type" | "next_activity_at">>
   ) => Promise<void>;
 }) {
+  // Verificar si el lead está cerrado (Ganado/Perdido)
+  const currentPipeline = norm(lead.pipeline);
+  const isClosed = currentPipeline === "ganado" || currentPipeline === "perdido";
+  
   const s = useSortable({
     id: lead.id,
-    disabled,
+    disabled: disabled || isClosed, // Deshabilitar drag si está cerrado
     data: { type: "card" },
   });
 
@@ -915,12 +935,17 @@ function LeadCard({
       style={style}
       {...s.attributes}
       {...s.listeners}
-      className="rounded-2xl border bg-white p-3 shadow-sm"
+      className={`rounded-2xl border bg-white p-3 shadow-sm ${isClosed ? "opacity-75 cursor-not-allowed" : ""}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="font-semibold text-slate-900 truncate flex items-center gap-1">
             {nombre}
+            {isClosed && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                Cerrado
+              </span>
+            )}
             {savingId === lead.id && (
               <span className="ml-2 text-xs text-slate-500">Guardando…</span>
             )}
