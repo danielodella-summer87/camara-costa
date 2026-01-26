@@ -152,10 +152,14 @@ function parseReportTabs(report: string): Record<string, string> {
     
     // Buscar el siguiente ### TAB: o el final del documento
     const remaining = report.slice(startIndex);
-    const nextTabMatch = remaining.match(/###\s+TAB:\s+/);
-    const endIndex = nextTabMatch && nextTabMatch.index !== null
-      ? startIndex + nextTabMatch.index
-      : report.length;
+    const nextTabMatch = remaining.match(/###\s*TAB:\S+/);
+
+    const nextIndex =
+      nextTabMatch && typeof nextTabMatch.index === "number"
+        ? nextTabMatch.index
+        : null;
+
+    const endIndex = nextIndex !== null ? startIndex + nextIndex : report.length;
     
     matches.push({ tabId, startIndex, endIndex });
   }
