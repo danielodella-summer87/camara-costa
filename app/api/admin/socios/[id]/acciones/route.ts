@@ -18,7 +18,7 @@ type Ctx =
 
 /**
  * GET /api/admin/socios/[id]/acciones
- * Lista acciones del socio ordenadas por created_at desc
+ * Lista acciones del socio ordenadas por fecha_limite asc (y luego created_at desc como fallback)
  */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   const params = await Promise.resolve((ctx as any).params);
@@ -36,8 +36,9 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 
   const { data, error } = await supabase
     .from("socio_acciones")
-    .select("id,socio_id,lead_id,tipo,nota,realizada_at,created_at")
+    .select("id,socio_id,lead_id,tipo,nota,fecha_limite,realizada_at,created_at")
     .eq("socio_id", socioId)
+    .order("fecha_limite", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const { tipo, nota, realizada_at } = body;
+  const { tipo, nota, fecha_limite } = body;
 
   // Validaciones
   if (!tipo || typeof tipo !== "string") {
@@ -77,20 +78,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     );
   }
 
-  if (!realizada_at || typeof realizada_at !== "string") {
-    return NextResponse.json(
-      { data: null, error: "realizada_at es requerido (YYYY-MM-DD)" } satisfies ApiResp<null>,
-      { status: 400 }
-    );
-  }
-
-  // Validar formato de fecha
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateRegex.test(realizada_at)) {
-    return NextResponse.json(
-      { data: null, error: "realizada_at debe tener formato YYYY-MM-DD" } satisfies ApiResp<null>,
-      { status: 400 }
-    );
+  // fecha_limite es opcional, si no viene usar CURRENT_DATE como default
+  let fechaLimiteValue: string;
+  if (!fecha_limite || typeof fecha_limite !== "string" || !fecha_limite.trim()) {
+    // Si no viene, usar hoy como default
+    fechaLimiteValue = new Date().toISOString().split("T")[0];
+  } else {
+    // Validar formato de fecha
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(fecha_limite.trim())) {
+      return NextResponse.json(
+        { data: null, error: "fecha_limite debe tener formato YYYY-MM-DD" } satisfies ApiResp<null>,
+        { status: 400 }
+      );
+    }
+    fechaLimiteValue = fecha_limite.trim();
   }
 
   const supabase = supabaseAdmin();
@@ -98,18 +100,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // Normalizar nota: nunca null, siempre string (vacío si no hay valor)
   const notaNormalizada = nota ? String(nota).trim() : "";
 
+  // IMPORTANTE: realizada_at debe ser NULL al crear (pendiente), no se setea hasta que se marca como ejecutada
   const insertData = {
     socio_id: socioId,
     lead_id: null, // Acción de socio, no de lead
     tipo: tipo.trim(),
     nota: notaNormalizada,
-    realizada_at: realizada_at,
+    fecha_limite: fechaLimiteValue, // Usar fecha_limite como deadline real
+    realizada_at: null, // EXPLÍCITAMENTE NULL al crear (pendiente)
   };
 
   const { data, error } = await supabase
     .from("socio_acciones")
     .insert(insertData)
-    .select("id,socio_id,lead_id,tipo,nota,realizada_at,created_at")
+    .select("id,socio_id,lead_id,tipo,nota,fecha_limite,realizada_at,created_at")
     .maybeSingle();
 
   if (error) {

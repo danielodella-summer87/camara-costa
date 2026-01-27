@@ -8,7 +8,8 @@ type Accion = {
   lead_id: string | null;
   tipo: string;
   nota: string | null;
-  realizada_at: string | null;
+  fecha_limite: string | null; // YYYY-MM-DD - fecha límite real
+  realizada_at: string | null; // Timestamp ISO cuando se ejecutó (null si pendiente)
   created_at: string;
 };
 
@@ -76,11 +77,18 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId, entityType]);
 
-  // Ordenar por created_at desc (más nuevo arriba) - mostrar TODAS las acciones
+  // Ordenar por fecha_limite asc (más urgente arriba) y luego created_at desc como fallback
   const accionesOrdenadas = useMemo(() => {
-    return [...(acciones ?? [])].sort((a, b) =>
-      (b.created_at ?? "").localeCompare(a.created_at ?? "")
-    );
+    return [...(acciones ?? [])].sort((a, b) => {
+      // Primero por fecha_limite (ascendente - más urgente primero)
+      const fechaA = a.fecha_limite ? new Date(a.fecha_limite).getTime() : Infinity;
+      const fechaB = b.fecha_limite ? new Date(b.fecha_limite).getTime() : Infinity;
+      if (fechaA !== fechaB) {
+        return fechaA - fechaB;
+      }
+      // Si tienen la misma fecha_limite, ordenar por created_at desc (más nuevo primero)
+      return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+    });
   }, [acciones]);
 
   function formatDate(dateStr: string | null) {
@@ -113,40 +121,29 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
     }
   }
 
-  function isOverdue(realizadaAt: string | null): boolean {
-    if (!realizadaAt) return false;
+  function isOverdue(fechaLimite: string | null): boolean {
+    if (!fechaLimite) return false;
     try {
       // Comparar solo por día (ignorar hora)
-      const fechaLimite = new Date(realizadaAt);
-      fechaLimite.setHours(0, 0, 0, 0);
+      const fechaLimiteDate = new Date(fechaLimite);
+      fechaLimiteDate.setHours(0, 0, 0, 0);
       
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
       // Vencida si la fecha límite es menor que hoy (pasada)
-      return fechaLimite < today;
+      return fechaLimiteDate < today;
     } catch {
       return false;
     }
   }
 
   function isDone(realizadaAt: string | null): boolean {
-    // Si realizada_at existe y es una fecha reciente (hoy o ayer), está ejecutada
-    // Si es null o una fecha futura, está pendiente
+    // Una acción está ejecutada si realizada_at tiene un timestamp ISO (contiene 'T')
+    // Si es null, está pendiente
     if (!realizadaAt) return false;
-    try {
-      const fecha = new Date(realizadaAt);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const fechaDate = new Date(fecha);
-      fechaDate.setHours(0, 0, 0, 0);
-      
-      // Si la fecha es hoy o ayer, probablemente fue ejecutada
-      const diffDays = Math.floor((today.getTime() - fechaDate.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays <= 1 && fechaDate <= today;
-    } catch {
-      return false;
-    }
+    // Si contiene 'T', es un timestamp ISO (ejecutada)
+    return realizadaAt.includes("T");
   }
 
   async function quickAdd(tipo: string) {
@@ -177,7 +174,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           body: JSON.stringify({
             tipo: tipo.trim(),
             nota: nota.trim() || "", // Siempre string, nunca null
-            realizada_at: fechaLimite.trim(), // Usar realizada_at como fecha límite (schema existente)
+            fecha_limite: fechaLimite.trim(), // Usar fecha_limite como deadline real
           }),
         });
 
@@ -322,7 +319,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
               <div className="divide-y">
                 {accionesOrdenadas.map((a) => {
                   const done = isDone(a.realizada_at);
-                  const overdue = !done && isOverdue(a.realizada_at);
+                  const overdue = !done && isOverdue(a.fecha_limite);
                   return (
                     <div
                       key={a.id}
@@ -333,7 +330,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
                         <span
                           className={overdue ? "text-red-600 font-semibold" : "text-slate-700"}
                         >
-                          {formatDate(a.realizada_at)}
+                          {formatDate(a.fecha_limite)}
                         </span>
                         {!done && overdue && (
                           <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-600">

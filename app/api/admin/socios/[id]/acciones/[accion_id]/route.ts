@@ -44,7 +44,7 @@ export async function PATCH(_req: NextRequest, ctx: Ctx) {
     })
     .eq("id", accionIdRaw)
     .eq("socio_id", socioIdRaw)
-    .select("id,socio_id,lead_id,tipo,nota,realizada_at,created_at")
+    .select("id,socio_id,lead_id,tipo,nota,fecha_limite,realizada_at,created_at")
     .maybeSingle();
 
   if (error) {

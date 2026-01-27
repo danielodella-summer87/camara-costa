@@ -15,7 +15,8 @@ import {
   Target,
   BarChart3,
   CalendarDays,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Calendar
 } from "lucide-react";
 
 // TODO: Conectar con el rol real del usuario desde autenticación
@@ -102,6 +103,7 @@ export default function Sidebar() {
     { label: "Entidades", href: "/admin/empresas", icon: Building2 },
     { label: "Leads", href: "/admin/leads", icon: Target },
     { label: memberLabel, href: "/admin/socios", icon: Users },
+    { label: "Agenda", href: "/admin/agenda", icon: Calendar },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },
     { label: "Eventos", href: "/admin/eventos", icon: CalendarDays },
     { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles },
