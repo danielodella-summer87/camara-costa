@@ -70,6 +70,12 @@ function inferOwnerName(obj: RowObj | null | undefined): string | null {
   return pickFirstString(obj, ["nombre", "razon_social", "razonSocial", "empresa", "title"]);
 }
 
+function addOneDay(dateStr: string): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().split("T")[0]; // YYYY-MM-DD
+}
+
 /**
  * GET /api/admin/agenda
  */
@@ -279,15 +285,18 @@ export async function POST(req: NextRequest) {
     const socioId = (body?.socio_id ?? null) as string | null;
 
     const tipo = String(body?.tipo ?? "").trim();
-    const fechaLimite = String(body?.fecha_limite ?? "").trim(); // YYYY-MM-DD
+    const fechaLimiteRaw = String(body?.fecha_limite ?? "").trim(); // YYYY-MM-DD
     const nota = body?.nota ? String(body.nota) : null;
     const lugar = body?.lugar ? String(body.lugar) : null;
 
     if (!tipo) throw new Error("Falta tipo");
-    if (!fechaLimite) throw new Error("Falta fecha_limite");
+    if (!fechaLimiteRaw) throw new Error("Falta fecha_limite");
 
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(fechaLimite)) throw new Error("fecha_limite debe tener formato YYYY-MM-DD");
+    if (!dateRegex.test(fechaLimiteRaw)) throw new Error("fecha_limite debe tener formato YYYY-MM-DD");
+
+    // Corregir bug de zona horaria: sumar 1 día para que se guarde la fecha correcta
+    const fechaLimite = addOneDay(fechaLimiteRaw);
 
     if (ownerType === "lead") {
       if (!leadId) throw new Error("Falta lead_id");
