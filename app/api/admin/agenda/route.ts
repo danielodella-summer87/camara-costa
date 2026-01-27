@@ -12,26 +12,53 @@ function supabaseAdmin() {
 
 type ApiResp<T> = { data?: T | null; error?: string | null };
 
+type OwnerType = "lead" | "socio";
+
+type SocioAccionRow = {
+  id: string;
+  tipo: string | null;
+  nota: string | null;
+  fecha_limite: string | null;
+  lugar: string | null;
+  realizada_at: string | null;
+  created_at: string;
+  lead_id: string | null;
+  socio_id: string | null;
+};
+
 type AgendaItem = {
   id: string;
   tipo: string;
   fecha_limite: string; // YYYY-MM-DD
   nota: string | null;
+  lugar: string | null;
   created_at: string;
   lead_id: string | null;
   socio_id: string | null;
-  owner_type: "lead" | "socio";
+  owner_type: OwnerType;
   owner_name: string | null;
 
-  // NUEVO: datos para acciones rápidas
+  // datos para acciones rápidas
   owner_email?: string | null;
   owner_phone?: string | null;
   owner_whatsapp?: string | null;
   owner_meet_url?: string | null;
 };
 
-function pickFirstString(obj: any, keys: string[]): string | null {
-  if (!obj || typeof obj !== "object") return null;
+type RowObj = Record<string, unknown>;
+
+function toErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Error desconocido";
+  }
+}
+
+function pickFirstString(obj: RowObj | null | undefined, keys: string[]): string | null {
+  if (!obj) return null;
   for (const k of keys) {
     const v = obj[k];
     if (typeof v === "string" && v.trim()) return v.trim();
@@ -39,31 +66,22 @@ function pickFirstString(obj: any, keys: string[]): string | null {
   return null;
 }
 
-function inferOwnerName(obj: any): string | null {
-  return (
-    pickFirstString(obj, ["nombre", "razon_social", "empresa", "title"]) ??
-    null
-  );
+function inferOwnerName(obj: RowObj | null | undefined): string | null {
+  return pickFirstString(obj, ["nombre", "razon_social", "razonSocial", "empresa", "title"]);
 }
 
 /**
  * GET /api/admin/agenda
- * Devuelve acciones pendientes (realizada_at IS NULL) con fecha_limite en rango configurable
- * Parámetros querystring:
- * - pastDays: número de días hacia atrás (default: 30)
- * - futureDays: número de días hacia adelante (default: 14)
- * - overdueOnly: 1 para solo vencidas (fecha_limite < hoy)
- * - todayOnly: 1 para solo hoy (fecha_limite = hoy)
  */
 export async function GET(req: NextRequest) {
   try {
     const supabase = supabaseAdmin();
 
-    // Parsear querystring
+    // Querystring
     const { searchParams } = new URL(req.url);
     const overdueOnly = searchParams.get("overdueOnly") === "1";
     const todayOnly = searchParams.get("todayOnly") === "1";
-    
+
     // Defaults: últimos 30 días + próximos 14 días
     const pastDays = overdueOnly ? 365 : parseInt(searchParams.get("pastDays") || "30", 10);
     const futureDays = overdueOnly ? 0 : parseInt(searchParams.get("futureDays") || "14", 10);
@@ -76,18 +94,15 @@ export async function GET(req: NextRequest) {
     let endDateStr: string;
 
     if (todayOnly) {
-      // Solo hoy
       startDateStr = todayStr;
       endDateStr = todayStr;
     } else if (overdueOnly) {
-      // Solo vencidas (fecha_limite < hoy)
       const startDate = new Date(today);
       startDate.setDate(startDate.getDate() - pastDays);
       startDate.setHours(0, 0, 0, 0);
       startDateStr = startDate.toISOString().split("T")[0];
-      endDateStr = todayStr; // Hasta hoy (exclusivo en query)
+      endDateStr = todayStr;
     } else {
-      // Default / Todas: rango normal
       const startDate = new Date(today);
       startDate.setDate(startDate.getDate() - pastDays);
       startDate.setHours(0, 0, 0, 0);
@@ -99,26 +114,21 @@ export async function GET(req: NextRequest) {
       endDateStr = endDate.toISOString().split("T")[0];
     }
 
-    // Construir query base
+    // Query base
     let query = supabase
       .from("socio_acciones")
-      .select("id,tipo,nota,fecha_limite,realizada_at,created_at,lead_id,socio_id")
-      .is("realizada_at", null) // Solo pendientes
-      .not("fecha_limite", "is", null); // Solo con fecha_limite definida
+      .select("id,tipo,nota,fecha_limite,lugar,realizada_at,created_at,lead_id,socio_id")
+      .is("realizada_at", null)
+      .not("fecha_limite", "is", null);
 
-    // Aplicar filtros de fecha según el caso
     if (todayOnly) {
       query = query.eq("fecha_limite", todayStr);
     } else if (overdueOnly) {
-      query = query.lt("fecha_limite", todayStr); // fecha_limite < hoy
-      if (startDateStr) {
-        query = query.gte("fecha_limite", startDateStr); // Opcional: limitar a últimos N días
-      }
+      query = query.lt("fecha_limite", todayStr).gte("fecha_limite", startDateStr);
     } else {
       query = query.gte("fecha_limite", startDateStr).lte("fecha_limite", endDateStr);
     }
 
-    // Ordenar: fecha_limite ASC, luego created_at ASC
     query = query.order("fecha_limite", { ascending: true }).order("created_at", { ascending: true });
 
     const accionesRes = await query;
@@ -131,33 +141,26 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const acciones = (accionesRes.data ?? []) as any[];
+    const acciones = (accionesRes.data ?? []) as unknown as SocioAccionRow[];
 
-    // IDs únicos
-    const leadIds = Array.from(
-      new Set(acciones.map((a) => a.lead_id).filter(Boolean))
-    ) as string[];
+    const leadIds = Array.from(new Set(acciones.map((a) => a.lead_id).filter(Boolean))) as string[];
+    const socioIds = Array.from(new Set(acciones.map((a) => a.socio_id).filter(Boolean))) as string[];
 
-    const socioIds = Array.from(
-      new Set(acciones.map((a) => a.socio_id).filter(Boolean))
-    ) as string[];
-
-    // Fetch owners (defensivo: select * para evitar romper por columnas desconocidas)
-    const leadMap = new Map<string, any>();
-    const socioMap = new Map<string, any>();
-    const empresaMap = new Map<string, any>();
+    const leadMap = new Map<string, RowObj>();
+    const socioMap = new Map<string, RowObj>();
+    const empresaMap = new Map<string, RowObj>();
 
     if (leadIds.length) {
       const leadsRes = await supabase.from("leads").select("*").in("id", leadIds);
       if (leadsRes.error) {
         console.error("[Agenda] Error query leads:", leadsRes.error);
       } else {
-        for (const l of leadsRes.data ?? []) leadMap.set(String(l.id), l);
+        for (const l of leadsRes.data ?? []) leadMap.set(String((l as RowObj).id), l as RowObj);
       }
     }
 
     if (socioIds.length) {
-      // Intento 1: traer socio + empresa (si existe relación)
+      // Intento 1: socio + empresa
       const sociosRes = await supabase
         .from("socios")
         .select("*, empresas:empresa_id(*)")
@@ -166,30 +169,31 @@ export async function GET(req: NextRequest) {
       if (sociosRes.error) {
         console.error("[Agenda] Error query socios (join empresas) — fallback:", sociosRes.error);
 
-        // Fallback: socio solo
         const sociosFallback = await supabase.from("socios").select("*").in("id", socioIds);
         if (sociosFallback.error) {
           console.error("[Agenda] Error query socios fallback:", sociosFallback.error);
         } else {
-          for (const s of sociosFallback.data ?? []) socioMap.set(String(s.id), s);
+          for (const s of sociosFallback.data ?? []) socioMap.set(String((s as RowObj).id), s as RowObj);
         }
       } else {
         for (const s of sociosRes.data ?? []) {
-          socioMap.set(String(s.id), s);
-          const emp = (s as any).empresas;
-          if (emp && emp.id) empresaMap.set(String(emp.id), emp);
+          const sObj = s as RowObj;
+          socioMap.set(String(sObj.id), sObj);
+
+          const emp = sObj.empresas as RowObj | null | undefined;
+          if (emp?.id) empresaMap.set(String(emp.id), emp);
         }
       }
     }
 
-    // Normalizar agenda
     const agendaItems: AgendaItem[] = [];
 
     for (const a of acciones) {
       const leadId = a.lead_id ? String(a.lead_id) : null;
       const socioId = a.socio_id ? String(a.socio_id) : null;
 
-      let owner_type: "lead" | "socio" = leadId ? "lead" : "socio";
+      const owner_type: OwnerType = leadId ? "lead" : "socio";
+
       let owner_name: string | null = null;
       let owner_email: string | null = null;
       let owner_phone: string | null = null;
@@ -199,7 +203,6 @@ export async function GET(req: NextRequest) {
       if (owner_type === "lead" && leadId) {
         const l = leadMap.get(leadId);
         owner_name = inferOwnerName(l);
-
         owner_email = pickFirstString(l, ["email", "correo", "mail"]);
         owner_phone = pickFirstString(l, ["telefono", "tel", "phone", "celular", "movil", "mobile"]);
         owner_whatsapp = pickFirstString(l, ["whatsapp", "telefono_whatsapp", "wa"]);
@@ -208,9 +211,8 @@ export async function GET(req: NextRequest) {
 
       if (owner_type === "socio" && socioId) {
         const s = socioMap.get(socioId);
-        const emp = (s as any)?.empresas;
+        const emp = (s?.empresas as RowObj | null | undefined) ?? null;
 
-        // Preferimos nombre de empresa si existe
         owner_name = inferOwnerName(emp) ?? inferOwnerName(s);
 
         owner_email = pickFirstString(emp, ["email", "correo", "mail"]) ?? pickFirstString(s, ["email"]);
@@ -219,20 +221,24 @@ export async function GET(req: NextRequest) {
           pickFirstString(s, ["telefono", "celular", "phone"]);
         owner_whatsapp =
           pickFirstString(emp, ["whatsapp", "telefono_whatsapp", "wa"]) ?? pickFirstString(s, ["whatsapp"]);
-        owner_meet_url = pickFirstString(emp, ["meet_url", "meet_link", "google_meet"]) ?? pickFirstString(s, ["meet_url", "meet_link"]);
+        owner_meet_url =
+          pickFirstString(emp, ["meet_url", "meet_link", "google_meet"]) ??
+          pickFirstString(s, ["meet_url", "meet_link"]);
       }
+
+      if (!a.fecha_limite) continue;
 
       agendaItems.push({
         id: String(a.id),
         tipo: String(a.tipo ?? ""),
         fecha_limite: String(a.fecha_limite),
         nota: a.nota ? String(a.nota) : null,
+        lugar: a.lugar ? String(a.lugar) : null,
         created_at: String(a.created_at),
         lead_id: leadId,
         socio_id: socioId,
         owner_type,
         owner_name,
-
         owner_email,
         owner_phone,
         owner_whatsapp,
@@ -240,7 +246,6 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Orden: fecha_limite ASC, y desempate por created_at ASC
     agendaItems.sort((x, y) => {
       const ax = new Date(x.fecha_limite).getTime();
       const ay = new Date(y.fecha_limite).getTime();
@@ -252,10 +257,77 @@ export async function GET(req: NextRequest) {
       { data: agendaItems, error: null } satisfies ApiResp<AgendaItem[]>,
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("[Agenda] Error inesperado:", e);
     return NextResponse.json(
-      { data: null, error: e?.message ?? "Error obteniendo agenda" } satisfies ApiResp<null>,
+      { data: null, error: toErrorMessage(e) } satisfies ApiResp<null>,
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+}
+
+/**
+ * POST /api/admin/agenda
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const supabase = supabaseAdmin();
+    const body = (await req.json()) as Record<string, unknown>;
+
+    const ownerType = body?.owner_type as OwnerType;
+    const leadId = (body?.lead_id ?? null) as string | null;
+    const socioId = (body?.socio_id ?? null) as string | null;
+
+    const tipo = String(body?.tipo ?? "").trim();
+    const fechaLimite = String(body?.fecha_limite ?? "").trim(); // YYYY-MM-DD
+    const nota = body?.nota ? String(body.nota) : null;
+    const lugar = body?.lugar ? String(body.lugar) : null;
+
+    if (!tipo) throw new Error("Falta tipo");
+    if (!fechaLimite) throw new Error("Falta fecha_limite");
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(fechaLimite)) throw new Error("fecha_limite debe tener formato YYYY-MM-DD");
+
+    if (ownerType === "lead") {
+      if (!leadId) throw new Error("Falta lead_id");
+      if (socioId) throw new Error("No puede venir socio_id si owner_type=lead");
+    } else if (ownerType === "socio") {
+      if (!socioId) throw new Error("Falta socio_id");
+      if (leadId) throw new Error("No puede venir lead_id si owner_type=socio");
+    } else {
+      throw new Error("owner_type inválido");
+    }
+
+    // pendiente => realizada_at queda NULL (no lo enviamos)
+    const insertPayload = {
+      tipo,
+      nota,
+      fecha_limite: fechaLimite,
+      lugar,
+      lead_id: ownerType === "lead" ? leadId : null,
+      socio_id: ownerType === "socio" ? socioId : null,
+    };
+
+    const { data, error } = await supabase
+      .from("socio_acciones")
+      .insert(insertPayload)
+      .select("id")
+      .single();
+
+    if (error) {
+      console.error("[Agenda][POST] supabase error:", error);
+      throw new Error(error.message);
+    }
+
+    return NextResponse.json({ data, error: null } satisfies ApiResp<{ id: string }>, {
+      status: 200,
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (e: unknown) {
+    console.error("[Agenda][POST] Error:", e);
+    return NextResponse.json(
+      { data: null, error: toErrorMessage(e) } satisfies ApiResp<null>,
       { status: 500, headers: { "Cache-Control": "no-store" } }
     );
   }
