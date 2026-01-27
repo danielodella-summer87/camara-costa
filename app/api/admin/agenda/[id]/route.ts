@@ -26,10 +26,13 @@ function toErrorMessage(e: unknown): string {
  * DELETE /api/admin/agenda/:id
  * Borra una actividad (socio_acciones) por id
  */
-export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
     const supabase = supabaseAdmin();
-    const id = ctx?.params?.id;
+    const { id } = await params;
 
     if (!id) {
       return NextResponse.json(
