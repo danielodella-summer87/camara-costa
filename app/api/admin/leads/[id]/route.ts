@@ -40,7 +40,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q1 = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -66,7 +66,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q2 = await sb
       .from("lead")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -105,6 +105,16 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
  */
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
+    // Requerir permiso de actualización de leads
+    const { requirePermission } = await import("@/lib/rbac/requirePermission");
+    const user = await requirePermission(req, "leads.write");
+    if (!user) {
+      return NextResponse.json(
+        { data: null, error: "No autorizado" } satisfies ApiResp<null>,
+        { status: 403 }
+      );
+    }
+
     const sb = supabaseAdmin();
     const { id: rawId } = await context.params;
 
@@ -165,18 +175,65 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       );
     }
 
-    // Construir updateData: solo incluir empresa_id si viene explícitamente en el body
+    // Obtener lead actual para preservar linkedin_empresa y linkedin_director si vienen vacíos
+    const currentLead = await sb
+      .from("leads")
+      .select("linkedin_empresa,linkedin_director,pipeline")
+      .eq("id", id)
+      .maybeSingle();
+
+    const currentLinkedinEmpresa = currentLead.data?.linkedin_empresa ?? null;
+    const currentLinkedinDirector = currentLead.data?.linkedin_director ?? null;
+
+    // Normalizar valores entrantes de linkedin
+    const incomingEmpresa = typeof body.linkedin_empresa === "string" ? body.linkedin_empresa.trim() : null;
+    const incomingDirector = typeof body.linkedin_director === "string" ? body.linkedin_director.trim() : null;
+    const allowClear = body.allow_clear_linkedin === true;
+
+    // Construir updateData: preservar linkedin si vienen vacíos y el lead actual tiene valores
     const updateData: any = {
-      linkedin_empresa: body.linkedin_empresa ?? null,
-      linkedin_director: body.linkedin_director ?? null,
       ai_custom_prompt: normalizeCustomPrompt(body.ai_custom_prompt), // Normalizar: trim, si queda vacío -> null
       score: body.score === null || body.score === undefined ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null),
       score_categoria: body.score_categoria === null || body.score_categoria === undefined ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null),
     };
 
-    // Incluir otros campos del body (excepto force_unlink_entity que es solo para validación)
+    // LinkedIn Empresa: solo incluir si cambió explícitamente o si se permite borrar
+    if (body.linkedin_empresa !== undefined) {
+      if (incomingEmpresa && incomingEmpresa.length > 0) {
+        // Valor nuevo no vacío → incluir en update
+        updateData.linkedin_empresa = incomingEmpresa;
+      } else if (allowClear) {
+        // Valor vacío/null pero se permite borrar explícitamente
+        updateData.linkedin_empresa = null;
+      } else if (currentLinkedinEmpresa) {
+        // Valor vacío/null pero lead actual tiene valor → NO incluir (preservar)
+        // No hacer nada, no incluir en updateData
+      } else {
+        // Valor vacío/null y lead actual también está vacío → no incluir (no cambió)
+        // No hacer nada
+      }
+    }
+
+    // LinkedIn Director: solo incluir si cambió explícitamente o si se permite borrar
+    if (body.linkedin_director !== undefined) {
+      if (incomingDirector && incomingDirector.length > 0) {
+        // Valor nuevo no vacío → incluir en update
+        updateData.linkedin_director = incomingDirector;
+      } else if (allowClear) {
+        // Valor vacío/null pero se permite borrar explícitamente
+        updateData.linkedin_director = null;
+      } else if (currentLinkedinDirector) {
+        // Valor vacío/null pero lead actual tiene valor → NO incluir (preservar)
+        // No hacer nada, no incluir en updateData
+      } else {
+        // Valor vacío/null y lead actual también está vacío → no incluir (no cambió)
+        // No hacer nada
+      }
+    }
+
+    // Incluir otros campos del body (excepto force_unlink_entity que es solo para validación, e instagram que no existe en leads)
     for (const [key, value] of Object.entries(body)) {
-      if (key !== "force_unlink_entity" && key !== "empresa_id") {
+      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram") {
         updateData[key] = value;
       }
     }
@@ -184,6 +241,11 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     // Solo incluir empresa_id si viene explícitamente en el body
     if (body.empresa_id !== undefined) {
       updateData.empresa_id = body.empresa_id;
+    }
+
+    // Solo incluir comercial_id si viene explícitamente en el body
+    if (body.comercial_id !== undefined) {
+      updateData.comercial_id = body.comercial_id;
     }
 
     // Agregar meet_url normalizado si fue proporcionado
@@ -208,14 +270,8 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     }
 
     // Validar que no se pueda cambiar la etapa si el lead está cerrado (Ganado/Perdido)
+    // Usar el currentLead que ya obtuvimos arriba (incluye pipeline)
     if (body.pipeline !== undefined) {
-      // Primero obtener el pipeline actual del lead
-      const currentLead = await sb
-        .from("leads")
-        .select("pipeline")
-        .eq("id", id)
-        .maybeSingle();
-
       if (currentLead.data?.pipeline) {
         const currentPipeline = safeStr(currentLead.data.pipeline);
         const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
@@ -408,7 +464,70 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     });
     
     if (!updateResult.error && updateResult.data) {
-      // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
+      // Re-hidratar el lead completo con el mismo select que el GET (incluyendo empresas)
+      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      
+      // Intento principal: tabla "leads"
+      const refreshed = await sb
+        .from("leads")
+        .select(selectQuery)
+        .eq("id", id)
+        .maybeSingle();
+      
+      if (!refreshed.error && refreshed.data) {
+        const row = refreshed.data;
+        const fullLead = {
+          ...row,
+          linkedin_empresa: row.linkedin_empresa ?? null,
+          linkedin_director: row.linkedin_director ?? null,
+          meet_url: row.meet_url ?? null,
+        };
+        
+        // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
+        if (socioCreationError) {
+          return NextResponse.json(
+            { 
+              data: fullLead, 
+              error: null,
+              warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
+            } satisfies ApiResp<any> & { warning?: string },
+            { status: 200 }
+          );
+        }
+        return NextResponse.json({ data: fullLead, error: null } satisfies ApiResp<any>, { status: 200 });
+      }
+      
+      // Fallback: tabla "lead" (por si hay naming diferente)
+      const refreshedFallback = await sb
+        .from("lead")
+        .select(selectQuery)
+        .eq("id", id)
+        .maybeSingle();
+      
+      if (!refreshedFallback.error && refreshedFallback.data) {
+        const row = refreshedFallback.data;
+        const fullLead = {
+          ...row,
+          linkedin_empresa: row.linkedin_empresa ?? null,
+          linkedin_director: row.linkedin_director ?? null,
+          meet_url: row.meet_url ?? null,
+        };
+        
+        // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
+        if (socioCreationError) {
+          return NextResponse.json(
+            { 
+              data: fullLead, 
+              error: null,
+              warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
+            } satisfies ApiResp<any> & { warning?: string },
+            { status: 200 }
+          );
+        }
+        return NextResponse.json({ data: fullLead, error: null } satisfies ApiResp<any>, { status: 200 });
+      }
+      
+      // Si falla el refresh, devolver el resultado del update (sin empresas, pero mejor que nada)
       if (socioCreationError) {
         return NextResponse.json(
           { 
@@ -434,8 +553,18 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
  * DELETE /api/admin/leads/:id
  * (Opcional) si tu UI usa "Eliminar" en la ficha.
  */
-export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
+    // Requerir permiso de eliminación de leads
+    const { requirePermission } = await import("@/lib/rbac/requirePermission");
+    const user = await requirePermission(req, "leads.write");
+    if (!user) {
+      return NextResponse.json(
+        { data: null, error: "No autorizado" } satisfies ApiResp<null>,
+        { status: 403 }
+      );
+    }
+
     const sb = supabaseAdmin();
     const { id: rawId } = await context.params;
 

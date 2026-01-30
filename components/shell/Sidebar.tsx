@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 import { 
   FolderTree, 
   GitBranch, 
@@ -39,6 +40,7 @@ type SidebarItem = {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   isSubItem?: boolean;
+  permission?: string;
 };
 
 // Componente normalizado para items del menú
@@ -64,6 +66,7 @@ function SidebarItem({ label, href, icon: Icon, isActive = false }: Omit<Sidebar
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { permissions } = usePermissions();
   const [portalName, setPortalName] = useState("Cámara Costa");
   const [memberLabel, setMemberLabel] = useState("Socios");
 
@@ -106,9 +109,11 @@ export default function Sidebar() {
     { label: "Agenda", href: "/admin/agenda", icon: Calendar },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },
     { label: "Eventos", href: "/admin/eventos", icon: CalendarDays },
-    { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles },
+    { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles, permission: "config.admin" },
     { label: "Personalización", href: "/admin/personalizacion", icon: SlidersHorizontal },
-    { label: "Configuración", href: "/admin/configuracion", icon: SettingsIcon },
+    { label: "Configuración", href: "/admin/configuracion", icon: SettingsIcon, permission: "config.admin" },
+    { label: "Usuarios", href: "/admin/configuracion/usuarios", icon: Users, permission: "config.admin" },
+    { label: "Roles & Permisos", href: "/admin/configuracion/roles", icon: CheckSquare, permission: "config.admin" },
   ];
 
   return (
@@ -132,20 +137,22 @@ export default function Sidebar() {
 
       {/* Menu */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {items.map((it) => {
-          const active =
-            pathname === it.href ||
-            (it.href !== "/admin" && pathname.startsWith(it.href + "/"));
-          return (
-            <SidebarItem
-              key={it.href}
-              label={it.label}
-              href={it.href}
-              icon={it.icon}
-              isActive={active}
-            />
-          );
-        })}
+        {items
+          .filter((item) => !item.permission || permissions.includes(item.permission))
+          .map((it) => {
+            const active =
+              pathname === it.href ||
+              (it.href !== "/admin" && pathname.startsWith(it.href + "/"));
+            return (
+              <SidebarItem
+                key={it.href}
+                label={it.label}
+                href={it.href}
+                icon={it.icon}
+                isActive={active}
+              />
+            );
+          })}
       </nav>
 
       {/* Footer */}

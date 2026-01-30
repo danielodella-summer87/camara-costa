@@ -66,7 +66,20 @@ export async function POST(
       return NextResponse.json({ data: { lead_id: existingLead.id, already_existed: true } });
     }
 
-    // Insert del lead (vinculando empresa_id)
+    // Resolver comercial por defecto
+    const DEFAULT_COMERCIAL_NAME = "Sin asignar";
+
+    const { data: comercialDefault, error: comercialError } = await sb
+      .from("comerciales")
+      .select("id")
+      .eq("nombre", DEFAULT_COMERCIAL_NAME)
+      .maybeSingle();
+
+    if (comercialError || !comercialDefault?.id) {
+      throw new Error("No existe comercial por defecto 'Sin asignar'");
+    }
+
+    // Insert del lead (vinculando empresa_id y comercial_id)
     const payload: any = {
       empresa_id: empresa.id,
       nombre: empresa.nombre,
@@ -76,7 +89,13 @@ export async function POST(
       notas: empresa.instagram ? `IG: ${empresa.instagram}` : null,
       origen: "Desde entidad",
       pipeline: "Nuevo",
+      comercial_id: comercialDefault.id,
     };
+
+    // Blindaje extra (defensivo)
+    if (!payload.comercial_id) {
+      payload.comercial_id = comercialDefault.id;
+    }
 
     const { data: created, error: createErr } = await sb
       .from("leads")

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 
 type LeadCreatePayload = {
@@ -13,6 +13,7 @@ type LeadCreatePayload = {
   origen: string | null;
   pipeline: string | null;
   notas: string | null;
+  comercial_id: string | null;
 };
 
 type Lead = LeadCreatePayload & {
@@ -24,6 +25,16 @@ type Lead = LeadCreatePayload & {
 
 type LeadApiResponse = {
   data?: Lead | null;
+  error?: string | null;
+};
+
+type Comercial = {
+  id: string;
+  nombre: string;
+};
+
+type ComercialesApiResponse = {
+  data?: Comercial[] | null;
   error?: string | null;
 };
 
@@ -45,10 +56,24 @@ export default function NuevoLeadPage() {
   const [origen, setOrigen] = useState("");
   const [pipeline, setPipeline] = useState("Nuevo");
   const [notas, setNotas] = useState("");
+  const [comercialId, setComercialId] = useState<string>("");
+  const [comerciales, setComerciales] = useState<Comercial[]>([]);
 
   const canSave = useMemo(() => {
     return nombre.trim().length > 0 && !saving;
   }, [nombre, saving]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/comerciales", { cache: "no-store" });
+        const json = (await res.json()) as ComercialesApiResponse;
+        setComerciales(Array.isArray(json?.data) ? json.data : []);
+      } catch {
+        setComerciales([]);
+      }
+    })();
+  }, []);
 
   async function createLead() {
     setError(null);
@@ -66,6 +91,7 @@ export default function NuevoLeadPage() {
       origen: norm(origen),
       pipeline: norm(pipeline),
       notas: norm(notas),
+      comercial_id: comercialId.trim() || null,
     };
 
     setSaving(true);
@@ -157,6 +183,23 @@ export default function NuevoLeadPage() {
             <div className="mt-2 text-xs text-slate-500">
               (En A es texto. En B lo conectamos a opciones configurables.)
             </div>
+          </div>
+
+          <div className="rounded-xl border p-4">
+            <div className="text-xs font-semibold text-slate-600">Comercial</div>
+            <select
+              value={comercialId}
+              onChange={(e) => setComercialId(e.target.value)}
+              disabled={saving}
+              className="mt-2 w-full rounded-xl border px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
+            >
+              <option value="">Sin asignar</option>
+              {comerciales.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

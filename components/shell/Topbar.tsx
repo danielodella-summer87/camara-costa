@@ -1,6 +1,8 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { usePermissions } from "@/lib/rbac/usePermissions";
+import { useEffect, useState } from "react";
 
 const LABELS: Record<string, string> = {
   "/admin": "Dashboard",
@@ -24,6 +26,16 @@ function titleFromPath(pathname: string) {
 export function Topbar() {
   const pathname = usePathname();
   const sectionTitle = titleFromPath(pathname);
+  const { permissions, loading } = usePermissions();
+  const [userInitial, setUserInitial] = useState("A");
+
+  useEffect(() => {
+    // Usar inicial "U" para Usuario por defecto
+    setUserInitial("U");
+  }, []);
+
+  const displayName = "Usuario";
+  const roleLabel = permissions.includes("config.admin") ? "Admin" : permissions.length > 0 ? "Usuario" : "—";
 
   return (
     <div className="h-full flex items-center justify-between px-6 bg-white border-b border-slate-200">
@@ -32,7 +44,12 @@ export function Topbar() {
       <div className="flex flex-col">
         <div className="text-sm text-slate-600">
           Bienvenido,{" "}
-          <span className="font-medium text-slate-900">Administrador</span>
+          <span className="font-medium text-slate-900">
+            {loading ? "Cargando..." : displayName}
+          </span>
+          {roleLabel !== "—" && (
+            <span className="ml-2 text-xs text-slate-500">({roleLabel})</span>
+          )}
         </div>
 
         {/* Breadcrumb */}
@@ -54,9 +71,9 @@ export function Topbar() {
         {/* User */}
         <div className="flex items-center gap-2 text-sm text-slate-700">
           <div className="w-8 h-8 rounded-full bg-slate-300 flex items-center justify-center text-xs font-bold">
-            A
+            {userInitial}
           </div>
-          <span>Admin</span>
+          <span>{loading ? "Cargando..." : displayName}</span>
         </div>
       </div>
 

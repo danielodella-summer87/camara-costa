@@ -9,6 +9,7 @@ import { useParams, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Empresa = {
   id: string;
@@ -55,6 +56,7 @@ type Lead = {
   linkedin_empresa?: string | null;
   linkedin_director?: string | null;
   meet_url?: string | null;
+  ai_custom_prompt?: string | null; // Personalización IA
 
   rating?: number | null;
   next_activity_type?: string | null;
@@ -63,6 +65,7 @@ type Lead = {
   member_since?: string | null;
   empresa_id?: string | null;
   empresas?: Empresa | null;
+  comercial_id?: string | null;
   score?: number | null;
   score_categoria?: string | null;
 };
@@ -91,6 +94,7 @@ type PatchPayload = Partial<
     | "linkedin_director"
     | "meet_url"
     | "empresa_id"
+    | "comercial_id"
     | "score"
     | "score_categoria"
   >
@@ -322,6 +326,8 @@ export default function LeadDetailPage() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PatchPayload>({});
   const [empresaIdInput, setEmpresaIdInput] = useState("");
+  const [comerciales, setComerciales] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [loadingComerciales, setLoadingComerciales] = useState(false);
 
   // ✅ Documentación
   const [docsOpen, setDocsOpen] = useState(false);
@@ -355,6 +361,9 @@ export default function LeadDetailPage() {
   
   // ✅ Labels personalizados
   const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
+
+  // ✅ Permisos RBAC
+  const { hasPermission, loading: permissionsLoading } = usePermissions();
   
   // ✅ Etapas (pipelines)
   type EtapaRow = { id: string; nombre: string };
@@ -486,6 +495,12 @@ export default function LeadDetailPage() {
     setError(null);
     setMutating(true);
     try {
+      // Log temporal para confirmar si se está enviando linkedin
+      console.log("[patchLead] Payload linkedin:", {
+        linkedin_empresa: payload.linkedin_empresa !== undefined ? (payload.linkedin_empresa || "null") : "undefined (no se incluye)",
+        linkedin_director: payload.linkedin_director !== undefined ? (payload.linkedin_director || "null") : "undefined (no se incluye)",
+      });
+
       const res = await fetch(`/api/admin/leads/${id}`, {
         method: "PATCH",
         cache: "no-store",
@@ -502,7 +517,18 @@ export default function LeadDetailPage() {
       const updated = json?.data ?? null;
       if (!updated) throw new Error("No se recibió el lead actualizado");
 
-      setLead(updated);
+      // Merge robusto: preservar empresas y empresa_id del estado anterior si el PATCH no los trae
+      setLead((prev) => {
+        if (!prev) return updated;
+        return {
+          ...prev,
+          ...updated,
+          // Preservar empresas si el PATCH no lo incluye
+          empresas: updated.empresas ?? prev.empresas ?? null,
+          // Preservar empresa_id si viene vacío por error
+          empresa_id: updated.empresa_id ?? prev.empresa_id ?? null,
+        };
+      });
       
       // Si hay advertencia (ej: error al crear socio), mostrarla pero no fallar
       if (json?.warning) {
@@ -527,7 +553,7 @@ export default function LeadDetailPage() {
       return; // No hay cambios, no hace nada
     }
 
-    // Construir payload: solo incluir empresa_id si realmente cambió
+    // Construir payload base (sin linkedin_empresa/linkedin_director, se agregan condicionalmente)
     const normalized: PatchPayload = {
       nombre: norm(draft.nombre),
       contacto: norm(draft.contacto),
@@ -541,12 +567,40 @@ export default function LeadDetailPage() {
       audiencia: norm(draft.audiencia),
       tamano: norm(draft.tamano),
       oferta: norm(draft.oferta),
-      linkedin_empresa: norm(draft.linkedin_empresa),
-      linkedin_director: norm(draft.linkedin_director),
       meet_url: norm(draft.meet_url),
       score: draft.score ?? null,
       score_categoria: draft.score_categoria ?? null,
     };
+
+    // Preservar linkedin_empresa y linkedin_director si el draft está vacío pero el lead tiene valores
+    const currentLinkedinEmpresa = (lead?.linkedin_empresa ?? "").trim();
+    const currentLinkedinDirector = (lead?.linkedin_director ?? "").trim();
+    const newLinkedinEmpresa = (draft.linkedin_empresa ?? "").trim();
+    const newLinkedinDirector = (draft.linkedin_director ?? "").trim();
+
+    // LinkedIn Empresa: solo incluir si cambió explícitamente
+    if (draft.linkedin_empresa !== undefined) {
+      if (newLinkedinEmpresa === "" && currentLinkedinEmpresa) {
+        // Draft vacío pero lead tiene valor → NO incluir (preservar valor existente)
+        // No hacer nada, no incluir en normalized
+      } else if (newLinkedinEmpresa !== currentLinkedinEmpresa) {
+        // Valor nuevo diferente al actual → incluir (puede ser cambio o borrado explícito)
+        normalized.linkedin_empresa = newLinkedinEmpresa || null;
+      }
+      // Si son iguales, no incluir (no cambió)
+    }
+
+    // LinkedIn Director: solo incluir si cambió explícitamente
+    if (draft.linkedin_director !== undefined) {
+      if (newLinkedinDirector === "" && currentLinkedinDirector) {
+        // Draft vacío pero lead tiene valor → NO incluir (preservar valor existente)
+        // No hacer nada, no incluir en normalized
+      } else if (newLinkedinDirector !== currentLinkedinDirector) {
+        // Valor nuevo diferente al actual → incluir (puede ser cambio o borrado explícito)
+        normalized.linkedin_director = newLinkedinDirector || null;
+      }
+      // Si son iguales, no incluir (no cambió)
+    }
 
     // REGLA: Solo incluir empresa_id en el payload si realmente cambió
     // Comparar con el valor actual del lead
@@ -649,9 +703,19 @@ export default function LeadDetailPage() {
           throw new Error(patchJson?.error ?? "Error guardando el link de Meet");
         }
 
-        // Actualizar el estado local del lead
+        // Actualizar el estado local del lead con merge robusto (preservar empresas)
         if (patchJson?.data) {
-          setLead(patchJson.data);
+          const next = patchJson.data as Lead;
+          setLead((prev) => {
+            if (!prev) return next;
+            return {
+              ...prev,
+              ...next,
+              // preservar relación empresas si el patch no la trae
+              empresas: next.empresas ?? prev.empresas ?? null,
+              empresa_id: next.empresa_id ?? prev.empresa_id ?? null,
+            };
+          });
         }
       }
 
@@ -868,6 +932,29 @@ export default function LeadDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function fetchComerciales() {
+    setLoadingComerciales(true);
+    try {
+      const res = await fetch("/api/admin/comerciales", {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+      const json = await res.json();
+      if (res.ok && Array.isArray(json?.data)) {
+        setComerciales(json.data.map((c: any) => ({ id: c.id, nombre: c.nombre })));
+      }
+    } catch (e) {
+      console.error("Error cargando comerciales:", e);
+    } finally {
+      setLoadingComerciales(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchComerciales();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Refrescar sesión activa después de iniciar una nueva
   useEffect(() => {
     if (!startingMeet) {
@@ -1019,6 +1106,7 @@ export default function LeadDetailPage() {
       telefono: lead.telefono ?? "",
       email: lead.email ?? "",
       empresa_id: lead.empresa_id ?? null,
+      comercial_id: lead.comercial_id ?? null,
       origen: lead.origen ?? "",
       pipeline: lead.pipeline ?? "Nuevo",
       notas: lead.notas ?? "",
@@ -1094,6 +1182,11 @@ export default function LeadDetailPage() {
       audiencia: toArray(lead.audiencia),
     };
   }, [lead]);
+
+  // Variables efectivas para website e instagram (con fallback desde entidad)
+  const websiteEffective = (lead?.website ?? "").trim() || (lead?.empresas?.web ?? "").trim() || "";
+  const instagramEffective = (lead?.empresas?.instagram ?? "").trim() || "";
+  const hasEntidad = Boolean(lead?.empresa_id || lead?.empresas?.id);
 
   return (
     <PageContainer>
@@ -1192,14 +1285,16 @@ export default function LeadDetailPage() {
               )}
 
               {!editing ? (
-                <button
-                  type="button"
-                  onClick={startEdit}
-                  className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                  disabled={disabled || !lead}
-                >
-                  Editar
-                </button>
+                hasPermission("leads.update") && (
+                  <button
+                    type="button"
+                    onClick={startEdit}
+                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    disabled={disabled || !lead}
+                  >
+                    Editar
+                  </button>
+                )
               ) : (
                 <>
                   <button
@@ -1210,26 +1305,30 @@ export default function LeadDetailPage() {
                   >
                     Cancelar
                   </button>
-                  <button
-                    type="button"
-                    onClick={saveEdit}
-                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                    disabled={disabled}
-                  >
-                    Guardar
-                  </button>
+                  {hasPermission("leads.update") && (
+                    <button
+                      type="button"
+                      onClick={saveEdit}
+                      className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                      disabled={disabled}
+                    >
+                      Guardar
+                    </button>
+                  )}
                 </>
               )}
 
-              <button
-                type="button"
-                onClick={deleteLead}
-                className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
-                disabled={disabled || !lead}
-                title="Eliminar lead"
-              >
-                Eliminar
-              </button>
+              {hasPermission("leads.delete") && (
+                <button
+                  type="button"
+                  onClick={deleteLead}
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
+                  disabled={disabled || !lead}
+                  title="Eliminar lead"
+                >
+                  Eliminar
+                </button>
+              )}
             </div>
           </div>
 
@@ -1326,7 +1425,7 @@ export default function LeadDetailPage() {
           )}
 
           {/* Warning si no está vinculado a empresa */}
-          {!lead?.empresa_id && activeTab === "entidad" && (
+          {!hasEntidad && activeTab === "entidad" && (
             <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1589,6 +1688,37 @@ export default function LeadDetailPage() {
                       )}
                     </div>
 
+                    <div>
+                      <div className="text-xs font-semibold text-slate-500">Comercial</div>
+                      {editing ? (
+                        <select
+                          value={(draft.comercial_id as any) ?? ""}
+                          onChange={(e) => setDraft((p) => ({ ...p, comercial_id: e.target.value || null }))}
+                          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                          disabled={mutating || loadingComerciales}
+                        >
+                          <option value="">— Sin asignar —</option>
+                          {comerciales.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                          {(() => {
+                            const comercialId = lead?.comercial_id;
+                            if (!comercialId) return "—";
+                            const comercial = comerciales.find((c) => c.id === comercialId);
+                            return comercial?.nombre ?? comercialId;
+                          })()}
+                        </div>
+                      )}
+                      {editing && loadingComerciales && (
+                        <div className="mt-1 text-xs text-slate-500">Cargando comerciales…</div>
+                      )}
+                    </div>
+
                     <Field
                       label="LinkedIn Empresa"
                       editing={editing}
@@ -1613,6 +1743,74 @@ export default function LeadDetailPage() {
                   Datos del Lead
                 </summary>
                 <div className="px-4 pb-4 space-y-4">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="text-xs text-slate-500">Website</div>
+                      {editing && !lead?.website?.trim() && lead?.empresas?.web?.trim() && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const empresaWeb = lead?.empresas?.web?.trim();
+                            if (empresaWeb) {
+                              setDraft((p) => ({ ...p, website: empresaWeb }));
+                              try {
+                                await patchLead({ website: empresaWeb });
+                                await fetchLead();
+                                flash("Website copiado desde Entidad.");
+                              } catch (e: any) {
+                                setError(e?.message ?? "Error copiando website");
+                              }
+                            }
+                          }}
+                          className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          Copiar desde Entidad
+                        </button>
+                      )}
+                    </div>
+                    {editing ? (
+                      <input
+                        value={(draft.website as any) ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, website: e.target.value }))}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+                        placeholder="https://..."
+                      />
+                    ) : (
+                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        {websiteEffective ? (
+                          <a
+                            href={websiteEffective}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {websiteEffective}
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-slate-500">Instagram</div>
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {lead?.empresas?.instagram?.trim() ? (
+                        <a
+                          href={lead.empresas.instagram.startsWith("http") ? lead.empresas.instagram : `https://instagram.com/${lead.empresas.instagram.replace("@", "")}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          {lead.empresas.instagram}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
+                  </div>
+
                   <div>
                     <div className="text-xs text-slate-500">Objetivo</div>
                     {editing ? (
@@ -1738,15 +1936,6 @@ export default function LeadDetailPage() {
 
           {activeTab === "ia" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
-              <details open className="rounded-2xl border bg-white">
-                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
-                  IA — Acciones
-                </summary>
-                <div className="px-4 pb-4 space-y-3">
-                  {/* ⬇️ botones/acciones IA */}
-                </div>
-              </details>
-
               <details className="rounded-2xl border bg-white">
                 <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
                   IA — Informe

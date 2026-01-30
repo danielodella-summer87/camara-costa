@@ -41,6 +41,7 @@ const TABS_CONFIG = [
   { id: "acciones", label: "Acciones", tabId: "ACCIONES" },
   { id: "materiales", label: "Materiales listos", tabId: "MATERIALES_LISTOS" },
   { id: "cierre", label: "Cierre de la venta", tabId: "CIERRE_VENTA" },
+  { id: "vision_estrategica", label: "Visión Estratégica", tabId: "vision_estrategica" },
 ] as const;
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -56,6 +57,7 @@ function downloadBlob(blob: Blob, filename: string) {
 
 /**
  * Extrae las secciones de datos faltantes de un contenido
+ * Filtra automáticamente cualquier referencia a "oferta" o "Qué ofrece"
  */
 function extractMissingDataSections(content: string): {
   faltantes: string[];
@@ -70,6 +72,12 @@ function extractMissingDataSections(content: string): {
     return { faltantes, preguntas, dondeCargar };
   }
 
+  // Helper para filtrar referencias a oferta
+  const filterOferta = (text: string): boolean => {
+    const lower = text.toLowerCase();
+    return !lower.includes("oferta") && !lower.includes("qué ofrece");
+  };
+
   // Extraer sección FALTANTES
   const faltantesMatch = content.match(/###\s+FALTANTES\s*\n([\s\S]*?)(?=###|$)/i);
   if (faltantesMatch) {
@@ -79,7 +87,10 @@ function extractMissingDataSections(content: string): {
       const trimmed = line.trim();
       return trimmed.startsWith("-") || trimmed.startsWith("*");
     });
-    faltantes.push(...lines.map(line => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+    faltantes.push(...lines
+      .map(line => line.replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean)
+      .filter(filterOferta));
   }
 
   // Extraer sección PREGUNTAS PARA COMPLETAR
@@ -91,7 +102,10 @@ function extractMissingDataSections(content: string): {
       const trimmed = line.trim();
       return /^\d+[).]\s/.test(trimmed) || trimmed.startsWith("-") || trimmed.startsWith("*");
     });
-    preguntas.push(...lines.map(line => line.replace(/^\d+[).]\s*/, "").replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+    preguntas.push(...lines
+      .map(line => line.replace(/^\d+[).]\s*/, "").replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean)
+      .filter(filterOferta));
   }
 
   // Extraer sección DÓNDE CARGARLO EN EL CRM
@@ -103,7 +117,10 @@ function extractMissingDataSections(content: string): {
       const trimmed = line.trim();
       return trimmed.startsWith("-") || trimmed.startsWith("*");
     });
-    dondeCargar.push(...lines.map(line => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean));
+    dondeCargar.push(...lines
+      .map(line => line.replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean)
+      .filter(filterOferta));
   }
 
   return { faltantes, preguntas, dondeCargar };
@@ -186,6 +203,22 @@ function parseReportTabs(report: string): Record<string, string> {
   return tabs;
 }
 
+export function sanitizeForPdf(input: string) {
+  if (!input) return input;
+
+  return input
+    .replaceAll('\u2192', '->')   // →
+    .replaceAll('\u2022', '-')    // •
+    .replaceAll('\u2013', '-')    // –
+    .replaceAll('\u2014', '-')    // —
+    .replaceAll('\u201C', '"')    // “
+    .replaceAll('\u201D', '"')    // ”
+    .replaceAll('\u2018', "'")    // ‘
+    .replaceAll('\u2019', "'")    // ’
+    .replaceAll('\u2026', '...')  // …
+    .replaceAll('\u00A0', ' ');   // nbsp
+}
+
 async function textToPdfBytes(title: string, content: string) {
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([595.28, 841.89]); // A4
@@ -200,6 +233,10 @@ async function textToPdfBytes(title: string, content: string) {
   const titleSize = 16;
   const bodySize = 11;
   const lineHeight = 14;
+
+  // Sanitizar título y contenido antes de procesar
+  const sanitizedTitle = sanitizeForPdf(title);
+  const sanitizedContent = sanitizeForPdf(content);
 
   const wrap = (text: string, size: number) => {
     const words = text.replace(/\r/g, "").split(/\s+/);
@@ -234,11 +271,11 @@ async function textToPdfBytes(title: string, content: string) {
   };
 
   // Title
-  page.drawText(title, { x: margin, y: y - titleSize, size: titleSize, font: fontBold });
+  page.drawText(sanitizedTitle, { x: margin, y: y - titleSize, size: titleSize, font: fontBold });
   y -= 28;
 
   // Body
-  const lines = wrap(content, bodySize);
+  const lines = wrap(sanitizedContent, bodySize);
 
   for (const ln of lines) {
     if (y < margin + 60) {
@@ -246,7 +283,7 @@ async function textToPdfBytes(title: string, content: string) {
       y = newPage.getHeight() - margin;
 
       // pequeña marca de continuidad
-      newPage.drawText(title, {
+      newPage.drawText(sanitizedTitle, {
         x: margin,
         y: y - 10,
         size: 10,
@@ -263,7 +300,7 @@ async function textToPdfBytes(title: string, content: string) {
       continue;
     }
 
-    (page as any).drawText(ln, {
+    (page as any).drawText(sanitizeForPdf(ln), {
       x: margin,
       y: y - bodySize,
       size: bodySize,
@@ -284,7 +321,7 @@ export function AiLeadReport({
   lead?: LeadMini | null;
   onBeforeGenerate?: () => Promise<void>;
 }) {
-  const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
   const [report, setReport] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
@@ -418,7 +455,7 @@ export function AiLeadReport({
     return parseReportTabs(report);
   }, [report]);
 
-  // Derivar datos faltantes por tab
+  // Derivar datos faltantes por tab (ya filtrado para excluir oferta)
   const missingDataByTab = useMemo(() => {
     const result: Record<string, { faltantes: string[]; preguntas: string[]; dondeCargar: string[] }> = {};
     Object.entries(reportTabs).forEach(([tabId, content]) => {
@@ -577,7 +614,7 @@ export function AiLeadReport({
     console.log("[AI] CLICK Generar IA", { force, moduleId });
 
     try {
-      setLoading(true);
+      setAiLoading(true);
       setError(null);
       setStatus("generating");
 
@@ -642,17 +679,59 @@ export function AiLeadReport({
       setError(err?.message ?? "Error generando informe IA. Ver consola.");
       setStatus("idle");
     } finally {
-      setLoading(false);
+      setAiLoading(false);
     }
   };
 
   async function downloadPdf() {
-    if (!report.trim()) return;
+    try {
+      setError(null);
 
-    const title = `Informe IA · ${lead?.nombre ?? "Lead"}`;
-    const bytes = await textToPdfBytes(title, report);
-    const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" });
-    downloadBlob(blob, filename);
+      if (!leadId) {
+        setError("No hay leadId para generar el PDF.");
+        return;
+      }
+
+      setToastMessage("Generando PDF…");
+
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}/ai-report/pdf`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+
+      if (!res.ok) {
+        let msg = "No se pudo generar el PDF.";
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch {}
+        throw new Error(msg);
+      }
+
+      const blob = await res.blob();
+
+      if (!blob || blob.size < 200) {
+        throw new Error("El PDF generado está vacío o inválido.");
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+
+      const safeId = String(leadId).slice(0, 8);
+      a.download = `informe-ia-${safeId}.pdf`;
+
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+
+      setToastMessage("✅ PDF descargado.");
+    } catch (e: any) {
+      setError(e?.message ?? "Error descargando PDF");
+      setToastMessage(null);
+    }
   }
 
   async function copy() {
@@ -681,23 +760,60 @@ export function AiLeadReport({
           <button
             type="button"
             onClick={() => generateAI()}
-            className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+            disabled={aiLoading}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              aiLoading
+                ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
+                : "bg-slate-900 text-white hover:bg-slate-800"
+            }`}
           >
-            {loading ? "Generando…" : "Generar IA"}
+            {aiLoading ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
+                Generando...
+              </span>
+            ) : (
+              "Generar IA"
+            )}
           </button>
 
           <button
             type="button"
             onClick={() => handleGenerate(true)}
+            disabled={aiLoading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
           >
             Regenerar IA
           </button>
 
+          {report.trim() && (
+            <button
+              type="button"
+              onClick={() => {
+                setActiveReportTab("vision_estrategica");
+                regenerateTab("vision_estrategica");
+              }}
+              disabled={aiLoading || regeneratingTab === "vision_estrategica"}
+              className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+              title="Generar Visión Estratégica basada en el informe completo"
+            >
+              {regeneratingTab === "VISION_ESTRATEGICA" ? (
+                <>
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></span>
+                  Generando...
+                </>
+              ) : (
+                <>
+                  🧠 Visión Estratégica
+                </>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={downloadPdf}
-            disabled={!report.trim()}
+            disabled={!leadId || aiLoading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
             title="Descargar PDF"
           >
@@ -758,7 +874,7 @@ export function AiLeadReport({
           id="ai-prompt-extra"
           value={aiPromptExtra}
           onChange={(e) => setAiPromptExtra(e.target.value)}
-          disabled={loading}
+          disabled={aiLoading}
           placeholder="Ejemplo: Enfocarse en oportunidades de membresía premium y eventos corporativos. Priorizar empresas del sector tecnológico."
           className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 resize-y min-h-[80px] disabled:opacity-50 disabled:cursor-not-allowed"
           rows={3}
@@ -985,7 +1101,7 @@ export function AiLeadReport({
                                 placeholder="Ejemplo: Website: https://ejemplo.com. Objetivos: Expandir red de contactos B2B, participar en eventos sectoriales."
                                 className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-amber-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-0 resize-y min-h-[60px] disabled:opacity-50 disabled:cursor-not-allowed"
                                 rows={3}
-                                disabled={loading || regeneratingTab !== null}
+                                disabled={aiLoading || regeneratingTab !== null}
                               />
                               <div className="mt-2 flex items-center justify-end gap-2">
                                 <button
@@ -996,7 +1112,7 @@ export function AiLeadReport({
                                       addMissingAnswersToPersonalization(activeTabConfig.tabId, activeTabConfig.label);
                                     }
                                   }}
-                                  disabled={!missingAnswersText.trim() || loading || regeneratingTab !== null}
+                                  disabled={!missingAnswersText.trim() || aiLoading || regeneratingTab !== null}
                                   className="rounded-lg border border-amber-600 bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   Agregar a Personalización IA

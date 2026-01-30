@@ -40,6 +40,7 @@ type LeadRow = {
   next_activity_type: NextActivityType | null;
   next_activity_at: string | null;
   empresa_id: string | null;
+  comercial_id: string | null;
   score: number | null;
   score_categoria: string | null;
   
@@ -122,7 +123,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -140,11 +141,22 @@ type LeadCreateInput = Partial<{
   next_activity_type: string | null;
   next_activity_at: string | number | null;
   empresa_id: string | null;
+  comercial_id: string | null;
   score: number | string | null;
 }>;
 
 export async function GET(req: Request) {
   try {
+    // Requerir permiso de lectura de leads
+    const { requirePermission } = await import("@/lib/rbac/requirePermission");
+    const user = await requirePermission(req as any, "leads.read");
+    if (!user) {
+      return NextResponse.json(
+        { data: null, error: "No autorizado" } satisfies LeadsApiResponse,
+        { status: 403 }
+      );
+    }
+
     const url = new URL(req.url);
 
     // Opcional: ?limit=200
@@ -152,9 +164,19 @@ export async function GET(req: Request) {
     const limit = Math.min(Math.max(Number(limitRaw ?? 500), 1), 2000);
 
     const supabase = supabaseAdmin();
-    const { data, error } = await supabase
+    
+    const { searchParams } = new URL(req.url);
+    const pipelineParam = searchParams.get("pipeline");
+    
+    let q = supabase
       .from("leads")
-      .select(SELECT)
+      .select(SELECT);
+    
+    if (pipelineParam && pipelineParam.trim()) {
+      q = q.eq("pipeline", pipelineParam.trim());
+    }
+    
+    const { data, error } = await q
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -179,6 +201,16 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    // Requerir permiso de creación de leads
+    const { requirePermission } = await import("@/lib/rbac/requirePermission");
+    const user = await requirePermission(req as any, "leads.create");
+    if (!user) {
+      return NextResponse.json(
+        { data: null, error: "No autorizado" } satisfies LeadApiResponse,
+        { status: 403 }
+      );
+    }
+
     const body = (await req.json().catch(() => ({}))) as LeadCreateInput;
 
     // ✅ nombre obligatorio (evita leads vacíos)
@@ -249,6 +281,13 @@ export async function POST(req: Request) {
           ? body.empresa_id.trim() 
           : null);
 
+    // Validar comercial_id si viene (debe ser UUID válido o null)
+    const comercialId = body.comercial_id === null || body.comercial_id === undefined 
+      ? null 
+      : (typeof body.comercial_id === "string" && body.comercial_id.trim().length > 0 
+          ? body.comercial_id.trim() 
+          : null);
+
     // Validar score (0-10 o null)
     const scoreParsed = body.score === null || body.score === undefined 
       ? null 
@@ -289,6 +328,7 @@ export async function POST(req: Request) {
       next_activity_type: activityParsed ?? null,
       next_activity_at: nextAtParsed ?? null,
       empresa_id: empresaId,
+      comercial_id: comercialId,
       score: scoreParsed,
 
       updated_at: new Date().toISOString(),

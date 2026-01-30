@@ -19,17 +19,21 @@ type SocioAccionRow = {
   tipo: string | null;
   nota: string | null;
   fecha_limite: string | null;
+  hora: string | null;
   lugar: string | null;
   realizada_at: string | null;
   created_at: string;
   lead_id: string | null;
   socio_id: string | null;
+  comercial_id: string | null;
+  comerciales?: { id: string; nombre: string } | null;
 };
 
 type AgendaItem = {
   id: string;
   tipo: string;
   fecha_limite: string; // YYYY-MM-DD
+  hora: string; // HH:MM
   nota: string | null;
   lugar: string | null;
   created_at: string;
@@ -37,6 +41,8 @@ type AgendaItem = {
   socio_id: string | null;
   owner_type: OwnerType;
   owner_name: string | null;
+  comercial_id?: string | null;
+  comerciales?: { id: string; nombre: string } | null;
 
   // datos para acciones rápidas
   owner_email?: string | null;
@@ -70,12 +76,6 @@ function inferOwnerName(obj: RowObj | null | undefined): string | null {
   return pickFirstString(obj, ["nombre", "razon_social", "razonSocial", "empresa", "title"]);
 }
 
-function addOneDay(dateStr: string): string {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0]; // YYYY-MM-DD
-}
-
 /**
  * GET /api/admin/agenda
  */
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split("T")[0]; // YYYY-MM-DD
+    const todayStr = today.toISOString().split("T")[0]; // YYYY-MM-DD (solo para comparar rangos)
 
     let startDateStr: string;
     let endDateStr: string;
@@ -123,7 +123,9 @@ export async function GET(req: NextRequest) {
     // Query base
     let query = supabase
       .from("socio_acciones")
-      .select("id,tipo,nota,fecha_limite,lugar,realizada_at,created_at,lead_id,socio_id")
+      .select(
+        "id,tipo,nota,fecha_limite,hora,lugar,realizada_at,created_at,lead_id,socio_id,comercial_id,comerciales:comercial_id(id,nombre)"
+      )
       .is("realizada_at", null)
       .not("fecha_limite", "is", null);
 
@@ -205,6 +207,10 @@ export async function GET(req: NextRequest) {
       let owner_phone: string | null = null;
       let owner_whatsapp: string | null = null;
       let owner_meet_url: string | null = null;
+      
+      // Comercial
+      const comercialId = a.comercial_id ? String(a.comercial_id) : null;
+      const comerciales = a.comerciales as { id: string; nombre: string } | null | undefined;
 
       if (owner_type === "lead" && leadId) {
         const l = leadMap.get(leadId);
@@ -238,6 +244,7 @@ export async function GET(req: NextRequest) {
         id: String(a.id),
         tipo: String(a.tipo ?? ""),
         fecha_limite: String(a.fecha_limite),
+        hora: (a.hora ?? "00:00") || "00:00",
         nota: a.nota ? String(a.nota) : null,
         lugar: a.lugar ? String(a.lugar) : null,
         created_at: String(a.created_at),
@@ -245,6 +252,8 @@ export async function GET(req: NextRequest) {
         socio_id: socioId,
         owner_type,
         owner_name,
+        comercial_id: comercialId,
+        comerciales: comerciales || null,
         owner_email,
         owner_phone,
         owner_whatsapp,
@@ -253,10 +262,12 @@ export async function GET(req: NextRequest) {
     }
 
     agendaItems.sort((x, y) => {
-      const ax = new Date(x.fecha_limite).getTime();
-      const ay = new Date(y.fecha_limite).getTime();
-      if (ax !== ay) return ax - ay;
-      return new Date(x.created_at).getTime() - new Date(y.created_at).getTime();
+      // Ordenar por fecha_limite (string YYYY-MM-DD) y luego por created_at (ISO string),
+      // sin convertir a Date para evitar problemas de timezone.
+      if (x.fecha_limite !== y.fecha_limite) {
+        return x.fecha_limite.localeCompare(y.fecha_limite);
+      }
+      return x.created_at.localeCompare(y.created_at);
     });
 
     return NextResponse.json(
@@ -286,8 +297,10 @@ export async function POST(req: NextRequest) {
 
     const tipo = String(body?.tipo ?? "").trim();
     const fechaLimiteRaw = String(body?.fecha_limite ?? "").trim(); // YYYY-MM-DD
+    const horaRaw = body?.hora != null ? String(body.hora).trim() : "00:00"; // HH:MM
     const nota = body?.nota ? String(body.nota) : null;
     const lugar = body?.lugar ? String(body.lugar) : null;
+    const comercialId = (body?.comercial_id ?? null) as string | null;
 
     if (!tipo) throw new Error("Falta tipo");
     if (!fechaLimiteRaw) throw new Error("Falta fecha_limite");
@@ -295,8 +308,12 @@ export async function POST(req: NextRequest) {
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(fechaLimiteRaw)) throw new Error("fecha_limite debe tener formato YYYY-MM-DD");
 
-    // Corregir bug de zona horaria: sumar 1 día para que se guarde la fecha correcta
-    const fechaLimite = addOneDay(fechaLimiteRaw);
+    // Validar hora (opcional, default "00:00")
+    let hora = horaRaw || "00:00";
+    const horaRegex = /^\d{2}:\d{2}$/;
+    if (!horaRegex.test(hora)) {
+      hora = "00:00";
+    }
 
     if (ownerType === "lead") {
       if (!leadId) throw new Error("Falta lead_id");
@@ -312,8 +329,10 @@ export async function POST(req: NextRequest) {
     const insertPayload = {
       tipo,
       nota,
-      fecha_limite: fechaLimite,
+      fecha_limite: fechaLimiteRaw,
+      hora,
       lugar,
+      comercial_id: comercialId,
       lead_id: ownerType === "lead" ? leadId : null,
       socio_id: ownerType === "socio" ? socioId : null,
     };

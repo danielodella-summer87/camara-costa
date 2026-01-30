@@ -3,14 +3,15 @@
 import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, Pencil } from "lucide-react";
 
 type OwnerType = "lead" | "socio";
 
 type AgendaItem = {
   id: string;
   tipo: string;
-  fecha_limite: string; // YYYY-MM-DD
+  fecha_limite: string; // YYYY-MM-DD (string crudo desde la API)
+  hora: string; // HH:MM (string crudo desde la API)
   nota: string | null;
   lugar: string | null;
   created_at: string;
@@ -18,6 +19,8 @@ type AgendaItem = {
   socio_id: string | null;
   owner_type: OwnerType;
   owner_name: string | null;
+  comercial_id?: string | null;
+  comerciales?: { id: string; nombre: string } | null;
 };
 
 type AgendaApiResponse = {
@@ -42,18 +45,25 @@ export default function AgendaPage() {
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Modal crear actividad
+  // Modal crear/editar actividad
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [createForm, setCreateForm] = useState({
     owner_type: "lead" as OwnerType,
     lead_id: "",
     socio_id: "",
     fecha_limite: "",
+    hora: "00:00",
     tipo: "llamada",
     nota: "",
     lugar: "",
+    comercial_id: "",
   });
   const [creating, setCreating] = useState<boolean>(false);
+  
+  // Comerciales para el selector
+  const [comerciales, setComerciales] = useState<Array<{ id: string; nombre: string }>>([]);
+  const [loadingComerciales, setLoadingComerciales] = useState(false);
 
   // Select con búsqueda
   const [ownersData, setOwnersData] = useState<{ leads: Array<{ id: string; nombre: string }>; socios: Array<{ id: string; nombre: string }> }>({
@@ -62,6 +72,12 @@ export default function AgendaPage() {
   });
   const [ownerSearch, setOwnerSearch] = useState<string>("");
   const [showOwnerDropdown, setShowOwnerDropdown] = useState<boolean>(false);
+
+  // Leads en env propuesta
+  type LeadMini = { id: string; nombre: string | null };
+  const [leadsEnvPropuesta, setLeadsEnvPropuesta] = useState<LeadMini[]>([]);
+  const [loadingEnvPropuesta, setLoadingEnvPropuesta] = useState(false);
+  const [errorEnvPropuesta, setErrorEnvPropuesta] = useState<string | null>(null);
 
   // Defaults: últimos 30 días + próximos 14 días
   const defaultPastDays = 30;
@@ -118,12 +134,34 @@ export default function AgendaPage() {
     }
   }
 
+  async function loadLeadsEnvPropuesta() {
+    setLoadingEnvPropuesta(true);
+    setErrorEnvPropuesta(null);
+    try {
+      const res = await fetch(`/api/admin/leads?pipeline=${encodeURIComponent("env propuesta")}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando leads en env propuesta");
+
+      const rows = Array.isArray(json?.data) ? json.data : [];
+      setLeadsEnvPropuesta(rows.map((r: any) => ({ id: r.id, nombre: r.nombre ?? null })));
+    } catch (e: any) {
+      setErrorEnvPropuesta(e?.message ?? "Error cargando env propuesta");
+      setLeadsEnvPropuesta([]);
+    } finally {
+      setLoadingEnvPropuesta(false);
+    }
+  }
+
   useEffect(() => {
     fetchAgenda();
+    loadLeadsEnvPropuesta();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quick]);
 
-  // Cargar owners cuando se abre el modal
+  // Cargar owners y comerciales cuando se abre el modal
   useEffect(() => {
     if (showCreateModal) {
       async function loadOwners() {
@@ -139,9 +177,119 @@ export default function AgendaPage() {
           console.error("Error cargando owners:", e);
         }
       }
+      
+      async function loadComerciales() {
+        setLoadingComerciales(true);
+        try {
+          const res = await fetch("/api/admin/comerciales", {
+            cache: "no-store",
+            headers: { "Cache-Control": "no-store" },
+          });
+          const json = await res.json();
+          if (res.ok && Array.isArray(json?.data)) {
+            setComerciales(json.data.map((c: any) => ({ id: c.id, nombre: c.nombre })));
+          }
+        } catch (e) {
+          console.error("Error cargando comerciales:", e);
+        } finally {
+          setLoadingComerciales(false);
+        }
+      }
+      
       loadOwners();
+      loadComerciales();
     }
   }, [showCreateModal]);
+
+  // Función para abrir modal en modo edición
+  async function handleEditActivity(item: AgendaItem) {
+    setEditingItemId(item.id);
+    setCreateForm({
+      owner_type: item.owner_type,
+      lead_id: item.lead_id || "",
+      socio_id: item.socio_id || "",
+      fecha_limite: item.fecha_limite,
+      hora: item.hora?.trim() || "00:00",
+      tipo: item.tipo,
+      nota: item.nota || "",
+      lugar: item.lugar || "",
+      comercial_id: item.comercial_id || "",
+    });
+
+    // Cargar owners y comerciales si no están cargados
+    if (ownersData.leads.length === 0 && ownersData.socios.length === 0) {
+      try {
+        const res = await fetch("/api/admin/agenda/owners", {
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (res.ok && json.data) {
+          setOwnersData(json.data);
+          // Buscar el nombre del owner después de cargar
+          if (item.owner_type === "lead" && item.lead_id) {
+            const lead = json.data.leads?.find((l: { id: string }) => l.id === item.lead_id);
+            setOwnerSearch(lead?.nombre || item.owner_name || "");
+          } else if (item.owner_type === "socio" && item.socio_id) {
+            const socio = json.data.socios?.find((s: { id: string }) => s.id === item.socio_id);
+            setOwnerSearch(socio?.nombre || item.owner_name || "");
+          }
+        }
+      } catch (e) {
+        console.error("Error cargando owners:", e);
+        // Usar owner_name como fallback
+        setOwnerSearch(item.owner_name || "");
+      }
+    } else {
+      // Buscar el nombre del owner si ya están cargados
+      if (item.owner_type === "lead" && item.lead_id) {
+        const lead = ownersData.leads.find((l) => l.id === item.lead_id);
+        setOwnerSearch(lead?.nombre || item.owner_name || "");
+      } else if (item.owner_type === "socio" && item.socio_id) {
+        const socio = ownersData.socios.find((s) => s.id === item.socio_id);
+        setOwnerSearch(socio?.nombre || item.owner_name || "");
+      }
+    }
+
+    // Cargar comerciales si no están cargados
+    if (comerciales.length === 0) {
+      setLoadingComerciales(true);
+      try {
+        const res = await fetch("/api/admin/comerciales", {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store" },
+        });
+        const json = await res.json();
+        if (res.ok && Array.isArray(json?.data)) {
+          setComerciales(json.data.map((c: any) => ({ id: c.id, nombre: c.nombre })));
+        }
+      } catch (e) {
+        console.error("Error cargando comerciales:", e);
+      } finally {
+        setLoadingComerciales(false);
+      }
+    }
+
+    setShowCreateModal(true);
+  }
+
+  // Función para cerrar modal y resetear estado
+  function handleCloseModal() {
+    setShowCreateModal(false);
+    setEditingItemId(null);
+    setCreateForm({
+      owner_type: "lead",
+      lead_id: "",
+      socio_id: "",
+      fecha_limite: "",
+      hora: "00:00",
+      tipo: "llamada",
+      nota: "",
+      lugar: "",
+      comercial_id: "",
+    });
+    setOwnerSearch("");
+    setShowOwnerDropdown(false);
+  }
 
   // Cerrar dropdown al hacer click fuera
   useEffect(() => {
@@ -157,60 +305,16 @@ export default function AgendaPage() {
   }, [showOwnerDropdown]);
 
   const todayKey = useMemo(() => {
-    return new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+    // Clave de hoy en formato YYYY-MM-DD usada sólo para comparaciones, no para renderizado
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today.toISOString().split("T")[0];
   }, []);
 
   function isOverdue(dateStr: string): boolean {
-    try {
-      const date = new Date(dateStr);
-      date.setHours(0, 0, 0, 0);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return date < today;
-    } catch {
-      return false;
-    }
-  }
-
-
-  function formatDate(dateStr: string): string {
-    try {
-      const date = new Date(dateStr);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const dateOnly = new Date(date);
-      dateOnly.setHours(0, 0, 0, 0);
-
-      const diffDays = Math.floor(
-        (dateOnly.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
-      );
-
-      if (diffDays === 0) return "Hoy";
-      if (diffDays === 1) return "Mañana";
-      if (diffDays === -1) return "Ayer";
-      if (diffDays < 0) return `${Math.abs(diffDays)} días vencidos`;
-
-      return date.toLocaleDateString("es-UY", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
-  }
-
-  function formatDateShort(dateStr: string): string {
-    try {
-      const date = new Date(dateStr);
-      return date.toLocaleDateString("es-UY", {
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    // fecha_limite ya viene como string YYYY-MM-DD; comparamos como string contra hoy
+    const today = todayKey;
+    return dateStr < today;
   }
 
   function getTipoBadge(tipo: string): string {
@@ -288,9 +392,7 @@ export default function AgendaPage() {
   }, [filteredItems]);
 
   const sortedDays = useMemo(() => {
-    return Object.keys(groupedByDay).sort(
-      (a, b) => new Date(a).getTime() - new Date(b).getTime()
-    );
+    return Object.keys(groupedByDay).sort((a, b) => a.localeCompare(b));
   }, [groupedByDay]);
 
   async function markAsDone(item: AgendaItem) {
@@ -376,58 +478,88 @@ export default function AgendaPage() {
 
     setCreating(true);
     try {
-      const payload: {
-        owner_type: OwnerType;
-        fecha_limite: string;
-        tipo: string;
-        nota: string | null;
-        lugar: string | null;
-        lead_id?: string;
-        socio_id?: string;
-      } = {
-        owner_type: createForm.owner_type,
-        fecha_limite: createForm.fecha_limite,
-        tipo: createForm.tipo,
-        nota: createForm.nota?.trim() || null,
-        lugar: createForm.lugar?.trim() || null,
-      };
+      if (editingItemId) {
+        // Modo edición: PATCH
+        const payload: {
+          fecha_limite: string;
+          hora: string;
+          tipo: string;
+          nota: string | null;
+          lugar: string | null;
+          comercial_id: string | null;
+        } = {
+          fecha_limite: createForm.fecha_limite,
+          hora: createForm.hora || "00:00",
+          tipo: createForm.tipo,
+          nota: createForm.nota?.trim() || null,
+          lugar: createForm.lugar?.trim() || null,
+          comercial_id: createForm.comercial_id?.trim() || null,
+        };
 
-      if (createForm.owner_type === "lead") {
-        payload.lead_id = createForm.lead_id.trim();
+        const res = await fetch(`/api/admin/agenda/${editingItemId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const json = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          throw new Error(json?.error ?? "Error actualizando actividad");
+        }
+
+        // Cerrar modal y resetear
+        handleCloseModal();
+
+        // Refetch agenda
+        await fetchAgenda();
       } else {
-        payload.socio_id = createForm.socio_id.trim();
+        // Modo creación: POST
+        const payload: {
+          owner_type: OwnerType;
+          fecha_limite: string;
+          hora: string;
+          tipo: string;
+          nota: string | null;
+          lugar: string | null;
+          comercial_id: string | null;
+          lead_id?: string;
+          socio_id?: string;
+        } = {
+          owner_type: createForm.owner_type,
+          fecha_limite: createForm.fecha_limite,
+          hora: createForm.hora || "00:00",
+          tipo: createForm.tipo,
+          nota: createForm.nota?.trim() || null,
+          lugar: createForm.lugar?.trim() || null,
+          comercial_id: createForm.comercial_id?.trim() || null,
+        };
+
+        if (createForm.owner_type === "lead") {
+          payload.lead_id = createForm.lead_id.trim();
+        } else {
+          payload.socio_id = createForm.socio_id.trim();
+        }
+
+        const res = await fetch("/api/admin/agenda", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const json = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          throw new Error(json?.error ?? "Error creando actividad");
+        }
+
+        // Cerrar modal y resetear
+        handleCloseModal();
+
+        // Refetch agenda
+        await fetchAgenda();
       }
-
-      const res = await fetch("/api/admin/agenda", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const json = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) {
-        throw new Error(json?.error ?? "Error creando actividad");
-      }
-
-      // Reset form y cerrar modal
-      setCreateForm({
-        owner_type: "lead",
-        lead_id: "",
-        socio_id: "",
-        fecha_limite: "",
-        tipo: "llamada",
-        nota: "",
-        lugar: "",
-      });
-      setOwnerSearch("");
-      setShowOwnerDropdown(false);
-      setShowCreateModal(false);
-
-      // Refetch agenda
-      await fetchAgenda();
     } catch (e: unknown) {
       const error = e as { message?: string };
-      alert(error?.message ?? "Error creando actividad");
+      alert(error?.message ?? (editingItemId ? "Error actualizando actividad" : "Error creando actividad"));
     } finally {
       setCreating(false);
     }
@@ -435,6 +567,42 @@ export default function AgendaPage() {
 
   return (
     <PageContainer>
+      {/* Bloque leads en env propuesta */}
+      <div className="mb-4 rounded-2xl border bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Leads en etapa: env propuesta</div>
+            <div className="text-xs text-slate-500">Acceso rápido</div>
+          </div>
+          <div className="text-xs text-slate-500">
+            {loadingEnvPropuesta ? "Cargando..." : `${leadsEnvPropuesta.length}`}
+          </div>
+        </div>
+
+        {errorEnvPropuesta ? <div className="mt-2 text-sm text-red-600">{errorEnvPropuesta}</div> : null}
+
+        {!loadingEnvPropuesta && leadsEnvPropuesta.length === 0 ? (
+          <div className="mt-2 text-sm text-slate-500">No hay leads en esta etapa.</div>
+        ) : null}
+
+        <div className="mt-3 space-y-2">
+          {leadsEnvPropuesta.map((l) => (
+            <div key={l.id} className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2">
+              <div className="min-w-0 truncate text-sm font-medium text-slate-900">
+                {l.nombre ?? "Sin nombre"}
+              </div>
+
+              <a
+                href={`/admin/leads/${l.id}`}
+                className="shrink-0 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              >
+                Abrir lead
+              </a>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Agenda</h1>
@@ -451,19 +619,17 @@ export default function AgendaPage() {
         </button>
       </div>
 
-      {/* Modal crear actividad */}
+      {/* Modal crear/editar actividad */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-2xl rounded-2xl border bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-900">Nueva actividad</h2>
+              <h2 className="text-lg font-semibold text-slate-900">
+                {editingItemId ? "Editar actividad" : "Nueva actividad"}
+              </h2>
               <button
                 type="button"
-                onClick={() => {
-                  setShowCreateModal(false);
-                  setOwnerSearch("");
-                  setShowOwnerDropdown(false);
-                }}
+                onClick={handleCloseModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 ✕
@@ -471,87 +637,91 @@ export default function AgendaPage() {
             </div>
 
             <div className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-600">Dueño *</label>
-                <select
-                  value={createForm.owner_type}
-                  onChange={(e) => {
-                    setCreateForm({
-                      ...createForm,
-                      owner_type: e.target.value as OwnerType,
-                      lead_id: "",
-                      socio_id: "",
-                    });
-                    setOwnerSearch("");
-                    setShowOwnerDropdown(false);
-                  }}
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-                >
-                  <option value="lead">Lead</option>
-                  <option value="socio">Socio</option>
-                </select>
-              </div>
+              {!editingItemId && (
+                <>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Dueño *</label>
+                    <select
+                      value={createForm.owner_type}
+                      onChange={(e) => {
+                        setCreateForm({
+                          ...createForm,
+                          owner_type: e.target.value as OwnerType,
+                          lead_id: "",
+                          socio_id: "",
+                        });
+                        setOwnerSearch("");
+                        setShowOwnerDropdown(false);
+                      }}
+                      className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                    >
+                      <option value="lead">Lead</option>
+                      <option value="socio">Socio</option>
+                    </select>
+                  </div>
 
-              <div className="relative owner-dropdown-container">
-                <label className="text-xs font-semibold text-slate-600">
-                  {createForm.owner_type === "lead" ? "Lead" : "Socio"} *
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={ownerSearch}
-                    onChange={(e) => {
-                      setOwnerSearch(e.target.value);
-                      setShowOwnerDropdown(true);
-                    }}
-                    onFocus={() => setShowOwnerDropdown(true)}
-                    placeholder={`Buscar ${createForm.owner_type === "lead" ? "lead" : "socio"}...`}
-                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
-                  />
-                  {showOwnerDropdown && (
-                    <div className="absolute z-50 mt-1 w-full max-h-60 overflow-auto rounded-xl border bg-white shadow-lg">
-                      {(createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios)
-                        .filter((o) =>
-                          ownerSearch.trim()
-                            ? o.nombre.toLowerCase().includes(ownerSearch.toLowerCase())
-                            : true
-                        )
-                        .slice(0, 20)
-                        .map((o) => (
-                          <button
-                            key={o.id}
-                            type="button"
-                            onClick={() => {
-                              setCreateForm({
-                                ...createForm,
-                                [createForm.owner_type === "lead" ? "lead_id" : "socio_id"]: o.id,
-                              });
-                              setOwnerSearch(o.nombre);
-                              setShowOwnerDropdown(false);
-                            }}
-                            className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 border-b last:border-b-0"
-                          >
-                            {o.nombre}
-                          </button>
-                        ))}
-                      {ownerSearch.trim() &&
-                        (createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios).filter((o) =>
-                          o.nombre.toLowerCase().includes(ownerSearch.toLowerCase())
-                        ).length === 0 && (
-                          <div className="px-4 py-2 text-sm text-slate-500">No se encontraron resultados</div>
-                        )}
+                  <div className="relative owner-dropdown-container">
+                    <label className="text-xs font-semibold text-slate-600">
+                      {createForm.owner_type === "lead" ? "Lead" : "Socio"} *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={ownerSearch}
+                        onChange={(e) => {
+                          setOwnerSearch(e.target.value);
+                          setShowOwnerDropdown(true);
+                        }}
+                        onFocus={() => setShowOwnerDropdown(true)}
+                        placeholder={`Buscar ${createForm.owner_type === "lead" ? "lead" : "socio"}...`}
+                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                      />
+                      {showOwnerDropdown && (
+                        <div className="absolute z-50 mt-1 w-full max-h-60 overflow-auto rounded-xl border bg-white shadow-lg">
+                          {(createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios)
+                            .filter((o) =>
+                              ownerSearch.trim()
+                                ? o.nombre.toLowerCase().includes(ownerSearch.toLowerCase())
+                                : true
+                            )
+                            .slice(0, 20)
+                            .map((o) => (
+                              <button
+                                key={o.id}
+                                type="button"
+                                onClick={() => {
+                                  setCreateForm({
+                                    ...createForm,
+                                    [createForm.owner_type === "lead" ? "lead_id" : "socio_id"]: o.id,
+                                  });
+                                  setOwnerSearch(o.nombre);
+                                  setShowOwnerDropdown(false);
+                                }}
+                                className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50 border-b last:border-b-0"
+                              >
+                                {o.nombre}
+                              </button>
+                            ))}
+                          {ownerSearch.trim() &&
+                            (createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios).filter((o) =>
+                              o.nombre.toLowerCase().includes(ownerSearch.toLowerCase())
+                            ).length === 0 && (
+                              <div className="px-4 py-2 text-sm text-slate-500">No se encontraron resultados</div>
+                            )}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-                {(createForm.owner_type === "lead" ? createForm.lead_id : createForm.socio_id) && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Seleccionado:{" "}
-                    {(createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios).find(
-                      (o) => o.id === (createForm.owner_type === "lead" ? createForm.lead_id : createForm.socio_id)
-                    )?.nombre || "—"}
-                  </p>
-                )}
-              </div>
+                    {(createForm.owner_type === "lead" ? createForm.lead_id : createForm.socio_id) && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        Seleccionado:{" "}
+                        {(createForm.owner_type === "lead" ? ownersData.leads : ownersData.socios).find(
+                          (o) => o.id === (createForm.owner_type === "lead" ? createForm.lead_id : createForm.socio_id)
+                        )?.nombre || "—"}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -564,6 +734,18 @@ export default function AgendaPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="text-xs font-semibold text-slate-600">Hora</label>
+                  <input
+                    type="time"
+                    value={createForm.hora}
+                    onChange={(e) => setCreateForm({ ...createForm, hora: e.target.value || "00:00" })}
+                    className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-semibold text-slate-600">Tipo *</label>
                   <select
@@ -600,6 +782,26 @@ export default function AgendaPage() {
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                 />
               </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Comercial</label>
+                <select
+                  value={createForm.comercial_id}
+                  onChange={(e) => setCreateForm({ ...createForm, comercial_id: e.target.value })}
+                  disabled={loadingComerciales}
+                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+                >
+                  <option value="">— Sin asignar —</option>
+                  {comerciales.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre}
+                    </option>
+                  ))}
+                </select>
+                {loadingComerciales && (
+                  <p className="mt-1 text-xs text-slate-500">Cargando comerciales...</p>
+                )}
+              </div>
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
@@ -620,7 +822,13 @@ export default function AgendaPage() {
                     : "bg-slate-900 hover:opacity-95"
                 }`}
               >
-                {creating ? "Creando..." : "Crear"}
+                {creating
+                  ? editingItemId
+                    ? "Guardando..."
+                    : "Creando..."
+                  : editingItemId
+                  ? "Guardar"
+                  : "Crear"}
               </button>
             </div>
           </div>
@@ -739,10 +947,10 @@ export default function AgendaPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <h2 className={`text-lg font-semibold ${overdue ? "text-red-900" : "text-slate-900"}`}>
-                        {formatDate(dayKey)}
+                        {dayKey}
                       </h2>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        {formatDateShort(dayKey)} • {items.length} {items.length === 1 ? "acción" : "acciones"}
+                        {items.length} {items.length === 1 ? "acción" : "acciones"}
                       </p>
                     </div>
 
@@ -776,9 +984,18 @@ export default function AgendaPage() {
                               {item.tipo || "Acción"}
                             </span>
                             <span className="text-xs text-slate-500">
+                              • {item.hora?.trim() || "00:00"}
+                            </span>
+                            <span className="text-xs text-slate-500">
                               {getOwnerLabel(item)} •{" "}
                               <span className="font-semibold text-slate-700">
                                 {item.owner_name ?? "—"}
+                              </span>
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              • Comercial:{" "}
+                              <span className={item.comerciales?.nombre ? "font-semibold text-slate-900" : "text-slate-400"}>
+                                {item.comerciales?.nombre ?? "Sin asignar"}
                               </span>
                             </span>
                           </div>
@@ -815,13 +1032,23 @@ export default function AgendaPage() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-2 shrink-0 flex-wrap">
                           <Link
                             href={getOwnerLink(item)}
                             className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                           >
                             Abrir {getOwnerLabel(item)}
                           </Link>
+
+                          <button
+                            type="button"
+                            onClick={() => handleEditActivity(item)}
+                            disabled={creating}
+                            className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            Editar Oportunidad
+                          </button>
 
                           <button
                             type="button"

@@ -8,6 +8,8 @@ type Accion = {
   lead_id: string | null;
   tipo: string;
   nota: string | null;
+  lugar?: string | null;
+  hora?: string | null; // "HH:MM"
   fecha_limite: string | null; // YYYY-MM-DD - fecha límite real
   realizada_at: string | null; // Timestamp ISO cuando se ejecutó (null si pendiente)
   created_at: string;
@@ -28,7 +30,10 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
 
   const [error, setError] = useState<string | null>(null);
   const [nota, setNota] = useState("");
+  const [lugar, setLugar] = useState("");
+  const [hora, setHora] = useState("00:00");
   const [fechaLimite, setFechaLimite] = useState("");
+  const [showDone, setShowDone] = useState(false);
   const [acciones, setAcciones] = useState<Accion[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -45,12 +50,17 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
     );
   }
 
-  async function refreshAcciones() {
+  async function refreshAcciones(includeDone: boolean = false) {
     setError(null);
     setLoading(true);
 
     try {
-      const res = await fetch(apiBasePath, {
+      const url = new URL(apiBasePath, window.location.origin);
+      if (includeDone) {
+        url.searchParams.set("includeDone", "1");
+      }
+
+      const res = await fetch(url.toString(), {
         method: "GET",
         cache: "no-store",
         headers: { "Cache-Control": "no-store" },
@@ -73,23 +83,23 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
   }
 
   useEffect(() => {
-    refreshAcciones();
+    refreshAcciones(showDone);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityId, entityType]);
+  }, [entityId, entityType, showDone]);
 
-  // Ordenar por fecha_limite asc (más urgente arriba) y luego created_at desc como fallback
+  // Filtrar y ordenar por fecha_limite asc (más urgente arriba) y luego created_at desc como fallback
   const accionesOrdenadas = useMemo(() => {
-    return [...(acciones ?? [])].sort((a, b) => {
-      // Primero por fecha_limite (ascendente - más urgente primero)
+    const base = [...(acciones ?? [])];
+
+    const filtradas = showDone ? base : base.filter((a) => !isDone(a.realizada_at));
+
+    return filtradas.sort((a, b) => {
       const fechaA = a.fecha_limite ? new Date(a.fecha_limite).getTime() : Infinity;
       const fechaB = b.fecha_limite ? new Date(b.fecha_limite).getTime() : Infinity;
-      if (fechaA !== fechaB) {
-        return fechaA - fechaB;
-      }
-      // Si tienen la misma fecha_limite, ordenar por created_at desc (más nuevo primero)
+      if (fechaA !== fechaB) return fechaA - fechaB;
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     });
-  }, [acciones]);
+  }, [acciones, showDone]);
 
   function formatDate(dateStr: string | null) {
     if (!dateStr) return "—";
@@ -173,8 +183,10 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           },
           body: JSON.stringify({
             tipo: tipo.trim(),
-            nota: nota.trim() || "", // Siempre string, nunca null
-            fecha_limite: fechaLimite.trim(), // Usar fecha_limite como deadline real
+            nota: nota.trim() || "",
+            fecha_limite: fechaLimite.trim(),
+            lugar: lugar.trim() || null,
+            hora: (hora || "00:00").trim(),
           }),
         });
 
@@ -184,9 +196,11 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           throw new Error(json?.error ?? "Error creando acción");
         }
 
-        // Reset solo la nota (mantener fecha límite para siguiente acción)
+        // Reset del form después de crear
         setNota("");
-        await refreshAcciones();
+        setLugar("");
+        setHora("00:00");
+        await refreshAcciones(showDone);
       } catch (e: any) {
         setError(e?.message ?? "Error creando acción");
       }
@@ -210,7 +224,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           throw new Error(json?.error ?? "Error marcando acción como ejecutada");
         }
 
-        await refreshAcciones();
+        await refreshAcciones(showDone);
       } catch (e: any) {
         setError(e?.message ?? "Error marcando acción como ejecutada");
       }
@@ -230,7 +244,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
         </div>
       )}
 
-      {/* Campos compartidos: Fecha límite y Nota */}
+      {/* Campos compartidos: Fecha límite, Lugar, Hora y Nota */}
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         <div>
           <label className="text-xs font-medium text-slate-600">
@@ -246,7 +260,29 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           />
         </div>
 
-        <div className="md:col-span-2">
+        <div>
+          <label className="block text-xs font-medium text-slate-700">Lugar</label>
+          <input
+            value={lugar}
+            onChange={(e) => setLugar(e.target.value)}
+            disabled={isPending}
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 disabled:opacity-60"
+            placeholder="Ej: Oficina, Zoom, Restaurante..."
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-700">Hora</label>
+          <input
+            type="time"
+            value={hora}
+            onChange={(e) => setHora(e.target.value)}
+            disabled={isPending}
+            className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-slate-400 disabled:opacity-60"
+          />
+        </div>
+
+        <div className="md:col-span-3">
           <label className="text-xs font-medium text-slate-600">Nota (opcional)</label>
           <input
             type="text"
@@ -298,17 +334,28 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
         </button>
       </div>
 
+      {/* Filtro ver ejecutadas */}
+      <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          checked={showDone}
+          onChange={(e) => setShowDone(e.target.checked)}
+          className="h-4 w-4 rounded border-slate-300"
+        />
+        Ver ejecutadas
+      </label>
+
       {/* Lista de acciones */}
       <div className="mt-5 overflow-hidden rounded-2xl border">
         <div className="overflow-x-auto">
           <div className="min-w-[800px]">
-            <div className="grid grid-cols-[140px_120px_100px_1fr_120px_100px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+            <div className="grid grid-cols-[140px_120px_140px_100px_100px_120px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
               <div>Tipo</div>
               <div>Fecha límite</div>
+              <div>Lugar</div>
+              <div>Hora</div>
               <div>Estado</div>
-              <div>Nota</div>
-              <div>Creada</div>
-              <div></div>
+              <div className="text-right">Acción</div>
             </div>
 
             {loading ? (
@@ -323,7 +370,7 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
                   return (
                     <div
                       key={a.id}
-                      className="grid grid-cols-[140px_120px_100px_1fr_120px_100px] items-center px-4 py-3 text-sm"
+                      className="grid grid-cols-[140px_120px_140px_100px_100px_120px] items-center px-4 py-3 text-sm"
                     >
                       <div className="font-medium text-slate-900 capitalize">{a.tipo}</div>
                       <div className="flex items-center gap-2">
@@ -338,6 +385,8 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
                           </span>
                         )}
                       </div>
+                      <div className="text-slate-700">{a.lugar?.trim() ? a.lugar : "—"}</div>
+                      <div className="text-slate-700">{a.hora?.trim() ? a.hora : "00:00"}</div>
                       <div>
                         {done ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
@@ -349,8 +398,6 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
                           </span>
                         )}
                       </div>
-                      <div className="text-slate-700">{a.nota ?? "—"}</div>
-                      <div className="text-xs text-slate-500">{formatDate(a.created_at)}</div>
                       <div className="text-right">
                         {done ? (
                           <span className="text-xs text-slate-400">

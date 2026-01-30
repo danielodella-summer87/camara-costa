@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
 
+console.log("[IA CONFIG] PAGE.TSX HIT", new Date().toISOString());
+
 const STORAGE_KEY = "camara_costa_ai_prompts_v1";
+const API_IA = "/api/admin/config/ia";
 
 type PromptConfig = {
   base: string;
@@ -23,6 +26,35 @@ const DEFAULT_MODULES: Record<string, string> = {
   ACCIONES: "Genera un plan de acciones con subsecciones: Acciones 72 hs, Plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.",
   MATERIALES_LISTOS: "Genera una lista de materiales listos para usar: Copys, Scripts, PDFs, Recursos accionables. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.",
   CIERRE_VENTA: "Genera estrategias de cierre de venta: argumentos, objeciones, CTAs, próximos pasos. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.",
+  vision_estrategica: `Actúa como Director de Growth Marketing Senior y socio estratégico.
+
+Tu tarea NO es analizar módulos por separado ni repetir diagnósticos.
+Tu tarea es integrar todo el informe previo y producir una lectura estratégica unificada.
+
+Objetivo:
+Convertir el informe técnico en una visión clara para la toma de decisiones.
+
+Instrucciones obligatorias:
+- No repitas información descriptiva ya mencionada.
+- No enumeres herramientas ni tácticas menores.
+- Prioriza impacto de negocio sobre exhaustividad.
+- Toma postura profesional, incluso si implica descartar opciones.
+- Pensá como si tu reputación dependiera de esta recomendación.
+
+Desarrolla los siguientes bloques, en este orden y solo con el contenido solicitado:
+
+1. LECTURA CENTRAL  
+2. PALANCA ESTRATÉGICA DOMINANTE  
+3. FOCO RECOMENDADO  
+4. RIESGO CLAVE  
+5. DECISIÓN SUGERIDA  
+6. PRÓXIMO MOVIMIENTO INTELIGENTE  
+
+Reglas finales:
+- Sé claro, directo y sintético.
+- Evita lenguaje genérico o académico.
+- No vendas servicios.
+- No cierres con frases abiertas.`,
 };
 
 const DEFAULT_BASE = `Eres un consultor senior experto en identificar oportunidades estratégicas. Generas informes técnicos con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.
@@ -43,58 +75,127 @@ const MODULE_LABELS: Record<string, string> = {
   ACCIONES: "Acciones",
   MATERIALES_LISTOS: "Materiales Listos",
   CIERRE_VENTA: "Cierre de Venta",
+  vision_estrategica: "Visión Estratégica",
 };
 
+function applyDefaults(parsed: { base?: string; modules?: Record<string, string> }): PromptConfig {
+  return {
+    base: parsed.base ?? DEFAULT_BASE,
+    modules: { ...DEFAULT_MODULES, ...(parsed.modules ?? {}) },
+  };
+}
+
+function loadFromStorage(): PromptConfig {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as PromptConfig;
+      return applyDefaults(parsed);
+    }
+  } catch (e) {
+    console.error("Error leyendo localStorage:", e);
+  }
+  return { base: DEFAULT_BASE, modules: { ...DEFAULT_MODULES } };
+}
+
+function saveToStorage(config: PromptConfig) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  } catch (e) {
+    console.error("Error guardando en localStorage:", e);
+  }
+}
+
 export default function ConfigIAPage() {
+  console.log("[IA CONFIG] RENDER");
+  console.log("[IA CONFIG] componente renderizado");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [backendWarning, setBackendWarning] = useState<string | null>(null);
   const [config, setConfig] = useState<PromptConfig>({
     base: "",
     modules: {},
   });
 
-  function loadConfig() {
+  const loadFromBackend = useCallback(async () => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as PromptConfig;
-        setConfig({
-          base: parsed.base || DEFAULT_BASE,
-          modules: { ...DEFAULT_MODULES, ...(parsed.modules || {}) },
-        });
-      } else {
-        setConfig({
-          base: DEFAULT_BASE,
-          modules: { ...DEFAULT_MODULES },
-        });
+      console.log("[IA CONFIG] voy a hacer fetch a /api/admin/config/ia");
+      const res = await fetch(API_IA, { credentials: "include" });
+      console.log("[IA CONFIG] respuesta fetch", res.status);
+      const json = await res.json().catch(() => ({}));
+      console.log("[IA CONFIG] payload backend", json);
+
+      if (!res.ok) {
+        setBackendWarning("No se pudo cargar la configuración del servidor. Se usa la copia local.");
+        setConfig(loadFromStorage());
+        return;
       }
-    } catch (e) {
-      console.error("Error cargando configuración:", e);
-      setConfig({
-        base: DEFAULT_BASE,
-        modules: { ...DEFAULT_MODULES },
-      });
+
+      if (json.data && (json.data.basePrompt !== undefined || json.data.modulos !== undefined)) {
+        const payload = json.data;
+        const next = applyDefaults({
+          base: payload.basePrompt,
+          modules: payload.modulos,
+        });
+        console.log("[IA CONFIG] setConfig desde backend (basePrompt)", next.base);
+        console.log("[IA CONFIG] setConfig desde backend (modulos)", next.modules);
+        setConfig(next);
+        saveToStorage(next);
+      } else {
+        setConfig(loadFromStorage());
+      }
+      setBackendWarning(null);
+    } catch (_e) {
+      setBackendWarning("No se pudo conectar con el servidor. Se usa la copia local.");
+      setConfig(loadFromStorage());
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    console.log("[IA CONFIG] useEffect ejecutado");
+    loadFromBackend();
+  }, [loadFromBackend]);
 
   function saveConfig() {
     setError(null);
     setSuccess(false);
+    setBackendWarning(null);
     setSaving(true);
 
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (e: any) {
-      setError(e?.message ?? "Error guardando configuración");
-    } finally {
-      setSaving(false);
-    }
+    const payload = { basePrompt: config.base, modulos: config.modules };
+
+    fetch(API_IA, {
+      method: "PUT",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setSuccess(true);
+          saveToStorage(config);
+          setTimeout(() => setSuccess(false), 3000);
+        } else {
+          saveToStorage(config);
+          setBackendWarning(
+            json?.error ?? "El servidor no guardó los cambios. Se guardó en este dispositivo."
+          );
+        }
+      })
+      .catch(() => {
+        saveToStorage(config);
+        setBackendWarning(
+          "No se pudo conectar con el servidor. La configuración se guardó solo en este dispositivo."
+        );
+      })
+      .finally(() => {
+        setSaving(false);
+      });
   }
 
   function restoreDefaults() {
@@ -108,11 +209,10 @@ export default function ConfigIAPage() {
     });
     setSuccess(false);
     setError(null);
+    setBackendWarning(null);
   }
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
+  console.log("[IA CONFIG] estado final", { basePrompt: config.base, modulos: config.modules });
 
   return (
     <PageContainer>
@@ -138,6 +238,12 @@ export default function ConfigIAPage() {
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
+          </div>
+        )}
+
+        {backendWarning && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            {backendWarning}
           </div>
         )}
 

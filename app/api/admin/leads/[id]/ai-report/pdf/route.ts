@@ -9,6 +9,22 @@ function supabaseAdmin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+export function sanitizeForPdf(input: string) {
+  if (!input) return input;
+
+  return input
+    .replaceAll('\u2192', '->')   // →
+    .replaceAll('\u2022', '-')    // •
+    .replaceAll('\u2013', '-')    // –
+    .replaceAll('\u2014', '-')    // —
+    .replaceAll('\u201C', '"')    // “
+    .replaceAll('\u201D', '"')    // ”
+    .replaceAll('\u2018', "'")    // ‘
+    .replaceAll('\u2019', "'")    // ’
+    .replaceAll('\u2026', '...')  // …
+    .replaceAll('\u00A0', ' ');   // nbsp
+}
+
 function wrapText(text: string, maxChars = 90) {
   const lines: string[] = [];
   const paragraphs = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
@@ -61,6 +77,11 @@ export async function GET(
     const report = (lead?.ai_report && String(lead.ai_report)) || "Sin informe IA todavía.";
     const updatedAt = lead?.ai_report_updated_at ? String(lead.ai_report_updated_at) : null;
 
+    // Sanitizar textos antes de procesar
+    const sanitizedTitle = sanitizeForPdf(title);
+    const sanitizedReport = sanitizeForPdf(report);
+    const sanitizedUpdatedAt = updatedAt ? sanitizeForPdf(updatedAt) : null;
+
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -71,16 +92,16 @@ export async function GET(
 
     const drawLine = (txt: string, size = 11, bold = false) => {
       const f = bold ? fontBold : font;
-      page.drawText(txt, { x: margin, y, size, font: f });
+      page.drawText(sanitizeForPdf(txt), { x: margin, y, size, font: f });
       y -= size + 6;
     };
 
     drawLine("AI Lead Report", 18, true);
-    drawLine(title, 12, true);
-    if (updatedAt) drawLine(`Actualizado: ${updatedAt}`, 10, false);
+    drawLine(sanitizedTitle, 12, true);
+    if (sanitizedUpdatedAt) drawLine(`Actualizado: ${sanitizedUpdatedAt}`, 10, false);
     y -= 6;
 
-    const lines = wrapText(report, 95);
+    const lines = wrapText(sanitizedReport, 95);
     for (const ln of lines) {
       // salto de página si falta espacio
       if (y < margin + 24) {

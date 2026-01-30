@@ -19,8 +19,9 @@ type Ctx =
 /**
  * GET /api/admin/leads/[id]/acciones
  * Lista acciones del lead ordenadas por fecha_limite asc (y luego created_at desc como fallback)
+ * Query param opcional: includeDone=1 para incluir ejecutadas (realizada_at NOT NULL)
  */
-export async function GET(_req: NextRequest, ctx: Ctx) {
+export async function GET(req: NextRequest, ctx: Ctx) {
   const params = await Promise.resolve((ctx as any).params);
   const leadIdRaw = params?.id ? String(params.id) : "";
   const leadId = leadIdRaw ? decodeURIComponent(leadIdRaw) : "";
@@ -34,10 +35,19 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 
   const supabase = supabaseAdmin();
 
-  const { data, error } = await supabase
+  const { searchParams } = new URL(req.url);
+  const includeDone = searchParams.get("includeDone") === "1";
+
+  let query = supabase
     .from("socio_acciones")
-    .select("id,socio_id,lead_id,tipo,nota,fecha_limite,realizada_at,created_at")
-    .eq("lead_id", leadId)
+    .select("id,socio_id,lead_id,tipo,nota,lugar,hora,fecha_limite,realizada_at,created_at")
+    .eq("lead_id", leadId);
+
+  if (!includeDone) {
+    query = query.is("realizada_at", null);
+  }
+
+  const { data, error } = await query
     .order("fecha_limite", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
 
@@ -68,7 +78,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const { tipo, nota, fecha_limite } = body;
+  const { tipo, nota, fecha_limite, comercial_id, lugar, hora } = body;
 
   // Validación: NO permitir que se intente setear socio_id en acciones de lead
   if (body.socio_id !== undefined && body.socio_id !== null) {
@@ -98,9 +108,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   let fechaLimiteValue: string;
   if (!fecha_limite || typeof fecha_limite !== "string" || !fecha_limite.trim()) {
     // Si no viene, usar hoy como default
-    fechaLimiteValue = new Date().toISOString().split("T")[0];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    fechaLimiteValue = today.toISOString().split("T")[0];
   } else {
-    // Validar formato de fecha
+    // Validar formato de fecha (YYYY-MM-DD)
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(fecha_limite.trim())) {
       return NextResponse.json(
@@ -111,10 +123,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     fechaLimiteValue = fecha_limite.trim();
   }
 
+  // hora es opcional, default "00:00"
+  let horaValue: string = "00:00";
+  if (typeof hora === "string" && hora.trim()) {
+    const horaRegex = /^\d{2}:\d{2}$/;
+    horaValue = horaRegex.test(hora.trim()) ? hora.trim() : "00:00";
+  }
+
   const supabase = supabaseAdmin();
 
   // Normalizar nota: nunca null, siempre string (vacío si no hay valor)
   const notaNormalizada = nota ? String(nota).trim() : "";
+
+  // Normalizar lugar
+  const lugarNormalizado = typeof lugar === "string" && lugar.trim() ? lugar.trim() : null;
 
   // Asegurar que lead_id nunca sea undefined antes de construir el payload
   // (Ya validado arriba, pero doble verificación para seguridad)
@@ -133,14 +155,20 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     socio_id: null;
     tipo: string;
     nota: string;
+    lugar: string | null;
+    hora: string;
     fecha_limite: string;
+    comercial_id: string | null;
     realizada_at: null;
   } = {
     lead_id: leadId, // SIEMPRE usar el id del params, nunca undefined
     socio_id: null, // SIEMPRE null para acciones de lead
     tipo: tipo.trim(),
     nota: notaNormalizada,
+    lugar: lugarNormalizado,
+    hora: horaValue,
     fecha_limite: fechaLimiteValue, // Usar fecha_limite como deadline real
+    comercial_id: comercial_id ? String(comercial_id).trim() : null,
     realizada_at: null, // EXPLÍCITAMENTE NULL al crear (pendiente)
   };
 

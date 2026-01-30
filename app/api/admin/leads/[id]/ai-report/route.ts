@@ -37,11 +37,55 @@ type LeadRow = {
   audiencia?: string | any | null; // text (puede venir como array por backward compatibility)
   tamano?: string | null;
   oferta?: string | null;
+  linkedin_empresa?: string | null;
+  linkedin_director?: string | null;
+  meet_url?: string | null;
 
   ai_context?: string | null;
   ai_report?: string | null;
   ai_report_updated_at?: string | null;
   ai_custom_prompt?: string | null;
+  empresa_id?: string | null;
+};
+
+type ResolvedContext = {
+  // Datos básicos (Lead tiene prioridad)
+  nombre: string;
+  contacto: string;
+  telefono: string;
+  email: string;
+  origen: string;
+  pipeline: string;
+  notas: string;
+  
+  // Datos con resolución Lead > Entidad > Cliente
+  website: string;
+  instagram: string;
+  linkedinEmpresa: string;
+  linkedinDirector: string;
+  meetUrl: string;
+  
+  // Datos específicos del Lead (override)
+  objetivos: string;
+  audiencia: string;
+  tamano: string;
+  oferta: string;
+  
+  // Datos de Entidad
+  rubro: string;
+  direccion: string;
+  ciudad: string;
+  pais: string;
+  
+  // Historial del Cliente (si existe)
+  clienteHistorial: string;
+  clientePlan: string;
+  clienteEstado: string;
+  clienteFechaAlta: string;
+  
+  // Fuentes (para debug)
+  websiteSource: "Lead" | "Entidad" | "Cliente" | "N/A";
+  instagramSource: "Lead" | "Entidad" | "Cliente" | "N/A";
 };
 
 function safeId(v: unknown) {
@@ -60,14 +104,193 @@ function nowIso() {
 }
 
 /**
+ * Normaliza y construye el bloque de Personalización IA
+ * Retorna null si está vacío o null
+ */
+function buildPersonalizacionIABlock(customPrompt: string | null | undefined, moduleId?: string): string | null {
+  if (!customPrompt || !customPrompt.trim()) {
+    return null;
+  }
+  
+  // Normalizar: trim, colapsar espacios múltiples, límite de longitud
+  let normalized = customPrompt.trim();
+  
+  // Colapsar espacios múltiples (incluyendo newlines múltiples)
+  normalized = normalized.replace(/\s{3,}/g, " ").replace(/\n{3,}/g, "\n\n");
+  
+  // Límite de longitud: 15k caracteres (razonable para contexto)
+  const MAX_LENGTH = 15000;
+  if (normalized.length > MAX_LENGTH) {
+    normalized = normalized.slice(0, MAX_LENGTH) + "\n\n(truncado)";
+  }
+  
+  // Instrucciones específicas por módulo
+  const moduleInstructions: Record<string, string> = {
+    INVESTIGACION_DIGITAL: "Si no hay website disponible, usa este contexto como 'activo base' y propone estructura futura basada en la información proporcionada.",
+    REDES_SOCIALES: "Si no hay redes sociales detectadas, propone estrategia de lanzamiento desde este contexto.",
+    FODA: "Deriva fortalezas y diferenciadores del pitch/nota/proyecto descrito aquí.",
+    OPORTUNIDADES: "Identifica oportunidades basadas en el proyecto/visión/roadmap descrito.",
+    ACCIONES: "Genera acciones concretas basadas en el proyecto y objetivos descritos.",
+    MATERIALES_LISTOS: "Usa mensajes y propuesta real del proyecto para crear materiales.",
+    CIERRE_VENTA: "Usa la propuesta y mensajes del proyecto para construir argumentos de cierre.",
+    PAUTA_PUBLICITARIA: "Considera el proyecto y audiencia objetivo descritos para proponer pauta.",
+    PRESTIGIO_IA: "Evalúa el prestigio basado en el proyecto y contexto proporcionado.",
+    POSICIONAMIENTO: "Deriva el posicionamiento del proyecto y diferenciadores descritos.",
+    COMPETENCIA: "Analiza competencia considerando el proyecto y propuesta de valor descritos.",
+  };
+  
+  const moduleInstruction = moduleId ? moduleInstructions[moduleId] || "" : "";
+  
+  // Construir bloque formateado
+  const blockParts: string[] = [];
+  blockParts.push("=== LEAD STRATEGIC CONTEXT (PRIMARY SOURCE) ===");
+  blockParts.push("Este contenido fue provisto por el usuario y debe priorizarse.");
+  blockParts.push("Si contradice inferencias basadas en ausencia de web/redes, prioriza este contexto.");
+  blockParts.push("No lo ignores.");
+  
+  if (moduleInstruction) {
+    blockParts.push(`\nInstrucción específica para este módulo: ${moduleInstruction}`);
+  }
+  
+  blockParts.push(`\n${normalized}`);
+  
+  return blockParts.join("\n");
+}
+
+/**
+ * Resuelve contexto unificado desde Lead + Entidad + Cliente
+ * Prioridad: Lead > Entidad > Cliente (excepto historial que solo viene de Cliente)
+ */
+function resolveLeadContext(
+  lead: LeadRow & { 
+    empresas?: { 
+      web?: string | null; 
+      instagram?: string | null;
+      rubro_id?: string | null;
+      rubros?: { nombre?: string | null } | null;
+      direccion?: string | null;
+      ciudad?: string | null;
+      pais?: string | null;
+    } | null;
+  },
+  cliente?: {
+    nombre?: string | null;
+    email?: string | null;
+    telefono?: string | null;
+    plan?: string | null;
+    estado?: string | null;
+    fecha_alta?: string | null;
+    proxima_accion?: string | null;
+  } | null
+): ResolvedContext {
+  const empresa = lead.empresas;
+  
+  // Resolver website: Lead > Entidad > Cliente
+  const websiteFromLead = (lead.website ?? "").trim();
+  const websiteFromEmpresa = (empresa?.web ?? "").trim() || "";
+  const websiteFromCliente = ""; // Cliente no tiene web por ahora
+  const resolvedWebsite = websiteFromLead || websiteFromEmpresa || websiteFromCliente || "";
+  const websiteSource: "Lead" | "Entidad" | "Cliente" | "N/A" = 
+    websiteFromLead ? "Lead" : 
+    websiteFromEmpresa ? "Entidad" : 
+    websiteFromCliente ? "Cliente" : 
+    "N/A";
+  
+  // Resolver instagram: Lead (si existiera) > Entidad > Cliente
+  const instagramFromLead = ""; // Lead no tiene instagram
+  const instagramFromEmpresa = (empresa?.instagram ?? "").trim() || "";
+  const instagramFromCliente = ""; // Cliente no tiene instagram
+  const resolvedInstagram = instagramFromLead || instagramFromEmpresa || instagramFromCliente || "";
+  const instagramSource: "Lead" | "Entidad" | "Cliente" | "N/A" = 
+    instagramFromLead ? "Lead" : 
+    instagramFromEmpresa ? "Entidad" : 
+    instagramFromCliente ? "Cliente" : 
+    "N/A";
+  
+  // Resolver linkedin: Lead > Entidad > Cliente
+  const linkedinEmpresaFromLead = (lead.linkedin_empresa ?? "").trim();
+  const linkedinEmpresaFromEmpresa = ""; // Entidad no tiene linkedin
+  const linkedinEmpresaFromCliente = ""; // Cliente no tiene linkedin
+  const resolvedLinkedinEmpresa = linkedinEmpresaFromLead || linkedinEmpresaFromEmpresa || linkedinEmpresaFromCliente || "";
+  
+  const linkedinDirectorFromLead = (lead.linkedin_director ?? "").trim();
+  const linkedinDirectorFromEmpresa = ""; // Entidad no tiene linkedin
+  const linkedinDirectorFromCliente = ""; // Cliente no tiene linkedin
+  const resolvedLinkedinDirector = linkedinDirectorFromLead || linkedinDirectorFromEmpresa || linkedinDirectorFromCliente || "";
+  
+  // Resolver meet_url: solo Lead
+  const resolvedMeetUrl = (lead.meet_url ?? "").trim() || "";
+  
+  // Resolver objetivos, audiencia, tamano, oferta: solo Lead (override)
+  const objetivos = Array.isArray(lead.objetivos) 
+    ? lead.objetivos.join(", ") 
+    : (lead.objetivos ?? "").trim();
+  const audiencia = Array.isArray(lead.audiencia) 
+    ? lead.audiencia.join(", ") 
+    : (lead.audiencia ?? "").trim();
+  const tamano = (lead.tamano ?? "").trim();
+  const oferta = (lead.oferta ?? "").trim();
+  
+  // Datos de Entidad
+  const rubro = empresa?.rubros?.nombre?.trim() || "";
+  const direccion = (empresa?.direccion ?? "").trim();
+  const ciudad = (empresa?.ciudad ?? "").trim();
+  const pais = (empresa?.pais ?? "").trim();
+  
+  // Historial del Cliente (solo si existe)
+  const clienteHistorialParts: string[] = [];
+  if (cliente) {
+    if (cliente.plan) clienteHistorialParts.push(`Plan: ${cliente.plan}`);
+    if (cliente.estado) clienteHistorialParts.push(`Estado: ${cliente.estado}`);
+    if (cliente.fecha_alta) clienteHistorialParts.push(`Fecha alta: ${cliente.fecha_alta}`);
+    if (cliente.proxima_accion) clienteHistorialParts.push(`Próxima acción: ${cliente.proxima_accion}`);
+  }
+  const clienteHistorial = clienteHistorialParts.join("; ") || "";
+  
+  return {
+    nombre: lead.nombre ?? "Lead",
+    contacto: lead.contacto ?? "",
+    telefono: lead.telefono ?? "",
+    email: lead.email ?? "",
+    origen: lead.origen ?? "No especificado",
+    pipeline: lead.pipeline ?? "No especificado",
+    notas: lead.notas ?? "",
+    
+    website: resolvedWebsite,
+    instagram: resolvedInstagram,
+    linkedinEmpresa: resolvedLinkedinEmpresa,
+    linkedinDirector: resolvedLinkedinDirector,
+    meetUrl: resolvedMeetUrl,
+    
+    objetivos,
+    audiencia,
+    tamano,
+    oferta,
+    
+    rubro,
+    direccion,
+    ciudad,
+    pais,
+    
+    clienteHistorial,
+    clientePlan: cliente?.plan ?? "",
+    clienteEstado: cliente?.estado ?? "",
+    clienteFechaAlta: cliente?.fecha_alta ?? "",
+    
+    websiteSource,
+    instagramSource,
+  };
+}
+
+/**
  * Genera un informe técnico fallback cuando falla la IA
  */
-function generateFallbackReport(lead: LeadRow): string {
+function generateFallbackReport(lead: LeadRow & { empresas?: { web?: string | null; instagram?: string | null } | null }): string {
   const nombre = lead.nombre ?? "Lead";
   const leadId = lead.id;
   const origen = lead.origen ?? "No especificado";
   const pipeline = lead.pipeline ?? "No especificado";
-  const website = (lead.website ?? "").trim();
+  const website = (lead.website ?? "").trim() || (lead.empresas?.web ?? "").trim() || "";
   const tamano = lead.tamano ?? "No especificado";
   // Soportar tanto string como array (backward compatibility)
   const objetivos = Array.isArray(lead.objetivos) 
@@ -161,9 +384,8 @@ ${oferta ? `- Oferta: ${oferta}` : "- No se especificó oferta"}
 ${!website ? "- ¿Cuál es el website de la empresa? (crítico para validar rubro y propuesta)" : ""}
 ${!objetivos ? "- ¿Cuáles son los objetivos principales?" : ""}
 ${!audiencia ? "- ¿A qué audiencia le vende la empresa? (B2B, B2C, Gobierno, etc.)" : ""}
-${!oferta ? "- ¿Qué ofrece específicamente?" : ""}
 ${!notas ? "- ¿Hay notas adicionales o contexto relevante sobre el lead?" : ""}
-${website && objetivos && audiencia && oferta ? "- Todos los campos principales están completos" : ""}
+${website && objetivos && audiencia ? "- Todos los campos principales están completos" : ""}
 
 ${website ? `## Hipótesis por website
 
@@ -211,10 +433,273 @@ async function getPromptBase(): Promise<string> {
 }
 
 /**
+ * Parsea el informe completo y extrae todos los tabs en orden estable
+ */
+function parseAllReportTabs(aiReport: string): Record<string, string> {
+  const tabs: Record<string, string> = {};
+  
+  if (!aiReport || !aiReport.trim()) {
+    return tabs;
+  }
+  
+  // Buscar todas las ocurrencias de ### TAB:<ID>
+  const tabPattern = /###\s+TAB:\s*(\w+)\s*\n/gi;
+  const matches: Array<{ tabId: string; startIndex: number; endIndex: number }> = [];
+  
+  let match;
+  while ((match = tabPattern.exec(aiReport)) !== null) {
+    const tabId = match[1].toUpperCase();
+    const startIndex = match.index + match[0].length;
+    
+    // Buscar el siguiente ### TAB: o el final del documento
+    const remaining = aiReport.slice(startIndex);
+    const nextTabMatch = remaining.match(/###\s+TAB:\s*\w+\s*\n/i);
+    const endIndex = nextTabMatch && typeof nextTabMatch.index === "number"
+      ? startIndex + nextTabMatch.index
+      : aiReport.length;
+    
+    matches.push({ tabId, startIndex, endIndex });
+  }
+  
+  // Extraer contenido para cada tab encontrado
+  for (const { tabId, startIndex, endIndex } of matches) {
+    const content = aiReport.slice(startIndex, endIndex).trim();
+    if (content) {
+      tabs[tabId] = content;
+    }
+  }
+  
+  return tabs;
+}
+
+/**
+ * Construye el contexto estructurado para Visión Estratégica
+ */
+function buildVisionEstrategicaContext(
+  lead: LeadRow & { 
+    empresas?: { 
+      web?: string | null; 
+      instagram?: string | null;
+      rubro_id?: string | null;
+      rubros?: { nombre?: string | null } | null;
+      direccion?: string | null;
+      ciudad?: string | null;
+      pais?: string | null;
+    } | null;
+  },
+  aiReport: string,
+  cliente?: {
+    nombre?: string | null;
+    email?: string | null;
+    telefono?: string | null;
+    plan?: string | null;
+    estado?: string | null;
+    fecha_alta?: string | null;
+    proxima_accion?: string | null;
+  } | null
+): string {
+  // Resolver contexto unificado
+  const ctx = resolveLeadContext(lead, cliente);
+  
+  // Construir header estructurado
+  const headerParts: string[] = [];
+  headerParts.push("=== LEAD HEADER (STRUCTURED) ===");
+  headerParts.push(`Nombre/Empresa: ${ctx.nombre || "N/D"}`);
+  headerParts.push(`Rubro: ${ctx.rubro || "N/D"}`);
+  
+  const paisCiudad = [ctx.pais, ctx.ciudad].filter(Boolean).join(" / ");
+  headerParts.push(`País/Ciudad: ${paisCiudad || "N/D"}`);
+  
+  headerParts.push(`Objetivo: ${ctx.objetivos || "N/D"}`);
+  headerParts.push(`Tipo de lead: ${ctx.pipeline || "N/D"}`);
+  headerParts.push(`Website: ${ctx.website || "N/D"}`);
+  
+  const linkedinParts = [];
+  if (ctx.linkedinEmpresa) linkedinParts.push(`Empresa: ${ctx.linkedinEmpresa}`);
+  if (ctx.linkedinDirector) linkedinParts.push(`Director: ${ctx.linkedinDirector}`);
+  headerParts.push(`LinkedIn: ${linkedinParts.join(" | ") || "N/D"}`);
+  
+  // Notas relevantes (primeras 200 caracteres)
+  const notasRelevantes = ctx.notas ? ctx.notas.slice(0, 200) + (ctx.notas.length > 200 ? "..." : "") : "";
+  headerParts.push(`Notas relevantes: ${notasRelevantes || "N/D"}`);
+  
+  // Parsear todos los tabs del informe
+  const reportTabs = parseAllReportTabs(aiReport);
+  
+  // Orden estable de tabs
+  const tabOrder = [
+    "INVESTIGACION_DIGITAL",
+    "REDES_SOCIALES",
+    "PAUTA_PUBLICITARIA",
+    "PRESTIGIO_IA",
+    "POSICIONAMIENTO",
+    "COMPETENCIA",
+    "FODA",
+    "OPORTUNIDADES",
+    "ACCIONES",
+    "MATERIALES_LISTOS",
+    "CIERRE_VENTA",
+  ];
+  
+  // Construir sección de informe completo
+  const reportParts: string[] = [];
+  reportParts.push("\n=== AI REPORT (FULL CONTEXT) ===");
+  
+  const includedTabs: string[] = [];
+  for (const tabId of tabOrder) {
+    const content = reportTabs[tabId];
+    if (content && content.trim()) {
+      reportParts.push(`\n[TAB:${tabId}]`);
+      reportParts.push(content);
+      includedTabs.push(tabId);
+    } else {
+      // Tab faltante o vacío: incluir como "(Sin contenido)"
+      reportParts.push(`\n[TAB:${tabId}]`);
+      reportParts.push("(Sin contenido)");
+    }
+  }
+  
+  // Log para debugging (solo server)
+  console.log("[Vision Estratégica] Contexto construido:", {
+    module: "vision_estrategica",
+    contextLength: headerParts.join("\n").length + reportParts.join("\n").length,
+    tabsIncluded: includedTabs,
+    tabsTotal: tabOrder.length,
+  });
+  
+  // Combinar header y report
+  return headerParts.join("\n") + reportParts.join("\n");
+}
+
+/**
+ * Genera Visión Estratégica usando el informe completo como contexto
+ */
+async function generateVisionEstrategica(
+  lead: LeadRow & { 
+    custom_prompt?: string | null; 
+    ai_report?: string | null;
+    empresas?: { 
+      web?: string | null; 
+      instagram?: string | null;
+      rubro_id?: string | null;
+      rubros?: { nombre?: string | null } | null;
+      direccion?: string | null;
+      ciudad?: string | null;
+      pais?: string | null;
+    } | null;
+  },
+  basePrompt: string,
+  visionPrompt: string,
+  cliente?: {
+    nombre?: string | null;
+    email?: string | null;
+    telefono?: string | null;
+    plan?: string | null;
+    estado?: string | null;
+    fecha_alta?: string | null;
+    proxima_accion?: string | null;
+  } | null
+): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY no configurada");
+  }
+
+  const fallbackNeutro = `Eres un consultor senior experto en identificar oportunidades estratégicas. Generas informes técnicos con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.
+
+REGLAS ESTRICTAS:
+- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.
+- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
+
+  let systemPrompt = basePrompt.trim() || fallbackNeutro;
+  if (basePrompt.trim() && !basePrompt.toLowerCase().includes("no mencionar cámara")) {
+    systemPrompt = `${systemPrompt}\n\nREGLAS ESTRICTAS:\n- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.\n- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
+  }
+
+  const existingReport = (lead.ai_report ?? "").trim();
+  
+  if (!existingReport) {
+    throw new Error("No hay informe previo disponible. Debes generar el informe completo primero antes de generar Visión Estratégica.");
+  }
+
+  // Construir contexto estructurado consolidado
+  const structuredContext = buildVisionEstrategicaContext(lead, existingReport, cliente);
+
+  // Construir user prompt con contexto estructurado
+  const userPromptParts: string[] = [];
+  
+  // PRIORIDAD 1: Personalización IA al inicio (si existe)
+  const personalizacionBlock = buildPersonalizacionIABlock(lead.custom_prompt, "vision_estrategica");
+  if (personalizacionBlock) {
+    userPromptParts.push(personalizacionBlock);
+    
+    // Log server-only
+    console.log(`[AI] Módulo vision_estrategica: Personalización IA incluida (length: ${lead.custom_prompt?.trim().length || 0})`);
+  }
+  
+  // PRIORIDAD 2: Contexto estructurado (header + informe completo)
+  userPromptParts.push(structuredContext);
+  
+  // Instrucción clara sobre la tarea
+  userPromptParts.push(`\n**IMPORTANTE:** El contexto anterior contiene un header estructurado con datos clave del lead y un informe completo con todos los módulos analizados. Tu tarea NO es repetir esos análisis, sino integrarlos en una lectura estratégica clara y decisional.`);
+
+  // PRIORIDAD 3: Tarea específica de Visión Estratégica
+  userPromptParts.push(`\n**TAREA ESPECÍFICA:**\n${visionPrompt}`);
+  
+  const moduleUserPrompt = userPromptParts.join("\n\n") + `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:vision_estrategica\n\nY luego el contenido de la visión estratégica. NO incluyas otros tabs ni texto fuera de este bloque.`;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt,
+        },
+        {
+          role: "user",
+          content: moduleUserPrompt,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 2000, // Más tokens para visión estratégica (es más largo)
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`Error generando Visión Estratégica: ${JSON.stringify(errorData)}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+
+  const moduleContent = data?.choices?.[0]?.message?.content?.trim() ?? "";
+
+  if (!moduleContent) {
+    throw new Error("Visión Estratégica devolvió contenido vacío");
+  }
+
+  // Asegurar formato correcto
+  let formattedContent = moduleContent;
+  if (!formattedContent.startsWith(`### TAB:vision_estrategica`)) {
+    formattedContent = `### TAB:vision_estrategica\n\n${formattedContent}`;
+  }
+
+  return formattedContent;
+}
+
+/**
  * Genera un solo módulo del informe usando prompt recibido directamente
  */
 async function generateSingleModuleWithPrompt(
-  lead: LeadRow & { custom_prompt?: string | null },
+  lead: LeadRow & { custom_prompt?: string | null; empresas?: { web?: string | null; instagram?: string | null } | null },
   moduleId: string,
   basePrompt: string,
   modulePrompt: string
@@ -236,21 +721,16 @@ REGLAS ESTRICTAS:
     systemPrompt = `${systemPrompt}\n\nREGLAS ESTRICTAS:\n- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.\n- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
   }
 
-  // Construir user prompt
-  const nombre = lead.nombre ?? "Lead";
-  const leadId = lead.id;
-  const origen = lead.origen ?? "No especificado";
-  const pipeline = lead.pipeline ?? "No especificado";
-  const website = (lead.website ?? "").trim();
-  const tamano = lead.tamano ?? "No especificado";
-  const objetivos = Array.isArray(lead.objetivos) 
-    ? lead.objetivos.join(", ") 
-    : (lead.objetivos ?? "").trim();
-  const audiencia = Array.isArray(lead.audiencia) 
-    ? lead.audiencia.join(", ") 
-    : (lead.audiencia ?? "").trim();
-  const oferta = (lead.oferta ?? "").trim();
-  const notas = lead.notas ?? "";
+  // Detectar tipo de organización del vendedor desde systemPrompt para el frame de CIERRE_VENTA
+  const sellerHint =
+    systemPrompt.toLowerCase().includes("cámara") ? "cámara" :
+    systemPrompt.toLowerCase().includes("agencia") ? "agencia" :
+    systemPrompt.toLowerCase().includes("consultora") ? "consultora" :
+    "organización";
+
+  // Resolver contexto unificado (sin cliente para esta función legacy)
+  const ctx = resolveLeadContext(lead, null);
+
   const fecha = new Date().toLocaleDateString("es-UY", {
     year: "numeric",
     month: "long",
@@ -258,31 +738,37 @@ REGLAS ESTRICTAS:
   });
 
   const userPromptParts: string[] = [];
-  userPromptParts.push(`## DATOS DEL LEAD (CRM)
-- Empresa: ${nombre}
-- Lead ID: ${leadId}
-- Origen: ${origen}
-- Pipeline: ${pipeline}
-- Website: ${website || "No proporcionado"}
-- Tamaño de empresa: ${tamano}
-- Objetivos declarados: ${objetivos || "No especificados"}
-- A quién le vende: ${audiencia || "No especificado"}
-- Qué ofrece: ${oferta || "No especificado"}
-- Notas internas: ${notas || "Sin notas"}
+  const websiteDisplay = ctx.website ? `${ctx.website} (${ctx.websiteSource})` : "No proporcionado";
+  
+  userPromptParts.push(`## DATOS DE ENTIDAD (si existe)
+${ctx.rubro ? `- Rubro: ${ctx.rubro}` : ""}
+${ctx.direccion ? `- Dirección: ${ctx.direccion}` : ""}
+${ctx.ciudad ? `- Ciudad: ${ctx.ciudad}` : ""}
+${ctx.pais ? `- País: ${ctx.pais}` : ""}
+${!ctx.rubro && !ctx.direccion && !ctx.ciudad && !ctx.pais ? "- No hay datos de entidad vinculada" : ""}
+
+## DATOS DEL LEAD (override)
+- Empresa: ${ctx.nombre}
+- Lead ID: ${lead.id}
+- Origen: ${ctx.origen}
+- Pipeline: ${ctx.pipeline}
+- Website: ${websiteDisplay}
+- Instagram: ${ctx.instagram ? `${ctx.instagram} (${ctx.instagramSource})` : "No proporcionado"}
+- Tamaño de empresa: ${ctx.tamano || "No especificado"}
+- Objetivos declarados: ${ctx.objetivos || "No especificados"}
+- A quién le vende: ${ctx.audiencia || "No especificado"}
+- Qué ofrece: ${ctx.oferta || "No especificado"}
+- Perfil LinkedIn Empresa: ${ctx.linkedinEmpresa || "No proporcionado"}
+- Perfil LinkedIn Director / Decisor: ${ctx.linkedinDirector || "No proporcionado"}
+- Meet URL: ${ctx.meetUrl || "No proporcionado"}
+- Notas internas: ${ctx.notas || "Sin notas"}
 
 Fecha: ${fecha}`);
 
   const userPrompt = userPromptParts.join("\n\n");
 
-  // Construir prompt del módulo incluyendo personalización IA si existe
-  let moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${modulePrompt}`;
-  
-  // Agregar personalización IA al prompt del módulo (si existe) - formato unificado
-  if (lead.custom_prompt && lead.custom_prompt.trim()) {
-    moduleUserPrompt += `\n\n### PERSONALIZACION IA (del usuario)\n${lead.custom_prompt.trim()}`;
-  }
-  
-  moduleUserPrompt += `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${moduleId}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
+  // Construir prompt del módulo (la personalización ya está incluida al inicio)
+  const moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${modulePrompt}\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${moduleId}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -335,7 +821,7 @@ Fecha: ${fecha}`);
  * Genera un solo módulo del informe (versión legacy con customPrompts)
  */
 async function generateSingleModule(
-  lead: LeadRow & { custom_prompt?: string | null },
+  lead: LeadRow & { custom_prompt?: string | null; empresas?: { web?: string | null; instagram?: string | null } | null },
   moduleId: string,
   customPrompts?: { base?: string; modules?: Record<string, string> }
 ): Promise<string> {
@@ -364,21 +850,16 @@ REGLAS ESTRICTAS:
     systemPrompt = `${systemPrompt}\n\nREGLAS ESTRICTAS:\n- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.\n- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
   }
 
-  // Construir user prompt
-  const nombre = lead.nombre ?? "Lead";
-  const leadId = lead.id;
-  const origen = lead.origen ?? "No especificado";
-  const pipeline = lead.pipeline ?? "No especificado";
-  const website = (lead.website ?? "").trim();
-  const tamano = lead.tamano ?? "No especificado";
-  const objetivos = Array.isArray(lead.objetivos) 
-    ? lead.objetivos.join(", ") 
-    : (lead.objetivos ?? "").trim();
-  const audiencia = Array.isArray(lead.audiencia) 
-    ? lead.audiencia.join(", ") 
-    : (lead.audiencia ?? "").trim();
-  const oferta = (lead.oferta ?? "").trim();
-  const notas = lead.notas ?? "";
+  // Detectar tipo de organización del vendedor desde systemPrompt para el frame de CIERRE_VENTA
+  const sellerHint =
+    systemPrompt.toLowerCase().includes("cámara") ? "cámara" :
+    systemPrompt.toLowerCase().includes("agencia") ? "agencia" :
+    systemPrompt.toLowerCase().includes("consultora") ? "consultora" :
+    "organización";
+
+  // Resolver contexto unificado (sin cliente para esta función legacy)
+  const ctx = resolveLeadContext(lead, null);
+
   const fecha = new Date().toLocaleDateString("es-UY", {
     year: "numeric",
     month: "long",
@@ -386,29 +867,55 @@ REGLAS ESTRICTAS:
   });
 
   const userPromptParts: string[] = [];
-  userPromptParts.push(`## DATOS DEL LEAD (CRM)
-- Empresa: ${nombre}
-- Lead ID: ${leadId}
-- Origen: ${origen}
-- Pipeline: ${pipeline}
-- Website: ${website || "No proporcionado"}
-- Tamaño de empresa: ${tamano}
-- Objetivos declarados: ${objetivos || "No especificados"}
-- A quién le vende: ${audiencia || "No especificado"}
-- Qué ofrece: ${oferta || "No especificado"}
-- Notas internas: ${notas || "Sin notas"}
+  
+  // PRIORIDAD 1: Personalización IA al inicio (si existe)
+  const personalizacionBlock = buildPersonalizacionIABlock(lead.custom_prompt, moduleId);
+  if (personalizacionBlock) {
+    userPromptParts.push(personalizacionBlock);
+    
+    // Log server-only
+    console.log(`[AI] Módulo ${moduleId}: Personalización IA incluida (length: ${lead.custom_prompt?.trim().length || 0})`);
+  }
+  
+  const websiteDisplay = ctx.website ? `${ctx.website} (${ctx.websiteSource})` : "No proporcionado";
+  
+  userPromptParts.push(`## DATOS DE ENTIDAD (si existe)
+${ctx.rubro ? `- Rubro: ${ctx.rubro}` : ""}
+${ctx.direccion ? `- Dirección: ${ctx.direccion}` : ""}
+${ctx.ciudad ? `- Ciudad: ${ctx.ciudad}` : ""}
+${ctx.pais ? `- País: ${ctx.pais}` : ""}
+${!ctx.rubro && !ctx.direccion && !ctx.ciudad && !ctx.pais ? "- No hay datos de entidad vinculada" : ""}
+
+## DATOS DEL LEAD (override)
+- Empresa: ${ctx.nombre}
+- Lead ID: ${lead.id}
+- Origen: ${ctx.origen}
+- Pipeline: ${ctx.pipeline}
+- Website: ${websiteDisplay}
+- Instagram: ${ctx.instagram ? `${ctx.instagram} (${ctx.instagramSource})` : "No proporcionado"}
+- Tamaño de empresa: ${ctx.tamano || "No especificado"}
+- Objetivos declarados: ${ctx.objetivos || "No especificados"}
+- A quién le vende: ${ctx.audiencia || "No especificado"}
+- Qué ofrece: ${ctx.oferta || "No especificado"}
+- Perfil LinkedIn Empresa: ${ctx.linkedinEmpresa || "No proporcionado"}
+- Perfil LinkedIn Director / Decisor: ${ctx.linkedinDirector || "No proporcionado"}
+- Meet URL: ${ctx.meetUrl || "No proporcionado"}
+- Notas internas: ${ctx.notas || "Sin notas"}
 
 Fecha: ${fecha}`);
 
-  if (lead.custom_prompt && lead.custom_prompt.trim()) {
-    userPromptParts.push(`**INSTRUCCIONES ADICIONALES DEL USUARIO:**\n${lead.custom_prompt.trim()}`);
-  }
-
   const userPrompt = userPromptParts.join("\n\n");
+
+  // Construir contexto de redes sociales y website para incluir en prompts
+  const websiteTxt = ctx.website ? `Website detectado: ${ctx.website}` : "Website: no disponible";
+  const instagramTxt = ctx.instagram ? `Instagram detectado: ${ctx.instagram}` : "Instagram: no disponible";
+  const linkedinEmpresaTxt = ctx.linkedinEmpresa ? `LinkedIn Empresa: ${ctx.linkedinEmpresa}` : "LinkedIn Empresa: no disponible";
+  const linkedinDirectorTxt = ctx.linkedinDirector ? `LinkedIn Director: ${ctx.linkedinDirector}` : "LinkedIn Director: no disponible";
+  const redesTxt = `${websiteTxt}\n${instagramTxt}\n${linkedinEmpresaTxt}\n${linkedinDirectorTxt}`;
 
   // Definir módulos y encontrar el módulo solicitado
   const defaultModules = [
-    { id: "INVESTIGACION_DIGITAL", label: "Investigación Digital", prompt: "Genera un análisis de investigación digital: presencia web, SEO, contenido, autoridad digital. Responde SOLO con el contenido del análisis, sin introducciones ni títulos adicionales." },
+    { id: "INVESTIGACION_DIGITAL", label: "Investigación Digital", prompt: `Genera un análisis de investigación digital: presencia web, SEO, contenido, autoridad digital.\n\nContexto disponible:\n${redesTxt}\n\nResponde SOLO con el contenido del análisis, sin introducciones ni títulos adicionales.` },
     { id: "REDES_SOCIALES", label: "Redes Sociales", prompt: "Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "PAUTA_PUBLICITARIA", label: "Pauta Publicitaria", prompt: "Genera un análisis de pauta publicitaria: inversión, canales, mensajes, ROI potencial. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "PRESTIGIO_IA", label: "Prestigio IA", prompt: "Genera un análisis de prestigio usando IA: reputación, menciones, reviews, señales de calidad. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
@@ -427,11 +934,35 @@ Fecha: ${fecha}`);
   }
 
   // Para cada módulo: promptModulo = prompts?.[moduleId] ?? fallbackModulo
-  const modulePrompt = customPrompts?.modules?.[moduleId] || module.prompt;
+  const modulePromptOriginal = customPrompts?.modules?.[moduleId] || module.prompt;
   
-  console.log("[AI] module prompt head:", (modulePrompt || "").slice(0, 120));
+  // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
+  const cierreFrameExtra = `
+CONTEXTO DEL VENDEDOR:
+- Nuestra organización tipo: ${sellerHint}.
 
-  const moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${modulePrompt}\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${moduleId}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
+ACLARACIÓN CRÍTICA (NO NEGOCIABLE):
+- Este módulo trata sobre cómo "NOSOTROS" (el usuario del CRM / nuestra organización) cerramos la venta con ESTE lead.
+- NO expliques cómo el lead cierra ventas con sus clientes.
+- Si el contexto del prompt base describe a nuestra organización (ej: Cámara, Agencia, Consultora), úsalo. Si no, referite a "nuestra organización" de forma genérica.
+
+ENTREGABLES:
+1) Objetivo de cierre (qué significa "ganar" este lead para nosotros).
+2) Estrategia de cierre paso a paso (en 6–10 bullets accionables).
+3) Guión de cierre (frases exactas + preguntas).
+4) Objeciones típicas y respuestas (mínimo 6).
+5) Plan de follow-up 72h (WhatsApp + Email + LinkedIn), mensajes listos para copiar.
+6) Señales de avance y señales de riesgo (qué observar).
+`;
+  
+  // Agregar frame extra si es CIERRE_VENTA
+  const modulePromptFinal = moduleId === "CIERRE_VENTA"
+    ? `${modulePromptOriginal}\n\n${cierreFrameExtra}`
+    : modulePromptOriginal;
+  
+  console.log("[AI] module prompt head:", (modulePromptFinal || "").slice(0, 120));
+
+  const moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${modulePromptFinal}\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${moduleId}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -503,8 +1034,9 @@ function updateReportTab(existingReport: string, newTabContent: string, moduleId
 }
 
 async function generateAiReportAI(
-  lead: LeadRow & { custom_prompt?: string | null },
-  customPrompts?: { base?: string; modules?: Record<string, string> }
+  lead: LeadRow & { custom_prompt?: string | null; empresas?: { web?: string | null; instagram?: string | null } | null },
+  customPrompts?: { base?: string; modules?: Record<string, string> },
+  ctx?: ResolvedContext
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   console.log("OPENAI_API_KEY presente:", Boolean(process.env.OPENAI_API_KEY));
@@ -536,103 +1068,85 @@ REGLAS ESTRICTAS:
     systemPrompt = `${systemPrompt}\n\nREGLAS ESTRICTAS:\n- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.\n- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
   }
 
-  // Construir datos del lead para el user prompt
-  const nombre = lead.nombre ?? "Lead";
-  const leadId = lead.id;
-  const origen = lead.origen ?? "No especificado";
-  const pipeline = lead.pipeline ?? "No especificado";
-  const website = (lead.website ?? "").trim();
-  const tamano = lead.tamano ?? "No especificado";
-  // Soportar tanto string como array (backward compatibility)
-  const objetivos = Array.isArray(lead.objetivos) 
-    ? lead.objetivos.join(", ") 
-    : (lead.objetivos ?? "").trim();
-  const audiencia = Array.isArray(lead.audiencia) 
-    ? lead.audiencia.join(", ") 
-    : (lead.audiencia ?? "").trim();
-  const oferta = (lead.oferta ?? "").trim();
-  const notas = lead.notas ?? "";
-  const linkedinEmpresa = ""; // Campo no disponible en el schema actual
-  const linkedinDirector = ""; // Campo no disponible en el schema actual
+  // Detectar tipo de organización del vendedor desde systemPrompt para el frame de CIERRE_VENTA
+  const sellerHint =
+    systemPrompt.toLowerCase().includes("cámara") ? "cámara" :
+    systemPrompt.toLowerCase().includes("agencia") ? "agencia" :
+    systemPrompt.toLowerCase().includes("consultora") ? "consultora" :
+    "organización";
+
+  // Usar contexto resuelto si está disponible, sino resolver desde lead
+  const resolvedCtx = ctx || resolveLeadContext(lead, null);
+  
   const fecha = new Date().toLocaleDateString("es-UY", {
     year: "numeric",
     month: "long",
     day: "numeric",
   });
 
-  // Construir user prompt con datos del lead
+  // Construir user prompt con contexto resuelto
   const userPromptParts: string[] = [];
   
-  userPromptParts.push(`## DATOS DEL LEAD (CRM)
-- Empresa: ${nombre}
-- Lead ID: ${leadId}
-- Origen: ${origen}
-- Pipeline: ${pipeline}
-- Website: ${website || "No proporcionado"}
-- Tamaño de empresa: ${tamano}
-- Objetivos declarados: ${objetivos || "No especificados"}
-- A quién le vende: ${audiencia || "No especificado"}
-- Qué ofrece: ${oferta || "No especificado"}
-- Perfil LinkedIn Empresa: ${linkedinEmpresa || "No proporcionado"}
-- Perfil LinkedIn Director / Decisor: ${linkedinDirector || "No proporcionado"}
-- Notas internas: ${notas || "Sin notas"}
+  // PRIORIDAD 1: Personalización IA al inicio (si existe) - se incluirá en todos los módulos
+  // Nota: La personalización se agregará individualmente en cada módulo con instrucciones específicas
+  
+  // Determinar origen del website para mostrar en el prompt
+  const websiteDisplay = resolvedCtx.website ? `${resolvedCtx.website} (${resolvedCtx.websiteSource})` : "No proporcionado";
+  
+  userPromptParts.push(`## DATOS DE ENTIDAD (si existe)
+${resolvedCtx.rubro ? `- Rubro: ${resolvedCtx.rubro}` : ""}
+${resolvedCtx.direccion ? `- Dirección: ${resolvedCtx.direccion}` : ""}
+${resolvedCtx.ciudad ? `- Ciudad: ${resolvedCtx.ciudad}` : ""}
+${resolvedCtx.pais ? `- País: ${resolvedCtx.pais}` : ""}
+${!resolvedCtx.rubro && !resolvedCtx.direccion && !resolvedCtx.ciudad && !resolvedCtx.pais ? "- No hay datos de entidad vinculada" : ""}
+
+## DATOS DEL LEAD (override)
+- Empresa: ${resolvedCtx.nombre}
+- Lead ID: ${lead.id}
+- Origen: ${resolvedCtx.origen}
+- Pipeline: ${resolvedCtx.pipeline}
+- Website: ${websiteDisplay}
+- Instagram: ${resolvedCtx.instagram ? `${resolvedCtx.instagram} (${resolvedCtx.instagramSource})` : "No proporcionado"}
+- Tamaño de empresa: ${resolvedCtx.tamano || "No especificado"}
+- Objetivos declarados: ${resolvedCtx.objetivos || "No especificados"}
+- A quién le vende: ${resolvedCtx.audiencia || "No especificado"}
+- Qué ofrece: ${resolvedCtx.oferta || "No especificado"}
+- Perfil LinkedIn Empresa: ${resolvedCtx.linkedinEmpresa || "No proporcionado"}
+- Perfil LinkedIn Director / Decisor: ${resolvedCtx.linkedinDirector || "No proporcionado"}
+- Meet URL: ${resolvedCtx.meetUrl || "No proporcionado"}
+- Notas internas: ${resolvedCtx.notas || "Sin notas"}
+
+${resolvedCtx.clienteHistorial ? `## DATOS DE CLIENTE (historial/relación comercial)
+${resolvedCtx.clienteHistorial}` : ""}
 
 Fecha: ${fecha}`);
-
-  // PRIORIDAD 2: Agregar personalización del lead SI existe (se incluirá en todos los módulos)
-  // Nota: La personalización también se agrega explícitamente en cada módulo más abajo
-  if (lead.custom_prompt && lead.custom_prompt.trim()) {
-    userPromptParts.push(`### PERSONALIZACION IA (del usuario)\n${lead.custom_prompt.trim()}`);
-  }
   
-  // PRIORIDAD 3: Agregar instrucción para generar sección de datos faltantes
+  // PRIORIDAD 3: Agregar instrucción para generar sección de datos faltantes (solo campos críticos)
   const missingFields: Array<{ field: string; impact: string; question: string; where: string }> = [];
   
-  if (!website || !website.trim()) {
+  // Solo preguntar website si está vacío en Lead, Entidad y Cliente
+  if (!resolvedCtx.website || !resolvedCtx.website.trim()) {
     missingFields.push({
       field: "Website",
       impact: "Crítico para validar rubro, propuesta de valor y análisis de presencia digital",
       question: "¿Cuál es el website de la empresa?",
-      where: "Tab 'Datos nuevos del lead' → Campo 'Website'"
+      where: "Entidad → Campo 'web' (o Lead → Campo 'website' como fallback)"
     });
   }
   
-  if (!objetivos || !objetivos.trim()) {
+  // Solo preguntar instagram si está vacío en Entidad
+  if (!resolvedCtx.instagram || !resolvedCtx.instagram.trim()) {
     missingFields.push({
-      field: "Objetivos",
-      impact: "Alto — permite identificar oportunidades reales y personalizar la propuesta",
-      question: "¿Cuáles son los objetivos principales del lead?",
-      where: "Tab 'Datos nuevos del lead' → Campo 'Objetivos'"
+      field: "Instagram",
+      impact: "Útil para análisis de redes sociales y presencia digital",
+      question: "¿Cuál es el perfil de Instagram de la empresa?",
+      where: "Entidad → Campo 'instagram'"
     });
   }
   
-  if (!audiencia || !audiencia.trim()) {
-    missingFields.push({
-      field: "Audiencia",
-      impact: "Alto — necesario para mapear contactos compatibles y networking efectivo",
-      question: "¿A qué audiencia le vende la empresa? (B2B, B2C, Gobierno, etc.)",
-      where: "Tab 'Datos nuevos del lead' → Campo 'A quién le vende'"
-    });
-  }
+  // NO pedir objetivos, audiencia, tamano, oferta si ya existen (son opcionales)
   
-  if (!oferta || !oferta.trim()) {
-    missingFields.push({
-      field: "Oferta",
-      impact: "Medio — ayuda a entender el modelo de negocio y propuesta de valor",
-      question: "¿Qué ofrece específicamente la empresa?",
-      where: "Tab 'Datos nuevos del lead' → Campo 'Qué ofrece'"
-    });
-  }
-  
-  if (!tamano || tamano === "No especificado") {
-    missingFields.push({
-      field: "Tamaño de empresa",
-      impact: "Medio — permite ajustar la propuesta según el tamaño (startup, PYME, gran empresa)",
-      question: "¿Cuál es el tamaño de la empresa? (startup, PYME, gran empresa, etc.)",
-      where: "Tab 'Datos nuevos del lead' → Campo 'Tamaño'"
-    });
-  }
-  
+  // Solo agregar la sección si hay campos faltantes
   if (missingFields.length > 0) {
     userPromptParts.push(`**IMPORTANTE: DATOS FALTANTES DETECTADOS**
 
@@ -658,10 +1172,44 @@ Esta sección debe aparecer al final del informe, después de todos los módulos
   // Log temporal antes de llamar a OpenAI (para validar que arranca con texto de MODO EASY)
   console.log("SYSTEM_PROMPT_HEAD:", systemPrompt.slice(0, 120));
 
+  // Construir contexto de redes sociales y website para incluir en prompts
+  const websiteTxt = resolvedCtx.website ? `Website detectado: ${resolvedCtx.website}` : "Website: no disponible";
+  const instagramTxt = resolvedCtx.instagram ? `Instagram detectado: ${resolvedCtx.instagram}` : "Instagram: no disponible";
+  const linkedinEmpresaTxt = resolvedCtx.linkedinEmpresa ? `LinkedIn Empresa: ${resolvedCtx.linkedinEmpresa}` : "LinkedIn Empresa: no disponible";
+  const linkedinDirectorTxt = resolvedCtx.linkedinDirector ? `LinkedIn Director: ${resolvedCtx.linkedinDirector}` : "LinkedIn Director: no disponible";
+  const redesTxt = `${websiteTxt}\n${instagramTxt}\n${linkedinEmpresaTxt}\n${linkedinDirectorTxt}`;
+  
+  // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
+  const cierreFrameExtra = `
+CONTEXTO DEL VENDEDOR:
+- Nuestra organización tipo: ${sellerHint}.
+
+ACLARACIÓN CRÍTICA (NO NEGOCIABLE):
+- Este módulo trata sobre cómo "NOSOTROS" (el usuario del CRM / nuestra organización) cerramos la venta con ESTE lead.
+- NO expliques cómo el lead cierra ventas con sus clientes.
+- Si el contexto del prompt base describe a nuestra organización (ej: Cámara, Agencia, Consultora), úsalo. Si no, referite a "nuestra organización" de forma genérica.
+
+ENTREGABLES:
+1) Objetivo de cierre (qué significa "ganar" este lead para nosotros).
+2) Estrategia de cierre paso a paso (en 6–10 bullets accionables).
+3) Guión de cierre (frases exactas + preguntas).
+4) Objeciones típicas y respuestas (mínimo 6).
+5) Plan de follow-up 72h (WhatsApp + Email + LinkedIn), mensajes listos para copiar.
+6) Señales de avance y señales de riesgo (qué observar).
+`;
+  
   // Definir módulos/tabs a generar (11 módulos)
+  // Construir prompt de REDES_SOCIALES con instagram explícito si existe
+  const redesSocialesPrompt = resolvedCtx.instagram
+    ? `Instagram detectado: ${resolvedCtx.instagram}. Analizá su presencia y contenido basado en ese perfil real. Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.`
+    : "Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.";
+  
+  // Prompt de INVESTIGACION_DIGITAL con contexto de website e instagram explícitos
+  const investigacionDigitalPrompt = `Genera un análisis de investigación digital: presencia web, SEO, contenido, autoridad digital.\n\nContexto disponible:\n${redesTxt}\n\nResponde SOLO con el contenido del análisis, sin introducciones ni títulos adicionales.`;
+  
   const defaultModules = [
-    { id: "INVESTIGACION_DIGITAL", label: "Investigación Digital", prompt: "Genera un análisis de investigación digital: presencia web, SEO, contenido, autoridad digital. Responde SOLO con el contenido del análisis, sin introducciones ni títulos adicionales." },
-    { id: "REDES_SOCIALES", label: "Redes Sociales", prompt: "Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "INVESTIGACION_DIGITAL", label: "Investigación Digital", prompt: investigacionDigitalPrompt },
+    { id: "REDES_SOCIALES", label: "Redes Sociales", prompt: redesSocialesPrompt },
     { id: "PAUTA_PUBLICITARIA", label: "Pauta Publicitaria", prompt: "Genera un análisis de pauta publicitaria: inversión, canales, mensajes, ROI potencial. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "PRESTIGIO_IA", label: "Prestigio IA", prompt: "Genera un análisis de prestigio usando IA: reputación, menciones, reviews, señales de calidad. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "POSICIONAMIENTO", label: "Posicionamiento", prompt: "Genera un análisis de posicionamiento: mercado, diferenciación, propuesta de valor, competencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
@@ -671,6 +1219,35 @@ Esta sección debe aparecer al final del informe, después de todos los módulos
     { id: "ACCIONES", label: "Acciones", prompt: "Genera un plan de acciones con subsecciones: Acciones 72 hs, Plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "MATERIALES_LISTOS", label: "Materiales Listos", prompt: "Genera una lista de materiales listos para usar: Copys, Scripts, PDFs, Recursos accionables. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "CIERRE_VENTA", label: "Cierre de Venta", prompt: "Genera estrategias de cierre de venta: argumentos, objeciones, CTAs, próximos pasos. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "vision_estrategica", label: "Visión Estratégica", prompt: `Actúa como Director de Growth Marketing Senior y socio estratégico.
+
+Tu tarea NO es analizar módulos por separado ni repetir diagnósticos.
+Tu tarea es integrar todo el informe previo y producir una lectura estratégica unificada.
+
+Objetivo:
+Convertir el informe técnico en una visión clara para la toma de decisiones.
+
+Instrucciones obligatorias:
+- No repitas información descriptiva ya mencionada.
+- No enumeres herramientas ni tácticas menores.
+- Prioriza impacto de negocio sobre exhaustividad.
+- Toma postura profesional, incluso si implica descartar opciones.
+- Pensá como si tu reputación dependiera de esta recomendación.
+
+Desarrolla los siguientes bloques, en este orden y solo con el contenido solicitado:
+
+1. LECTURA CENTRAL  
+2. PALANCA ESTRATÉGICA DOMINANTE  
+3. FOCO RECOMENDADO  
+4. RIESGO CLAVE  
+5. DECISIÓN SUGERIDA  
+6. PRÓXIMO MOVIMIENTO INTELIGENTE  
+
+Reglas finales:
+- Sé claro, directo y sintético.
+- Evita lenguaje genérico o académico.
+- No vendas servicios.
+- No cierres con frases abiertas.` },
   ];
 
   // Usar prompts personalizados si vienen en customPrompts, sino usar defaults
@@ -685,15 +1262,33 @@ Esta sección debe aparecer al final del informe, después de todos los módulos
     // Generar cada módulo con una llamada separada a OpenAI
     for (const module of modules) {
       try {
-        // Construir prompt del módulo incluyendo personalización IA si existe
-        let moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${module.prompt}`;
+        // Construir prompt del módulo: usar prompt original y agregar frame extra si es CIERRE_VENTA
+        const modulePromptOriginal = module.prompt;
+        const modulePromptFinal = module.id === "CIERRE_VENTA"
+          ? `${modulePromptOriginal}\n\n${cierreFrameExtra}`
+          : modulePromptOriginal;
         
-        // Agregar personalización IA al prompt del módulo (si existe)
-        if (lead.custom_prompt && lead.custom_prompt.trim()) {
-          moduleUserPrompt += `\n\n### PERSONALIZACION IA (del usuario)\n${lead.custom_prompt.trim()}`;
+        // Construir prompt del módulo con personalización IA al inicio (si existe)
+        const personalizacionBlock = buildPersonalizacionIABlock(lead.custom_prompt, module.id);
+        
+        // Construir el prompt del módulo: personalización primero, luego contexto base, luego tarea específica
+        const moduleContextParts: string[] = [];
+        
+        // PRIORIDAD 1: Personalización IA al inicio
+        if (personalizacionBlock) {
+          moduleContextParts.push(personalizacionBlock);
+          
+          // Log server-only
+          console.log(`[AI] Módulo ${module.id}: Personalización IA incluida (length: ${lead.custom_prompt?.trim().length || 0})`);
         }
         
-        moduleUserPrompt += `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${module.id}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
+        // PRIORIDAD 2: Contexto base del lead
+        moduleContextParts.push(userPrompt);
+        
+        // PRIORIDAD 3: Tarea específica del módulo
+        moduleContextParts.push(`**TAREA ESPECÍFICA:**\n${modulePromptFinal}`);
+        
+        const moduleUserPrompt = moduleContextParts.join("\n\n") + `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${module.id}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
 
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -855,7 +1450,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       | null;
 
     const shouldRegenerate = body?.force_regenerate === true;
-    const only_module = (body?.only_module || body?.module_id)?.trim()?.toUpperCase() || null;
+    // Normalizar only_module: mantener vision_estrategica en lowercase, otros módulos en uppercase
+    const rawModule = (body?.only_module || body?.module_id)?.trim() || null;
+    const only_module = rawModule === "vision_estrategica" 
+      ? "vision_estrategica" 
+      : rawModule?.toUpperCase() || null;
     
     // Validar only_module si está presente
     const validModuleIds = [
@@ -870,6 +1469,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       "ACCIONES",
       "MATERIALES_LISTOS",
       "CIERRE_VENTA",
+      "vision_estrategica",
     ];
     
     if (only_module && !validModuleIds.includes(only_module)) {
@@ -890,7 +1490,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const { data: lead, error: leadErr } = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,empresa_id,linkedin_empresa,linkedin_director,meet_url,empresas:empresa_id(id,web,instagram,direccion,ciudad,pais,rubro_id,rubros:rubro_id(nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -901,6 +1501,54 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     }
 
     const leadRow = lead as LeadRow;
+    
+    // Consultar socio/cliente si existe (por lead_id o empresa_id)
+    let cliente: { nombre?: string | null; email?: string | null; telefono?: string | null; plan?: string | null; estado?: string | null; fecha_alta?: string | null; proxima_accion?: string | null } | null = null;
+    
+    try {
+      // Intentar buscar por lead_id primero
+      const socioByLeadId = await sb
+        .from("socios")
+        .select("nombre,email,telefono,plan,estado,fecha_alta,proxima_accion")
+        .eq("lead_id", id)
+        .maybeSingle();
+      
+      if (socioByLeadId.data) {
+        cliente = socioByLeadId.data;
+      } else if (leadRow.empresa_id) {
+        // Si no hay por lead_id, buscar por empresa_id
+        const socioByEmpresaId = await sb
+          .from("socios")
+          .select("nombre,email,telefono,plan,estado,fecha_alta,proxima_accion")
+          .eq("empresa_id", leadRow.empresa_id)
+          .maybeSingle();
+        
+        if (socioByEmpresaId.data) {
+          cliente = socioByEmpresaId.data;
+        }
+      }
+    } catch (e) {
+      // Si falla la consulta de cliente, continuar sin él (no crítico)
+      console.warn("[AI] Error consultando cliente/socio:", e);
+    }
+    
+    // Resolver contexto unificado
+    const ctx = resolveLeadContext(leadRow, cliente);
+    
+    // Log de debug temporal
+    console.log("[AI DEBUG] resolved:", {
+      website: ctx.website,
+      websiteSource: ctx.websiteSource,
+      instagram: ctx.instagram,
+      instagramSource: ctx.instagramSource,
+      linkedinEmpresa: ctx.linkedinEmpresa,
+      linkedinDirector: ctx.linkedinDirector,
+      oferta: ctx.oferta,
+      objetivos: ctx.objetivos,
+      audiencia: ctx.audiencia,
+      hasCliente: !!cliente,
+      clienteHistorial: ctx.clienteHistorial,
+    });
 
     // Determinar custom_prompt final: prioridad 1) body, 2) lead.ai_custom_prompt, 3) null
     const finalCustomPrompt = bodyCustomPrompt || (leadRow.ai_custom_prompt?.trim() || null);
@@ -953,7 +1601,43 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     if (only_module) {
       try {
         // Usar directamente el prompt recibido (no re-leer del server)
-        const modulePrompt = body?.prompts?.modules?.[only_module] || "";
+        let modulePrompt = body?.prompts?.modules?.[only_module] || "";
+        
+        // Fallback para vision_estrategica: usar prompt default si no está en localStorage
+        if (!modulePrompt && only_module === "vision_estrategica") {
+          const defaultVisionPrompt = `Actúa como Director de Growth Marketing Senior y socio estratégico.
+
+Tu tarea NO es analizar módulos por separado ni repetir diagnósticos.
+Tu tarea es integrar todo el informe previo y producir una lectura estratégica unificada.
+
+Objetivo:
+Convertir el informe técnico en una visión clara para la toma de decisiones.
+
+Instrucciones obligatorias:
+- No repitas información descriptiva ya mencionada.
+- No enumeres herramientas ni tácticas menores.
+- Prioriza impacto de negocio sobre exhaustividad.
+- Toma postura profesional, incluso si implica descartar opciones.
+- Pensá como si tu reputación dependiera de esta recomendación.
+
+Desarrolla los siguientes bloques, en este orden y solo con el contenido solicitado:
+
+1. LECTURA CENTRAL  
+2. PALANCA ESTRATÉGICA DOMINANTE  
+3. FOCO RECOMENDADO  
+4. RIESGO CLAVE  
+5. DECISIÓN SUGERIDA  
+6. PRÓXIMO MOVIMIENTO INTELIGENTE  
+
+Reglas finales:
+- Sé claro, directo y sintético.
+- Evita lenguaje genérico o académico.
+- No vendas servicios.
+- No cierres con frases abiertas.`;
+          modulePrompt = defaultVisionPrompt;
+          console.warn(`[AI] Prompt no encontrado en localStorage para ${only_module}, usando prompt default`);
+        }
+        
         const promptUpdatedAt = body?.prompts_meta?.updated_at?.modules?.[only_module] || body?.prompts_meta?.updated_at?.base || null;
         const promptHead = (modulePrompt || "").slice(0, 80);
         
@@ -964,16 +1648,75 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           throw new Error(`Prompt no proporcionado para módulo ${only_module}`);
         }
         
-        const newTabContent = await generateSingleModuleWithPrompt(
-          {
-            ...leadRow,
-            ai_context: leadRow.ai_context || null,
-            custom_prompt: finalCustomPrompt,
-          },
-          only_module,
-          body?.prompts?.base || "",
-          modulePrompt
-        );
+        // Detectar tipo de organización del vendedor desde basePrompt para el frame de CIERRE_VENTA
+        const basePromptForHint = body?.prompts?.base || "";
+        const sellerHint =
+          basePromptForHint.toLowerCase().includes("cámara") ? "cámara" :
+          basePromptForHint.toLowerCase().includes("agencia") ? "agencia" :
+          basePromptForHint.toLowerCase().includes("consultora") ? "consultora" :
+          "organización";
+        
+        // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
+        const cierreFrameExtra = `
+CONTEXTO DEL VENDEDOR:
+- Nuestra organización tipo: ${sellerHint}.
+
+ACLARACIÓN CRÍTICA (NO NEGOCIABLE):
+- Este módulo trata sobre cómo "NOSOTROS" (el usuario del CRM / nuestra organización) cerramos la venta con ESTE lead.
+- NO expliques cómo el lead cierra ventas con sus clientes.
+- Si el contexto del prompt base describe a nuestra organización (ej: Cámara, Agencia, Consultora), úsalo. Si no, referite a "nuestra organización" de forma genérica.
+
+ENTREGABLES:
+1) Objetivo de cierre (qué significa "ganar" este lead para nosotros).
+2) Estrategia de cierre paso a paso (en 6–10 bullets accionables).
+3) Guión de cierre (frases exactas + preguntas).
+4) Objeciones típicas y respuestas (mínimo 6).
+5) Plan de follow-up 72h (WhatsApp + Email + LinkedIn), mensajes listos para copiar.
+6) Señales de avance y señales de riesgo (qué observar).
+`;
+        
+        // Caso especial: vision_estrategica usa el informe completo como contexto
+        let newTabContent: string;
+        if (only_module === "vision_estrategica") {
+          // Validar que existe informe previo
+          const existingReport = leadRow.ai_report?.trim() || "";
+          if (!existingReport) {
+            throw new Error("No hay informe previo disponible. Debes generar el informe completo primero antes de generar Visión Estratégica.");
+          }
+          
+          newTabContent = await generateVisionEstrategica(
+            {
+              ...leadRow,
+              ai_context: leadRow.ai_context || null,
+              custom_prompt: finalCustomPrompt,
+              empresas: (lead as any)?.empresas || null,
+            },
+            body?.prompts?.base || "",
+            modulePrompt,
+            cliente
+          );
+        } else {
+          // Construir prompt del módulo: agregar frame extra si es CIERRE_VENTA, o instagram si es REDES_SOCIALES
+          let finalModulePrompt = modulePrompt;
+          if (only_module === "CIERRE_VENTA") {
+            finalModulePrompt = `${modulePrompt}\n\n${cierreFrameExtra}`;
+          } else if (only_module === "REDES_SOCIALES" && ctx.instagram) {
+            finalModulePrompt = `Instagram detectado: ${ctx.instagram}. Analizá su presencia y contenido basado en ese perfil real. ${modulePrompt}`;
+          }
+          
+          newTabContent = await generateSingleModuleWithPrompt(
+            {
+              ...leadRow,
+              website: ctx.website || null,
+              ai_context: leadRow.ai_context || null,
+              custom_prompt: finalCustomPrompt,
+              empresas: (lead as any)?.empresas || null,
+            },
+            only_module,
+            body?.prompts?.base || "",
+            finalModulePrompt
+          );
+        }
 
         // Obtener informe existente o crear uno nuevo
         const existingReport = leadRow.ai_report?.trim() || "";
@@ -1032,22 +1775,26 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           ...leadRow,
           ai_context: leadRow.ai_context || null,
           custom_prompt: finalCustomPrompt, // Personalización: body > DB > null
+          empresas: (lead as any)?.empresas || null,
         },
-        body?.prompts // Prompts personalizados desde localStorage (opcional)
+        body?.prompts, // Prompts personalizados desde localStorage (opcional)
+        ctx // Pasar contexto resuelto completo
       );
-      // Construir contexto para guardar
+      // Construir contexto para guardar (usar contexto resuelto)
       aiContext = [
-        `Nombre: ${leadRow.nombre ?? "Lead"}`,
-        `Origen: ${leadRow.origen ?? "—"}`,
-        `Pipeline: ${leadRow.pipeline ?? "—"}`,
-        `Website: ${leadRow.website ?? "—"}`,
-        `Tamaño: ${leadRow.tamano ?? "—"}`,
-        `Objetivos: ${Array.isArray(leadRow.objetivos) ? leadRow.objetivos.join(", ") : "—"}`,
-        `Audiencia: ${Array.isArray(leadRow.audiencia) ? leadRow.audiencia.join(", ") : "—"}`,
-        `Oferta: ${leadRow.oferta ?? "—"}`,
-        `Notas: ${leadRow.notas ?? "—"}`,
+        `Nombre: ${ctx.nombre}`,
+        `Origen: ${ctx.origen}`,
+        `Pipeline: ${ctx.pipeline}`,
+        `Website: ${ctx.website || "—"} (${ctx.websiteSource})`,
+        `Instagram: ${ctx.instagram || "—"} (${ctx.instagramSource})`,
+        `Tamaño: ${ctx.tamano || "—"}`,
+        `Objetivos: ${ctx.objetivos || "—"}`,
+        `Audiencia: ${ctx.audiencia || "—"}`,
+        `Oferta: ${ctx.oferta || "—"}`,
+        `Notas: ${ctx.notas || "—"}`,
+        cliente ? `Cliente: ${ctx.clienteHistorial || "—"}` : "",
         `Generado con IA: ${new Date().toISOString()}`,
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     } catch (error: any) {
       // Fallback: generar informe técnico básico
       console.log("[AI] Entrando en modo FALLBACK (sin OpenAI)");
@@ -1057,20 +1804,23 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       report = generateFallbackReport({
         ...leadRow,
         ai_context: leadRow.ai_context || null,
+        empresas: (lead as any)?.empresas || null,
       });
       aiContext = [
-        `Nombre: ${leadRow.nombre ?? "Lead"}`,
-        `Origen: ${leadRow.origen ?? "—"}`,
-        `Pipeline: ${leadRow.pipeline ?? "—"}`,
-        `Website: ${leadRow.website ?? "—"}`,
-        `Tamaño: ${leadRow.tamano ?? "—"}`,
-        `Objetivos: ${Array.isArray(leadRow.objetivos) ? leadRow.objetivos.join(", ") : "—"}`,
-        `Audiencia: ${Array.isArray(leadRow.audiencia) ? leadRow.audiencia.join(", ") : "—"}`,
-        `Oferta: ${leadRow.oferta ?? "—"}`,
-        `Notas: ${leadRow.notas ?? "—"}`,
+        `Nombre: ${ctx.nombre}`,
+        `Origen: ${ctx.origen}`,
+        `Pipeline: ${ctx.pipeline}`,
+        `Website: ${ctx.website || "—"} (${ctx.websiteSource})`,
+        `Instagram: ${ctx.instagram || "—"} (${ctx.instagramSource})`,
+        `Tamaño: ${ctx.tamano || "—"}`,
+        `Objetivos: ${ctx.objetivos || "—"}`,
+        `Audiencia: ${ctx.audiencia || "—"}`,
+        `Oferta: ${ctx.oferta || "—"}`,
+        `Notas: ${ctx.notas || "—"}`,
+        cliente ? `Cliente: ${ctx.clienteHistorial || "—"}` : "",
         `Error IA: ${error?.message ?? "Unknown error"}`,
         `Generado con fallback: ${new Date().toISOString()}`,
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     }
 
     // Función para normalizar score (blindar contra valores inválidos)

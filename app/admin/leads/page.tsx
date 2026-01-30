@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Lead = {
   id: string;
@@ -76,8 +77,14 @@ function norm(s: string | null | undefined) {
 
 // Componente para botón "Nuevo lead" con opciones
 function NewLeadButton() {
+  const { hasPermission } = usePermissions();
   const [showMenu, setShowMenu] = useState(false);
   const [showEmpresaSelector, setShowEmpresaSelector] = useState(false);
+
+  // Si no tiene permiso de crear, no mostrar el botón
+  if (!hasPermission("leads.create")) {
+    return null;
+  }
 
   return (
     <>
@@ -295,6 +302,9 @@ export default function LeadsPage() {
 
   const [rows, setRows] = useState<Lead[]>([]);
   const [pipelines, setPipelines] = useState<PipelineRow[]>([]);
+
+  // ✅ Permisos RBAC
+  const { hasPermission } = usePermissions();
 
   // filtros
   const [q, setQ] = useState("");
@@ -779,14 +789,16 @@ export default function LeadsPage() {
               {mutating ? "…" : "Aplicar"}
             </button>
 
-            <button
-              type="button"
-              onClick={bulkDelete}
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-              disabled={disabled || selectedCount === 0}
-            >
-              {mutating ? "…" : "Eliminar seleccionados"}
-            </button>
+            {hasPermission("leads.delete") && (
+              <button
+                type="button"
+                onClick={bulkDelete}
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                disabled={disabled || selectedCount === 0}
+              >
+                {mutating ? "…" : "Eliminar seleccionados"}
+              </button>
+            )}
           </div>
         </div>
 
