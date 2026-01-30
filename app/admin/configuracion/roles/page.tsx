@@ -1,141 +1,138 @@
-"use client";
-
-import { useEffect, useState } from "react";
+import { redirect } from "next/navigation";
 import Link from "next/link";
-import { PageContainer } from "@/components/layout/PageContainer";
+import { createServerSupabase } from "@/lib/supabase/server";
 
-type Permission = {
-  id: string;
-  key?: string;
-  module?: string;
-  action?: string;
-  description?: string | null;
-  label?: string;
-  category?: string;
-};
+export const dynamic = "force-dynamic";
 
-type Role = {
+type RoleRow = {
   id: string;
   name: string;
-  label: string;
-  description: string | null;
-  is_system?: boolean;
-  permissions: Permission[];
+  users_count: number;
+  perms_count: number;
 };
 
-type RolesData = {
-  roles: Role[];
-  allPermissions: Permission[];
-};
+export default async function ConfigRolesPage() {
+  const maybeClient = await createServerSupabase();
+  const supabase: any = (maybeClient as any)?.supabase ?? maybeClient;
 
-function permDisplay(p: Permission): string {
-  return p.label ?? p.key ?? p.id;
-}
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-export default function RolesPermisosPage() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<RolesData | null>(null);
+  if (!user) redirect("/login?next=/admin/configuracion/roles");
 
-  useEffect(() => {
-    async function fetchData() {
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch("/api/admin/config/roles", {
-          cache: "no-store",
-          credentials: "include",
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Error cargando roles");
-        setData(json.data ?? null);
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Error cargando datos");
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchData();
-  }, []);
+  // roles
+  const { data: rolesData, error: rolesErr } = await supabase
+    .from("roles")
+    .select("id,name")
+    .order("name", { ascending: true });
+
+  if (rolesErr) {
+    return (
+      <div className="border rounded-xl p-4 bg-white">
+        <div className="font-semibold">Roles</div>
+        <div className="text-sm text-red-600 mt-2">
+          Error cargando roles: {rolesErr.message}
+        </div>
+      </div>
+    );
+  }
+
+  const roles = rolesData ?? [];
+
+  // counts (usuarios por rol)
+  const { data: usersByRole } = await supabase
+    .from("app_users")
+    .select("role_id", { count: "exact", head: false });
+
+  // counts (permisos por rol)
+  const { data: rpData } = await supabase.from("role_permissions").select("role_id");
+
+  const usersCountMap = new Map<string, number>();
+  // Nota: PostgREST no devuelve agregaciones fácil sin RPC; hacemos fallback simple:
+  // Si querés conteo exacto por rol, lo hacemos luego con una vista/RPC.
+  // Por ahora: marcamos 0 y lo completamos con query por rol si lo pedís.
+
+  const permsCountMap = new Map<string, number>();
+  (rpData ?? []).forEach((x: any) => {
+    const rid = x.role_id;
+    permsCountMap.set(rid, (permsCountMap.get(rid) ?? 0) + 1);
+  });
+
+  const rows: RoleRow[] = roles.map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    users_count: usersCountMap.get(r.id) ?? 0,
+    perms_count: permsCountMap.get(r.id) ?? 0,
+  }));
 
   return (
-    <PageContainer>
-      <div className="mx-auto w-full max-w-4xl space-y-6">
-        <div className="rounded-2xl border bg-white p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Roles y permisos</h1>
-              <p className="mt-1 text-sm text-slate-600">
-                Roles del sistema y permisos asignados a cada uno. Solo lectura.
-              </p>
+    <div className="space-y-4">
+      <div className="border rounded-xl p-4 bg-white">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xl font-semibold">Roles</div>
+            <div className="text-sm text-gray-500">
+              Entrá a un rol para ver/gestionar permisos (role_permissions).
             </div>
+          </div>
+
+          <div className="flex gap-2">
             <Link
+              className="border rounded-lg px-3 py-2 text-sm"
               href="/admin/configuracion"
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
             >
               Volver
             </Link>
+            <Link
+              className="border rounded-lg px-3 py-2 text-sm"
+              href="/admin/configuracion/usuarios"
+            >
+              Ver Usuarios
+            </Link>
           </div>
         </div>
-
-        {error && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="text-sm text-slate-500">Cargando roles…</div>
-        ) : data?.roles?.length ? (
-          <div className="space-y-6">
-            <h2 className="text-lg font-semibold text-slate-900">Roles del sistema</h2>
-            {data.roles.map((role) => (
-              <div
-                key={role.id}
-                className="rounded-2xl border bg-white p-6"
-              >
-                <div className="mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-slate-900">{role.label}</span>
-                    <span className="text-xs text-slate-500">({role.name})</span>
-                    {role.is_system && (
-                      <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                        sistema
-                      </span>
-                    )}
-                  </div>
-                  {role.description && (
-                    <p className="mt-1 text-sm text-slate-600">{role.description}</p>
-                  )}
-                </div>
-                <div>
-                  <h3 className="mb-2 text-sm font-semibold text-slate-700">
-                    Permisos asignados
-                  </h3>
-                  <ul className="flex flex-wrap gap-2">
-                    {role.permissions?.length ? (
-                      role.permissions.map((p) => (
-                        <li
-                          key={p.id}
-                          className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-mono text-slate-700"
-                        >
-                          {permDisplay(p)}
-                        </li>
-                      ))
-                    ) : (
-                      <li className="text-sm text-slate-500">Ninguno</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-2xl border bg-white p-6 text-sm text-slate-500">
-            No hay roles para mostrar.
-          </div>
-        )}
       </div>
-    </PageContainer>
+
+      <div className="border rounded-xl bg-white overflow-hidden">
+        <div className="p-3 border-b text-sm text-gray-600">
+          Total roles: <span className="font-semibold">{rows.length}</span>
+        </div>
+
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr className="text-left">
+              <th className="p-3">Rol</th>
+              <th className="p-3">Permisos</th>
+              <th className="p-3">Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-3 font-medium">{r.name}</td>
+                <td className="p-3">{r.perms_count}</td>
+                <td className="p-3">
+                  <Link
+                    className="border rounded-lg px-3 py-1 inline-block"
+                    href={`/admin/configuracion/roles/${r.id}`}
+                  >
+                    Gestionar permisos
+                  </Link>
+                </td>
+              </tr>
+            ))}
+
+            {rows.length === 0 ? (
+              <tr>
+                <td className="p-6 text-gray-500" colSpan={3}>
+                  No hay roles en <code>roles</code>.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
