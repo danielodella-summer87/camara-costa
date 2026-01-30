@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+import { extractPermissionKeys } from "@/lib/rbac/extractPermissionKeys";
 
 export const dynamic = "force-dynamic";
 
@@ -64,9 +65,7 @@ export async function GET(req: NextRequest) {
 
     if (permsErr) throw permsErr;
 
-    const keys = (perms ?? [])
-      .map((x: any) => (x?.permissions?.key ?? "").toString().trim())
-      .filter(Boolean);
+    const keys = extractPermissionKeys(perms);
 
     return NextResponse.json({ data: keys, error: null } satisfies ApiResp<string[]>, { status: 200 });
   } catch (e: any) {

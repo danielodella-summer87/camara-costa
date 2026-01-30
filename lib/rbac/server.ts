@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+import { extractPermissionKeys } from "./extractPermissionKeys";
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -58,9 +59,7 @@ export async function getActiveUserPermissions(): Promise<string[]> {
 
   if (permsErr) return [];
 
-  return (perms ?? [])
-    .map((x: { permissions?: { key?: string } }) => (x?.permissions?.key ?? "").toString().trim())
-    .filter(Boolean);
+  return extractPermissionKeys(perms);
 }
 
 /**

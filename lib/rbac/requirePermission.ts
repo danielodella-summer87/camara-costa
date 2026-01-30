@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+import { extractPermissionKeys } from "./extractPermissionKeys";
 
 type AppUser = {
   id: string;
@@ -67,9 +68,7 @@ export async function requirePermission(req: Request, permissionKey: string) {
 
   if (permsErr) return null;
 
-  const keys = (perms ?? [])
-    .map((x: any) => (x?.permissions?.key ?? "").toString().trim())
-    .filter(Boolean);
+  const keys = extractPermissionKeys(perms);
 
   if (!keys.includes(permissionKey)) return null;
 
