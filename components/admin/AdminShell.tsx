@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 
 export default function AdminShell({
@@ -13,6 +14,16 @@ export default function AdminShell({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Cierra el menú cuando navegás (solo en mobile)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    if (isMobile) {
+      setOpen(false);
+    }
+  }, [pathname]);
 
   // Cerrar con ESC
   useEffect(() => {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -10,7 +10,7 @@ type NavItem = { label: string; href: string };
 
 const NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin" },
-  { label: "Entidades", href: "/admin/entidades" },
+  { label: "Entidades", href: "/admin/empresas" },
   { label: "Leads", href: "/admin/leads" },
   { label: "Clientes", href: "/admin/clientes" },
   { label: "Agenda", href: "/admin/agenda" },
@@ -37,6 +37,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const supabase = useMemo(() => createClient(), []);
 
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Cierra el menú cuando cambia la ruta (ej. tocás "Leads" → navega → se cierra solo)
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   async function onLogout() {
     await supabase.auth.signOut();
@@ -77,7 +82,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                 <Link
                   key={item.href}
                   href={item.href}
-                  onClick={() => setMobileOpen(false)}
+                  onClick={() => {
+                    if (typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches) {
+                      setMobileOpen(false);
+                    }
+                  }}
                   className={cx(
                     "flex items-center gap-3 px-3 py-2 rounded-lg text-sm",
                     active
