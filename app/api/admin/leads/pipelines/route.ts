@@ -13,7 +13,7 @@ function supabaseAdmin() {
 }
 
 const TABLE = "leads_pipelines";
-const SELECT = "id,created_at,updated_at,nombre,posicion,tipo,color";
+const SELECT = "id,created_at,updated_at,nombre,posicion,tipo,color,orden";
 
 type PipelineRow = {
   id: string;
@@ -23,6 +23,7 @@ type PipelineRow = {
   posicion: number;
   tipo: "normal" | "ganado" | "perdido";
   color: string | null;
+  orden?: number | null;
 };
 
 type ListResponse = {
@@ -90,7 +91,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from(TABLE)
       .select(SELECT)
-      .order("posicion", { ascending: true })
+      .order("orden", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true });
 
     if (error) {
