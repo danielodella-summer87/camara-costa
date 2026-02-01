@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
-
-export const dynamic = "force-dynamic";
+import { createClient } from "@/lib/supabase/server";
 
 const TABLE = "helpdesk_tickets";
 
@@ -13,22 +11,14 @@ function isUUID(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-type Params = { params?: { id?: string } | Promise<{ id?: string }> };
-
-async function getId(ctx: Params): Promise<string | null> {
-  const p = ctx.params instanceof Promise ? await ctx.params : ctx.params ?? {};
-  return p.id ?? null;
-}
-
-export async function GET(req: Request, ctx: Params) {
-  const supabase = await createServerSupabase();
-  const id = await getId(ctx);
+export async function GET(req: Request, ctx: { params: { id: string } }) {
+  const supabase = createClient();
+  const id = ctx?.params?.id;
 
   if (!id || !isUUID(id)) {
     return NextResponse.json({ error: "ID inválido" }, { status: 400 });
   }
 
-  // ✅ maybeSingle para evitar "Cannot coerce..."
   const { data: ticket, error } = await supabase
     .from(TABLE)
     .select("*")
@@ -41,9 +31,9 @@ export async function GET(req: Request, ctx: Params) {
   return NextResponse.json({ data: ticket });
 }
 
-export async function PATCH(req: Request, ctx: Params) {
-  const supabase = await createServerSupabase();
-  const id = await getId(ctx);
+export async function PATCH(req: Request, ctx: { params: { id: string } }) {
+  const supabase = createClient();
+  const id = ctx?.params?.id;
 
   if (!id || !isUUID(id)) {
     return NextResponse.json({ error: "ID inválido" }, { status: 400 });
@@ -52,22 +42,20 @@ export async function PATCH(req: Request, ctx: Params) {
   try {
     const body = await req.json();
 
+    // ✅ aceptar aliases (UI manda status/priority/type)
     const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
     const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
-    const tipo = norm(body?.tipo);
-    const prioridad = norm(body?.prioridad);
-    const estado = norm(body?.estado);
 
-    // Mapeo a columnas del schema (title, description, type, priority, status)
-    const typeMap: Record<string, string> = { mejora: "improvement", error: "bug", sugerencia: "suggestion" };
-    const priorityMap: Record<string, string> = { baja: "low", media: "medium", alta: "high", critica: "critical" };
+    const estado = norm(body?.estado ?? body?.status);
+    const prioridad = norm(body?.prioridad ?? body?.priority);
+    const tipo = norm(body?.tipo ?? body?.type);
 
-    const payload: Record<string, string | null> = {};
-    if (titulo) payload.title = titulo;
-    if (descripcion) payload.description = descripcion;
-    if (tipo) payload.type = typeMap[tipo] ?? tipo;
-    if (prioridad) payload.priority = priorityMap[prioridad] ?? prioridad;
-    if (estado) payload.status = estado === "open" ? "new" : estado;
+    const payload: any = {};
+    if (titulo) payload.titulo = titulo;
+    if (descripcion) payload.descripcion = descripcion;
+    if (estado) payload.estado = estado;
+    if (prioridad) payload.prioridad = prioridad;
+    if (tipo) payload.tipo = tipo;
 
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ error: "Nada que actualizar" }, { status: 400 });
@@ -85,15 +73,14 @@ export async function PATCH(req: Request, ctx: Params) {
     if (!row) return NextResponse.json({ data: null }, { status: 404 });
 
     return NextResponse.json({ data: row });
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Error actualizando ticket";
-    return NextResponse.json({ error: message }, { status: 400 });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Error actualizando ticket" }, { status: 400 });
   }
 }
 
-export async function DELETE(req: Request, ctx: Params) {
-  const supabase = await createServerSupabase();
-  const id = await getId(ctx);
+export async function DELETE(req: Request, ctx: { params: { id: string } }) {
+  const supabase = createClient();
+  const id = ctx?.params?.id;
 
   if (!id || !isUUID(id)) {
     return NextResponse.json({ error: "ID inválido" }, { status: 400 });
