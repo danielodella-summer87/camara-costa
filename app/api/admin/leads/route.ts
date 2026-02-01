@@ -44,7 +44,7 @@ type LeadRow = {
   score: number | null;
   score_categoria: string | null;
 
-  comerciales?: { id: string; nombre: string } | null;
+  comercial?: { id: string; nombre: string } | null;
 
   // Campos adicionales usados en UI y endpoints
   website?: string | null;
@@ -194,8 +194,16 @@ export async function GET(req: Request) {
       );
     }
 
+    const normalizedData = (data ?? []).map((lead: any) => ({
+      ...lead,
+      comercial: Array.isArray(lead.comerciales)
+        ? lead.comerciales[0] ?? null
+        : lead.comerciales ?? null,
+      comerciales: undefined, // opcional: lo eliminamos
+    }));
+
     return NextResponse.json(
-      { data: (data ?? []) as LeadRow[], error: null } satisfies LeadsApiResponse,
+      { data: normalizedData as LeadRow[], error: null } satisfies LeadsApiResponse,
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (e: any) {
