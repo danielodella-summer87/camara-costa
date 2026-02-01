@@ -55,8 +55,8 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const titulo = norm(body?.titulo);
-    const descripcion = norm(body?.descripcion);
+    const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
+    const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
     const tipo = norm(body?.tipo) || "mejora";
     const prioridad = norm(body?.prioridad) || "media";
 
