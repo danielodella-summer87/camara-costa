@@ -1,61 +1,52 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServerSupabase } from "@/lib/supabase/server";
 
 const TABLE = "helpdesk_tickets";
 
-function norm(s: string | null | undefined) {
-  return (s ?? "").trim();
+async function getParamId(ctx: any) {
+  const p = ctx?.params;
+  const params = typeof p?.then === "function" ? await p : p;
+  const id = params?.id;
+  return typeof id === "string" ? id : null;
 }
 
-function isUUID(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
+export async function GET(req: Request, ctx: any) {
+  const supabase = await createServerSupabase();
+  const id = await getParamId(ctx);
 
-export async function GET(req: Request, ctx: { params: { id: string } }) {
-  const supabase = createClient();
-  const id = ctx?.params?.id;
+  if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
-  if (!id || !isUUID(id)) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-  }
-
-  const { data: ticket, error } = await supabase
+  const { data, error } = await supabase
     .from(TABLE)
     .select("*")
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  const ticket = Array.isArray(data) ? data[0] : data;
   if (!ticket) return NextResponse.json({ data: null }, { status: 404 });
 
-  return NextResponse.json({ data: ticket });
+  return NextResponse.json({ data: { ticket } });
 }
 
-export async function PATCH(req: Request, ctx: { params: { id: string } }) {
-  const supabase = createClient();
-  const id = ctx?.params?.id;
+export async function PATCH(req: Request, ctx: any) {
+  const supabase = await createServerSupabase();
+  const id = await getParamId(ctx);
 
-  if (!id || !isUUID(id)) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-  }
+  if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
   try {
     const body = await req.json();
 
-    // ✅ aceptar aliases (UI manda status/priority/type)
-    const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
-    const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
+    // ✅ aceptar ambos nombres (UI manda status/priority/type)
+    const status = body?.status ?? body?.estado;
+    const priority = body?.priority ?? body?.prioridad;
+    const type = body?.type ?? body?.tipo;
 
-    const estado = norm(body?.estado ?? body?.status);
-    const prioridad = norm(body?.prioridad ?? body?.priority);
-    const tipo = norm(body?.tipo ?? body?.type);
-
-    const payload: any = {};
-    if (titulo) payload.titulo = titulo;
-    if (descripcion) payload.descripcion = descripcion;
-    if (estado) payload.estado = estado;
-    if (prioridad) payload.prioridad = prioridad;
-    if (tipo) payload.tipo = tipo;
+    const payload: Record<string, any> = {};
+    if (status != null && String(status).trim().length) payload.status = status;
+    if (priority != null && String(priority).trim().length) payload.priority = priority;
+    if (type != null && String(type).trim().length) payload.type = type;
 
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ error: "Nada que actualizar" }, { status: 400 });
@@ -65,26 +56,24 @@ export async function PATCH(req: Request, ctx: { params: { id: string } }) {
       .from(TABLE)
       .update(payload)
       .eq("id", id)
-      .select("*"); // ✅ sin single
+      .select("*");
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row) return NextResponse.json({ data: null }, { status: 404 });
+    const ticket = Array.isArray(data) ? data[0] : data;
+    if (!ticket) return NextResponse.json({ data: null }, { status: 404 });
 
-    return NextResponse.json({ data: row });
+    return NextResponse.json({ data: { ticket } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Error actualizando ticket" }, { status: 400 });
   }
 }
 
-export async function DELETE(req: Request, ctx: { params: { id: string } }) {
-  const supabase = createClient();
-  const id = ctx?.params?.id;
+export async function DELETE(req: Request, ctx: any) {
+  const supabase = await createServerSupabase();
+  const id = await getParamId(ctx);
 
-  if (!id || !isUUID(id)) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-  }
+  if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
   const { error } = await supabase.from(TABLE).delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

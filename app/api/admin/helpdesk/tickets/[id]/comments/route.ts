@@ -1,36 +1,21 @@
 import { NextResponse } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
 
-export const dynamic = "force-dynamic";
-
-const COMMENTS_TABLE = "helpdesk_comments";
-const TICKETS_TABLE = "helpdesk_tickets";
-
-function norm(s: string | null | undefined) {
-  return (s ?? "").trim();
+async function getParamId(ctx: any) {
+  const p = ctx?.params;
+  const params = typeof p?.then === "function" ? await p : p;
+  const id = params?.id;
+  return typeof id === "string" ? id : null;
 }
 
-function isUUID(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
-
-type Params = { params?: { id?: string } | Promise<{ id?: string }> };
-
-async function getTicketId(ctx: Params): Promise<string | null> {
-  const p = ctx.params instanceof Promise ? await ctx.params : ctx.params ?? {};
-  return p.id ?? null;
-}
-
-export async function GET(req: Request, ctx: Params) {
+export async function GET(req: Request, ctx: any) {
   const supabase = await createServerSupabase();
-  const ticketId = await getTicketId(ctx);
+  const ticketId = await getParamId(ctx);
 
-  if (!ticketId || !isUUID(ticketId)) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-  }
+  if (!ticketId) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
   const { data, error } = await supabase
-    .from(COMMENTS_TABLE)
+    .from("helpdesk_comments")
     .select("*")
     .eq("ticket_id", ticketId)
     .order("created_at", { ascending: true });
@@ -40,50 +25,40 @@ export async function GET(req: Request, ctx: Params) {
   return NextResponse.json({ data: data ?? [] });
 }
 
-export async function POST(req: Request, ctx: Params) {
+export async function POST(req: Request, ctx: any) {
   const supabase = await createServerSupabase();
-  const ticketId = await getTicketId(ctx);
+  const ticketId = await getParamId(ctx);
 
-  if (!ticketId || !isUUID(ticketId)) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
-  }
+  if (!ticketId) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
   try {
     const body = await req.json();
-    const contenido = norm(body?.contenido ?? body?.content ?? body?.comentario ?? body?.body);
-    const isInternal = !!body?.is_internal;
+    const text = typeof body?.body === "string" ? body.body.trim() : "";
+    const is_internal = !!body?.is_internal;
+    const user_email = body?.user_email ?? null;
 
-    if (!contenido) return NextResponse.json({ error: "Comentario requerido" }, { status: 400 });
+    if (!text) return NextResponse.json({ error: "Comentario requerido" }, { status: 400 });
 
-    // ✅ Validar ticket existe sin .single()
-    const { data: ticket, error: tErr } = await supabase
-      .from(TICKETS_TABLE)
-      .select("id,created_by")
-      .eq("id", ticketId)
-      .maybeSingle();
-
-    if (tErr) return NextResponse.json({ error: tErr.message }, { status: 400 });
-    if (!ticket) return NextResponse.json({ error: "Ticket no encontrado" }, { status: 404 });
-
-    // ✅ author nullable por ahora (si la columna created_by es nullable)
-    const created_by = null as string | null;
+    // ✅ validar ticket existe sin .single()
+    const t = await supabase.from("helpdesk_tickets").select("id").eq("id", ticketId);
+    if (t.error) return NextResponse.json({ error: t.error.message }, { status: 400 });
+    if (!t.data || t.data.length === 0) return NextResponse.json({ error: "Ticket no encontrado" }, { status: 404 });
 
     const { data, error } = await supabase
-      .from(COMMENTS_TABLE)
+      .from("helpdesk_comments")
       .insert({
         ticket_id: ticketId,
-        body: contenido,
-        is_internal: isInternal,
-        created_by,
+        body: text,
+        is_internal,
+        user_email,
       })
-      .select("*"); // ✅ sin single
+      .select("*");
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
     const row = Array.isArray(data) ? data[0] : data;
     return NextResponse.json({ data: row ?? null });
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Error creando comentario";
-    return NextResponse.json({ error: message }, { status: 400 });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Error comentando" }, { status: 400 });
   }
 }
