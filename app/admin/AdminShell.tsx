@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { useMemo, useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -17,6 +16,7 @@ const NAV: NavItem[] = [
   { label: "Operaciones", href: "/admin/operaciones" },
   { label: "Reportes", href: "/admin/reportes" },
   { label: "Eventos", href: "/admin/eventos" },
+  { label: "Mesa de ayuda", href: "/admin/mesa-de-ayuda" },
   { label: "IA", href: "/admin/configuracion/ia" },
   { label: "Personalización", href: "/admin/personalizacion" },
   { label: "Configuración", href: "/admin/configuracion" },
