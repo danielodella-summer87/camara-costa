@@ -29,6 +29,7 @@ export default function MesaDeAyudaPage() {
   const [status, setStatus] = useState<string>("");
   const [priority, setPriority] = useState<string>("");
   const [type, setType] = useState<string>("");
+  const [showClosed, setShowClosed] = useState(false);
 
   async function fetchTickets() {
     setLoading(true);
@@ -38,6 +39,8 @@ export default function MesaDeAyudaPage() {
       if (status) qs.set("status", status);
       if (priority) qs.set("priority", priority);
       if (type) qs.set("type", type);
+      if (showClosed) qs.set("include_closed", "1");
+      else qs.delete("include_closed");
 
       const res = await fetch(`/api/admin/helpdesk/tickets?${qs.toString()}`, {
         cache: "no-store",
@@ -58,7 +61,7 @@ export default function MesaDeAyudaPage() {
 
   useEffect(() => {
     fetchTickets();
-  }, [status, priority, type]);
+  }, [status, priority, type, showClosed]);
 
   const badge = useMemo(() => {
     return {
@@ -118,6 +121,15 @@ export default function MesaDeAyudaPage() {
               <option value="improvement">Mejora</option>
               <option value="suggestion">Sugerencia</option>
             </select>
+
+            <label className="ml-2 inline-flex items-center gap-2 text-sm text-slate-700 select-none">
+              <input
+                type="checkbox"
+                checked={showClosed}
+                onChange={(e) => setShowClosed(e.target.checked)}
+              />
+              Ver cerrados
+            </label>
           </div>
 
           {hasPermission("helpdesk.write") && (

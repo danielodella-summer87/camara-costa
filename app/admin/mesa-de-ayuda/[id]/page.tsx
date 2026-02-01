@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { createClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Ticket = {
   id: string;
@@ -30,17 +31,6 @@ type Comment = {
   is_internal: boolean;
 };
 
-type Attachment = {
-  id: string;
-  created_at: string;
-  ticket_id: string;
-  created_by: string | null;
-  file_path: string;
-  file_name: string;
-  mime_type: string | null;
-  size_bytes: number | null;
-};
-
 type ApiResp<T> = { data?: T | null; error?: string | null };
 
 export default function TicketDetailPage() {
@@ -55,7 +45,6 @@ export default function TicketDetailPage() {
 
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   const [newComment, setNewComment] = useState("");
   const [internal, setInternal] = useState(false);
@@ -64,6 +53,11 @@ export default function TicketDetailPage() {
   const [editPriority, setEditPriority] = useState<string>("");
   const [editType, setEditType] = useState<string>("");
 
+  const [activeTab, setActiveTab] = useState<"usuario" | "soporte">("usuario");
+
+  const { hasPermission } = usePermissions();
+  const canSupportEdit = hasPermission("helpdesk.manage") || hasPermission("helpdesk.write");
+
   async function fetchOne() {
     if (!id) return;
 
@@ -71,7 +65,7 @@ export default function TicketDetailPage() {
     setError(null);
 
     try {
-      const [tRes, cRes, aRes] = await Promise.all([
+      const [tRes, cRes] = await Promise.all([
         fetch(`/api/admin/helpdesk/tickets/${id}`, {
           cache: "no-store",
           headers: { "Cache-Control": "no-store" },
@@ -80,27 +74,31 @@ export default function TicketDetailPage() {
           cache: "no-store",
           headers: { "Cache-Control": "no-store" },
         }),
-        fetch(`/api/admin/helpdesk/tickets/${id}/attachments`, {
-          cache: "no-store",
-          headers: { "Cache-Control": "no-store" },
-        }),
       ]);
 
       const tJson = (await tRes.json()) as ApiResp<Ticket | Ticket[]>;
       const cJson = (await cRes.json()) as ApiResp<Comment[]>;
-      const aJson = (await aRes.json()) as ApiResp<Attachment[]>;
 
       if (!tRes.ok) throw new Error(tJson?.error ?? "Error cargando ticket");
       if (!cRes.ok) throw new Error(cJson?.error ?? "Error cargando comentarios");
-      if (!aRes.ok) throw new Error(aJson?.error ?? "Error cargando adjuntos");
 
-      // ✅ blindado: ticket puede venir como objeto o array (por select)
       const rawTicket = tJson?.data as any;
-      const t: Ticket | null = Array.isArray(rawTicket) ? rawTicket?.[0] ?? null : rawTicket ?? null;
+      const t0: any = Array.isArray(rawTicket) ? rawTicket?.[0] ?? null : rawTicket ?? null;
+
+      const t: Ticket | null = t0
+        ? ({
+            ...t0,
+            // Normalización por si el backend/DB usa español
+            title: t0.title ?? t0.titulo ?? t0.asunto ?? null,
+            description: t0.description ?? t0.descripcion ?? t0.detalle ?? null,
+            type: t0.type ?? t0.tipo ?? "suggestion",
+            priority: t0.priority ?? t0.prioridad ?? "medium",
+            status: t0.status ?? t0.estado ?? "new",
+          } as Ticket)
+        : null;
 
       setTicket(t);
       setComments(Array.isArray(cJson?.data) ? (cJson.data as Comment[]) : []);
-      setAttachments(Array.isArray(aJson?.data) ? (aJson.data as Attachment[]) : []);
 
       setEditStatus(t?.status ?? "");
       setEditPriority(t?.priority ?? "");
@@ -109,7 +107,6 @@ export default function TicketDetailPage() {
       setError(e instanceof Error ? e.message : "Error");
       setTicket(null);
       setComments([]);
-      setAttachments([]);
     } finally {
       setLoading(false);
     }
@@ -167,54 +164,6 @@ export default function TicketDetailPage() {
     }
   }
 
-  async function uploadFiles(files: FileList | null) {
-    if (!files || files.length === 0 || !ticket) return;
-
-    setBusy(true);
-    setError(null);
-
-    try {
-      for (const file of Array.from(files)) {
-        const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
-        const path = `ticket/${ticket.id}/${crypto.randomUUID()}.${ext}`;
-
-        const up = await supabase.storage.from("helpdesk").upload(path, file, {
-          cacheControl: "3600",
-          upsert: false,
-          contentType: file.type || undefined,
-        });
-
-        if (up.error) throw new Error(up.error.message);
-
-        const res = await fetch(`/api/admin/helpdesk/tickets/${ticket.id}/attachments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-          body: JSON.stringify({
-            file_path: path,
-            file_name: file.name,
-            mime_type: file.type || null,
-            size_bytes: file.size,
-          }),
-        });
-
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Error registrando adjunto");
-      }
-
-      await fetchOne();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error subiendo captura");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function getAttachmentUrl(file_path: string) {
-    const { data, error } = await supabase.storage.from("helpdesk").createSignedUrl(file_path, 60 * 60);
-    if (error || !data?.signedUrl) return null;
-    return data.signedUrl;
-  }
-
   async function applyAdminChanges() {
     if (!id) {
       setError("ID inválido");
@@ -264,8 +213,31 @@ export default function TicketDetailPage() {
             ← Mesa de ayuda
           </Link>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold text-slate-900 truncate">{ticket ? ticket.title : "Ticket"}</h1>
-            <p className="text-sm text-slate-500">Detalle, comentarios y capturas.</p>
+            {/* Header SIEMPRE visible */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h1 className="text-xl font-semibold text-slate-900 truncate">
+                  {ticket ? ticket.title : "Ticket"}
+                </h1>
+                {ticket ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.type]}`}>
+                      {ticket.type === "bug" ? "Error" : ticket.type === "improvement" ? "Mejora" : "Sugerencia"}
+                    </span>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.priority]}`}>
+                      {ticket.priority === "low"
+                        ? "Baja"
+                        : ticket.priority === "medium"
+                        ? "Media"
+                        : ticket.priority === "high"
+                        ? "Alta"
+                        : "Crítica"}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">Detalle, comentarios y capturas.</p>
           </div>
         </div>
 
@@ -281,187 +253,220 @@ export default function TicketDetailPage() {
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4">
             {/* Izquierda */}
             <div className="space-y-4">
-              <div className="rounded-2xl border bg-white p-6">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.type]}`}>
-                    {ticket.type === "bug" ? "Error" : ticket.type === "improvement" ? "Mejora" : "Sugerencia"}
-                  </span>
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.priority]}`}>
-                    {ticket.priority === "low"
-                      ? "Baja"
-                      : ticket.priority === "medium"
-                      ? "Media"
-                      : ticket.priority === "high"
-                      ? "Alta"
-                      : "Crítica"}
-                  </span>
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.status]}`}>
-                    {ticket.status === "new"
-                      ? "Nuevo"
-                      : ticket.status === "triage"
-                      ? "En revisión"
-                      : ticket.status === "in_progress"
-                      ? "En progreso"
-                      : ticket.status === "resolved"
-                      ? "Resuelto"
-                      : "Cerrado"}
-                  </span>
-                </div>
-
-                <div className="mt-4">
-                  <div className="text-xs font-semibold text-slate-600 mb-1">Descripción</div>
-                  <div className="text-sm text-slate-800 whitespace-pre-wrap">{ticket.description}</div>
-                </div>
+              <div className="mt-2 inline-flex overflow-hidden rounded-xl border bg-white">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("usuario")}
+                  className={`px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === "usuario"
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  Usuario
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("soporte")}
+                  className={`px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === "soporte"
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  Soporte
+                </button>
               </div>
 
-              {/* Comentarios */}
-              <div className="rounded-2xl border bg-white p-6 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-slate-900">Comentarios</h2>
-                </div>
-
-                {comments.length === 0 ? (
-                  <div className="text-sm text-slate-500">Sin comentarios todavía.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {comments.map((c) => (
-                      <div key={c.id} className="rounded-xl border p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="text-xs text-slate-500">{c.created_by ?? "Usuario"}</div>
-                          {c.is_internal ? (
-                            <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">Interno</span>
-                          ) : null}
-                        </div>
-                        <div className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{c.body}</div>
-                      </div>
-                    ))}
+              {activeTab === "usuario" && ticket && (
+                <div className="mt-4 space-y-4">
+                  {/* Badges */}
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.type]}`}>
+                      {ticket.type === "bug"
+                        ? "Error"
+                        : ticket.type === "improvement"
+                        ? "Mejora"
+                        : "Sugerencia"}
+                    </span>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.priority]}`}>
+                      {ticket.priority === "low"
+                        ? "Baja"
+                        : ticket.priority === "medium"
+                        ? "Media"
+                        : ticket.priority === "high"
+                        ? "Alta"
+                        : ticket.priority === "critical"
+                        ? "Crítica"
+                        : "—"}
+                    </span>
                   </div>
-                )}
 
-                <div className="pt-2 border-t space-y-2">
-                  <textarea
-                    value={newComment}
-                    onChange={(e) => setNewComment(e.target.value)}
-                    placeholder="Escribí un comentario…"
-                    className="w-full rounded-xl border px-3 py-2 text-sm min-h-[90px]"
-                    disabled={busy}
-                  />
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={internal}
-                        onChange={(e) => setInternal(e.target.checked)}
+                  {/* Título */}
+                  <div className="rounded-2xl border bg-white p-4">
+                    <div className="text-xs font-semibold text-slate-600">Título</div>
+                    <div className="mt-2 text-sm font-medium text-slate-900">
+                      {ticket.title || "—"}
+                    </div>
+                  </div>
+
+                  {/* Descripción */}
+                  <div className="rounded-2xl border bg-white p-4">
+                    <div className="text-xs font-semibold text-slate-600">Descripción</div>
+                    <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">
+                      {ticket.description || "—"}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "soporte" && (
+                <>
+                  <div className="rounded-2xl border bg-white p-6 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-sm font-semibold text-slate-900">Comentarios</h2>
+                    </div>
+
+                    {comments.length === 0 ? (
+                      <div className="text-sm text-slate-500">Sin comentarios todavía.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {comments.map((c) => (
+                          <div key={c.id} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs text-slate-500">{c.created_by ?? "Usuario"}</div>
+                              {c.is_internal ? (
+                                <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">Interno</span>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{c.body}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t space-y-2">
+                      <textarea
+                        value={newComment}
+                        onChange={(e) => setNewComment(e.target.value)}
+                        placeholder="Escribí un comentario…"
+                        className="w-full rounded-xl border px-3 py-2 text-sm min-h-[90px]"
                         disabled={busy}
                       />
-                      Interno (solo admin)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={postComment}
-                      disabled={busy || !newComment.trim()}
-                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                    >
-                      {busy ? "Guardando…" : "Comentar"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Derecha */}
-            <div className="space-y-4">
-              <div className="rounded-2xl border bg-white p-6 space-y-3">
-                <h2 className="text-sm font-semibold text-slate-900">Admin</h2>
-
-                <div className="grid gap-2">
-                  <label className="text-xs font-semibold text-slate-600">Estado</label>
-                  <select
-                    value={editStatus}
-                    onChange={(e) => setEditStatus(e.target.value)}
-                    className="rounded-xl border px-3 py-2 text-sm"
-                    disabled={busy}
-                  >
-                    <option value="new">Nuevo</option>
-                    <option value="triage">En revisión</option>
-                    <option value="in_progress">En progreso</option>
-                    <option value="resolved">Resuelto</option>
-                    <option value="closed">Cerrado</option>
-                  </select>
-
-                  <label className="text-xs font-semibold text-slate-600">Prioridad</label>
-                  <select
-                    value={editPriority}
-                    onChange={(e) => setEditPriority(e.target.value)}
-                    className="rounded-xl border px-3 py-2 text-sm"
-                    disabled={busy}
-                  >
-                    <option value="low">Baja</option>
-                    <option value="medium">Media</option>
-                    <option value="high">Alta</option>
-                    <option value="critical">Crítica</option>
-                  </select>
-
-                  <label className="text-xs font-semibold text-slate-600">Tipo</label>
-                  <select
-                    value={editType}
-                    onChange={(e) => setEditType(e.target.value)}
-                    className="rounded-xl border px-3 py-2 text-sm"
-                    disabled={busy}
-                  >
-                    <option value="bug">Error</option>
-                    <option value="improvement">Mejora</option>
-                    <option value="suggestion">Sugerencia</option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={applyAdminChanges}
-                    disabled={busy || !ticket}
-                    className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                  >
-                    {busy ? "Actualizando…" : "Aplicar cambios"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border bg-white p-6 space-y-3">
-                <h2 className="text-sm font-semibold text-slate-900">Capturas / Adjuntos</h2>
-
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => uploadFiles(e.target.files)}
-                  disabled={busy}
-                />
-
-                {attachments.length === 0 ? (
-                  <div className="text-sm text-slate-500">Sin adjuntos.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {attachments.map((a) => (
-                      <div key={a.id} className="flex items-center justify-between gap-2 rounded-xl border p-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-slate-900 truncate">{a.file_name}</div>
-                          <div className="text-xs text-slate-500 truncate">{a.file_path}</div>
-                        </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={internal}
+                            onChange={(e) => setInternal(e.target.checked)}
+                            disabled={busy}
+                          />
+                          Interno (solo admin)
+                        </label>
                         <button
                           type="button"
-                          className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50"
-                          onClick={async () => {
-                            const url = await getAttachmentUrl(a.file_path);
-                            if (url) window.open(url, "_blank", "noopener,noreferrer");
-                          }}
+                          onClick={postComment}
+                          disabled={busy || !newComment.trim()}
+                          className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                         >
-                          Ver
+                          {busy ? "Guardando…" : "Comentar"}
                         </button>
                       </div>
-                    ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Derecha: Estado, Prioridad (solo tab Soporte) */}
+            {activeTab === "soporte" && ticket && (
+              <div className="space-y-4">
+                {canSupportEdit ? (
+                  <div className="rounded-2xl border bg-white p-6 space-y-3">
+                    <h2 className="text-sm font-semibold text-slate-900">Admin</h2>
+
+                    <div className="grid gap-2">
+                      <label className="text-xs font-semibold text-slate-600">Estado</label>
+                      <select
+                        value={editStatus}
+                        onChange={(e) => setEditStatus(e.target.value)}
+                        className="rounded-xl border px-3 py-2 text-sm"
+                        disabled={busy || !canSupportEdit}
+                      >
+                        <option value="new">Nuevo</option>
+                        <option value="triage">En revisión</option>
+                        <option value="in_progress">En progreso</option>
+                        <option value="resolved">Resuelto</option>
+                        <option value="closed">Cerrado</option>
+                      </select>
+
+                      <label className="text-xs font-semibold text-slate-600">Prioridad</label>
+                      <select
+                        value={editPriority}
+                        onChange={(e) => setEditPriority(e.target.value)}
+                        className="rounded-xl border px-3 py-2 text-sm"
+                        disabled={busy || !canSupportEdit}
+                      >
+                        <option value="low">Baja</option>
+                        <option value="medium">Media</option>
+                        <option value="high">Alta</option>
+                        <option value="critical">Crítica</option>
+                      </select>
+
+                      <label className="text-xs font-semibold text-slate-600">Tipo</label>
+                      <select
+                        value={editType}
+                        onChange={(e) => setEditType(e.target.value)}
+                        className="rounded-xl border px-3 py-2 text-sm"
+                        disabled={busy || !canSupportEdit}
+                      >
+                        <option value="bug">Error</option>
+                        <option value="improvement">Mejora</option>
+                        <option value="suggestion">Sugerencia</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={applyAdminChanges}
+                        disabled={busy || !ticket || !canSupportEdit}
+                        className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        {busy ? "Actualizando…" : "Aplicar cambios"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border bg-white p-6 space-y-3">
+                    <h2 className="text-sm font-semibold text-slate-900">Admin</h2>
+                    <div className="flex flex-wrap gap-2">
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.status]}`}>
+                        {ticket.status === "new"
+                          ? "Nuevo"
+                          : ticket.status === "triage"
+                          ? "En revisión"
+                          : ticket.status === "in_progress"
+                          ? "En progreso"
+                          : ticket.status === "resolved"
+                          ? "Resuelto"
+                          : "Cerrado"}
+                      </span>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.priority]}`}>
+                        {ticket.priority === "low"
+                          ? "Baja"
+                          : ticket.priority === "medium"
+                          ? "Media"
+                          : ticket.priority === "high"
+                          ? "Alta"
+                          : "Crítica"}
+                      </span>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[ticket.type]}`}>
+                        {ticket.type === "bug" ? "Error" : ticket.type === "improvement" ? "Mejora" : "Sugerencia"}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>

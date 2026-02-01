@@ -30,8 +30,61 @@ function roleToLabel(role: string | null | undefined) {
     operador: "Operador",
     comercial: "Comercial",
     viewer: "Viewer",
+    marketing: "Marketing",
+    administracion: "Administración",
+    tecnico: "Técnico",
   };
   return map[r] ?? r.charAt(0).toUpperCase() + r.slice(1);
+}
+
+const roleColorMap: Record<string, { bg: string; text: string }> = {
+  admin: { bg: "bg-blue-600", text: "text-blue-600" },
+  comercial: { bg: "bg-green-600", text: "text-green-600" },
+  marketing: { bg: "bg-pink-500", text: "text-pink-600" },
+  administracion: { bg: "bg-amber-500", text: "text-amber-700" },
+  tecnico: { bg: "bg-violet-500", text: "text-violet-600" },
+};
+const defaultRoleColor = { bg: "bg-gray-400", text: "text-gray-600" };
+
+/** Detecta si un valor parece username técnico (ej: test-comercial, admin, user_123). */
+function isTechnicalUsername(s: string | null | undefined): boolean {
+  if (!s || !s.trim()) return true;
+  const t = s.trim().toLowerCase();
+  if (t.length < 2) return true;
+  if (/^test[-_]/.test(t) || /^demo[-_]?/.test(t) || /^user[-_]?\d*$/.test(t)) return true;
+  if (t === "admin") return true;
+  return false;
+}
+
+/**
+ * Nombre humano para mostrar. Prioridad: profile.nombre → full_name → name → email (antes del @).
+ * Solo primer nombre; evita usernames técnicos como "test-comercial".
+ */
+function getDisplayName(me: MeResponse | null): string {
+  if (!me) return "Usuario";
+
+  const appNombre = me?.app_user?.nombre?.trim();
+  if (appNombre && !isTechnicalUsername(appNombre)) {
+    return appNombre.split(/\s+/)[0] ?? appNombre;
+  }
+
+  const meta = me?.user?.user_metadata;
+  const fullName = meta?.full_name?.trim();
+  if (fullName && !isTechnicalUsername(fullName)) {
+    return fullName.split(/\s+/)[0] ?? fullName;
+  }
+
+  const name = meta?.name?.trim();
+  if (name && !isTechnicalUsername(name)) {
+    return name.split(/\s+/)[0] ?? name;
+  }
+
+  const email = me?.user?.email;
+  if (email && typeof email === "string" && email.includes("@")) {
+    return email.split("@")[0];
+  }
+
+  return "Usuario";
 }
 
 export default function UserMenu() {
@@ -65,27 +118,23 @@ export default function UserMenu() {
     };
   }, []);
 
-  const displayName = useMemo(() => {
-    const fromApp = me?.app_user?.nombre?.trim();
-    if (fromApp) return fromApp;
-
-    const meta = me?.user?.user_metadata;
-    return (
-      meta?.full_name?.trim() ||
-      meta?.name?.trim() ||
-      me?.user?.email?.split("@")[0] ||
-      "Usuario"
-    );
-  }, [me]);
+  const displayName = useMemo(() => getDisplayName(me), [me]);
 
   const roleLabel = useMemo(() => {
     return roleToLabel(me?.app_user?.role ?? null);
   }, [me]);
 
-  const avatarUrl = useMemo(() => {
-    const meta = me?.user?.user_metadata;
-    return meta?.picture || meta?.avatar_url || "";
-  }, [me]);
+  const initial = useMemo(() => {
+    const first = displayName.trim().charAt(0);
+    return first ? first.toUpperCase() : "U";
+  }, [displayName]);
+
+  const roleColor = useMemo(() => {
+    const role = me?.app_user?.role?.trim()?.toLowerCase();
+    if (!role) return defaultRoleColor;
+    const key = role.normalize("NFD").replace(/\u0300/g, "");
+    return roleColorMap[key] ?? defaultRoleColor;
+  }, [me?.app_user?.role]);
 
   async function handleLogout() {
     try {
@@ -107,17 +156,12 @@ export default function UserMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        {avatarUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={avatarUrl}
-            alt={displayName}
-            className="h-7 w-7 rounded-full object-cover"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="h-7 w-7 rounded-full bg-gray-200" />
-        )}
+        <div
+          className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold text-white ${roleColor.bg}`}
+          aria-hidden
+        >
+          {initial}
+        </div>
 
         <div className="flex flex-col items-start leading-tight">
           <div className="text-sm font-medium">{displayName}</div>
@@ -131,44 +175,24 @@ export default function UserMenu() {
 
       {open && (
         <div
-          className="absolute right-0 mt-2 w-64 rounded-xl border bg-white p-2 shadow-lg"
+          className="absolute right-0 mt-2 w-64 rounded-xl border bg-white p-4 shadow-lg"
           role="menu"
         >
-          <div className="px-2 py-2">
-            <div className="text-sm font-medium">{displayName}</div>
-            <div className="text-xs text-gray-500">{me?.user?.email ?? ""}</div>
-            <div className="mt-1 text-xs text-gray-500">
-              Rol: <span className="font-medium text-gray-700">{roleLabel}</span>
+          <div className="flex flex-col items-center text-center sm:items-start sm:text-left">
+            <div
+              className={`h-12 w-12 shrink-0 rounded-full flex items-center justify-center text-lg font-semibold text-white ${roleColor.bg}`}
+              aria-hidden
+            >
+              {initial}
+            </div>
+            <div className="mt-3 w-full min-w-0">
+              <div className="text-sm font-semibold text-gray-900 truncate">{displayName}</div>
+              <div className="mt-0.5 text-xs text-gray-500 truncate">{me?.user?.email ?? ""}</div>
+              <div className={`mt-1.5 text-xs font-medium ${roleColor.text}`}>{roleLabel}</div>
             </div>
           </div>
 
-          <div className="my-2 h-px bg-gray-100" />
-
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              router.push("/admin/configuracion/usuarios");
-            }}
-            className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-50"
-            role="menuitem"
-          >
-            Usuarios y roles
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              router.push("/admin/configuracion/roles");
-            }}
-            className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-gray-50"
-            role="menuitem"
-          >
-            Roles
-          </button>
-
-          <div className="my-2 h-px bg-gray-100" />
+          <div className="my-3 h-px bg-gray-100" />
 
           <button
             type="button"
@@ -176,7 +200,7 @@ export default function UserMenu() {
             className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
             role="menuitem"
           >
-            Logout
+            Cerrar sesión
           </button>
         </div>
       )}

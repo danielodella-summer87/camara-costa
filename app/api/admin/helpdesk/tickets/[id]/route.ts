@@ -18,15 +18,16 @@ export async function GET(req: Request, ctx: any) {
 
   const { data, error } = await supabase
     .from(TABLE)
-    .select("*")
-    .eq("id", id);
+    .select("id, title, description, type, priority, status, created_at, updated_at, created_by")
+    .eq("id", id)
+    .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   const ticket = Array.isArray(data) ? data[0] : data;
   if (!ticket) return NextResponse.json({ data: null }, { status: 404 });
 
-  return NextResponse.json({ data: { ticket } });
+  return NextResponse.json({ data: ticket });
 }
 
 export async function PATCH(req: Request, ctx: any) {

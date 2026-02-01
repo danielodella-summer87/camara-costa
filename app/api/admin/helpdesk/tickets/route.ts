@@ -18,6 +18,8 @@ export async function GET(req: Request) {
   const supabase = await createServerSupabase();
 
   const url = new URL(req.url);
+  const includeClosed = url.searchParams.get("include_closed") === "1";
+  const status = url.searchParams.get("status") ?? url.searchParams.get("estado");
   const estado = url.searchParams.get("estado");
   const prioridad = url.searchParams.get("prioridad");
   const tipo = url.searchParams.get("tipo");
@@ -30,7 +32,12 @@ export async function GET(req: Request) {
 
   let query = supabase.from(TABLE).select("*", { count: "exact" });
 
-  if (estado && estado !== "todos") query = query.eq("status", estado);
+  const statusFilter = status ?? estado;
+  if (statusFilter && statusFilter !== "todos" && statusFilter !== "all") {
+    query = query.eq("status", statusFilter);
+  } else if (!includeClosed) {
+    query = query.neq("status", "closed");
+  }
   if (prioridad && prioridad !== "todas") query = query.eq("priority", prioridad);
   if (tipo && tipo !== "todos") query = query.eq("type", tipo);
 
