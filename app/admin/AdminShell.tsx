@@ -6,6 +6,14 @@ import { usePathname } from "next/navigation";
 import UserMenu from "@/app/admin/components/UserMenu";
 
 type NavItem = { label: string; href: string };
+type RoleKey = "admin" | "operador" | "comercial" | "viewer";
+
+type MeResponse = {
+  authed: boolean;
+  app_user?: {
+    role?: string | null;
+  };
+};
 
 const NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin" },
@@ -32,14 +40,63 @@ function isActive(pathname: string | null, href: string) {
   return pathname.startsWith(href);
 }
 
+function normalizeRole(role: string | null | undefined): RoleKey | null {
+  if (!role) return null;
+  const r = role.trim().toLowerCase();
+  if (r === "admin" || r === "operador" || r === "comercial" || r === "viewer") return r;
+  if (r === "operaciones") return "operador";
+  if (r === "solo_lectura" || r === "gerencia") return "viewer";
+  return null;
+}
+
+function filterNavByRole(nav: NavItem[], role: RoleKey | null) {
+  if (!role) return nav; // si aún no cargó, no ocultamos; evitamos menú vacío
+  if (role === "admin") return nav;
+
+  // Reglas de visibilidad de menú por rol (UI)
+  const hiddenByRole: Record<RoleKey, string[]> = {
+    admin: [],
+    operador: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia"],
+    comercial: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia", "/admin/operaciones", "/admin/mesa-de-ayuda"],
+    viewer: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia", "/admin/operaciones", "/admin/mesa-de-ayuda"],
+  };
+
+  const hiddenPrefixes = hiddenByRole[role] ?? [];
+  return nav.filter((item) => !hiddenPrefixes.some((p) => item.href === p || item.href.startsWith(p + "/")));
+}
+
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Cierra el menú cuando cambia la ruta (ej. tocás "Leads" → navega → se cierra solo)
+  const [role, setRole] = useState<RoleKey | null>(null);
+
+  // Cierra el menú cuando cambia la ruta
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
+
+  // Trae rol desde /api/auth/me (ya te devuelve app_user.role)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        const json = (await r.json()) as MeResponse;
+        const parsed = normalizeRole(json?.app_user?.role ?? null);
+        if (!cancelled) setRole(parsed);
+      } catch {
+        if (!cancelled) setRole(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredNav = useMemo(() => filterNavByRole(NAV, role), [role]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -56,17 +113,13 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           {/* Logo / Brand */}
           <div className="p-4 border-b border-white/10">
             <div className="rounded-xl overflow-hidden bg-white/5 p-3 flex items-center justify-center">
-              <img
-                src="/licencia.png"
-                alt="Licencia Cámara Costa"
-                className="max-h-24 object-contain"
-              />
+              <img src="/licencia.png" alt="Licencia Cámara Costa" className="max-h-24 object-contain" />
             </div>
           </div>
 
           {/* Nav */}
           <nav className="p-3 space-y-1">
-            {NAV.map((item) => {
+            {filteredNav.map((item) => {
               const active = isActive(pathname, item.href);
               return (
                 <Link
@@ -79,9 +132,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                   }}
                   className={cx(
                     "flex items-center gap-3 px-3 py-2 rounded-lg text-sm",
-                    active
-                      ? "bg-white/10 text-white"
-                      : "text-white/80 hover:bg-white/5 hover:text-white"
+                    active ? "bg-white/10 text-white" : "text-white/80 hover:bg-white/5 hover:text-white"
                   )}
                 >
                   <span className="h-2 w-2 rounded-full bg-white/20" />
@@ -93,18 +144,13 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
           {/* Footer / Mini badge */}
           <div className="mt-auto p-4 border-t border-white/10">
-            <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">
-              Cámara Costa • Admin UI
-            </div>
+            <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">Cámara Costa • Admin UI</div>
           </div>
         </aside>
 
         {/* Overlay mobile */}
         {mobileOpen ? (
-          <div
-            className="fixed inset-0 bg-black/40 z-30 md:hidden"
-            onClick={() => setMobileOpen(false)}
-          />
+          <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileOpen(false)} />
         ) : null}
 
         {/* Main */}
@@ -113,10 +159,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <header className="sticky top-0 z-20 bg-white border-b">
             <div className="h-14 px-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <button
-                  className="md:hidden border rounded-lg px-3 py-2 text-sm"
-                  onClick={() => setMobileOpen((v) => !v)}
-                >
+                <button className="md:hidden border rounded-lg px-3 py-2 text-sm" onClick={() => setMobileOpen((v) => !v)}>
                   Menú
                 </button>
 
