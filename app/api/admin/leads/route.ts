@@ -203,7 +203,7 @@ export async function POST(req: Request) {
   try {
     // Requerir permiso de creación de leads
     const { requirePermission } = await import("@/lib/rbac/requirePermission");
-    const user = await requirePermission(req as any, "leads.create");
+    const user = await requirePermission(req as any, "leads.write");
     if (!user) {
       return NextResponse.json(
         { data: null, error: "No autorizado" } satisfies LeadApiResponse,

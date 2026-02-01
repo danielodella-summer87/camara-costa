@@ -49,45 +49,73 @@ function normalizeRole(role: string | null | undefined): RoleKey | null {
   return null;
 }
 
-function filterNavByRole(nav: NavItem[], role: RoleKey | null) {
-  if (!role) return nav; // si aún no cargó, no ocultamos; evitamos menú vacío
+/**
+ * Filtra items del NAV según rol (app_user.role desde /api/auth/me).
+ * Mesa de ayuda se muestra para TODOS los roles.
+ * - admin: ve todo
+ * - comercial: Dashboard, Entidades, Leads, Socios, Agenda, Reportes, Eventos, Mesa de ayuda. NO: Operaciones, IA, Personalización, Configuración
+ * - operador: Dashboard, Leads, Operaciones, Mesa de ayuda, Agenda, Reportes (+ Entidades, Socios, Eventos). NO: IA, Personalización, Configuración
+ * - viewer: Dashboard, Entidades, Leads, Reportes, Mesa de ayuda (lectura). NO: Operaciones, IA, Personalización, Configuración, Socios, Agenda, Eventos
+ */
+function filterNavByRole(role: RoleKey | null, nav: NavItem[]): NavItem[] {
+  if (!role) return nav; // mientras carga: NAV completo para evitar flicker
   if (role === "admin") return nav;
 
-  // Reglas de visibilidad de menú por rol (UI)
   const hiddenByRole: Record<RoleKey, string[]> = {
     admin: [],
-    operador: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia"],
-    comercial: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia", "/admin/operaciones", "/admin/mesa-de-ayuda"],
-    viewer: ["/admin/configuracion", "/admin/personalizacion", "/admin/ia", "/admin/operaciones", "/admin/mesa-de-ayuda"],
+    comercial: [
+      "/admin/operaciones",
+      "/admin/configuracion",
+      "/admin/personalizacion",
+    ],
+    operador: ["/admin/configuracion", "/admin/personalizacion"],
+    viewer: [
+      "/admin/operaciones",
+      "/admin/configuracion",
+      "/admin/personalizacion",
+      "/admin/socios",
+      "/admin/agenda",
+      "/admin/eventos",
+    ],
   };
 
   const hiddenPrefixes = hiddenByRole[role] ?? [];
-  return nav.filter((item) => !hiddenPrefixes.some((p) => item.href === p || item.href.startsWith(p + "/")));
+  return nav.filter(
+    (item) =>
+      !hiddenPrefixes.some(
+        (p) => item.href === p || item.href.startsWith(p + "/")
+      )
+  );
 }
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-
   const [role, setRole] = useState<RoleKey | null>(null);
+  const [roleLoading, setRoleLoading] = useState(true);
 
-  // Cierra el menú cuando cambia la ruta
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
 
-  // Trae rol desde /api/auth/me (ya te devuelve app_user.role)
   useEffect(() => {
     let cancelled = false;
+    setRoleLoading(true);
 
     (async () => {
       try {
         const r = await fetch("/api/auth/me", { cache: "no-store" });
         const json = (await r.json()) as MeResponse;
         const parsed = normalizeRole(json?.app_user?.role ?? null);
-        if (!cancelled) setRole(parsed);
+        if (!cancelled) {
+          setRole(parsed);
+          setRoleLoading(false);
+        }
       } catch {
-        if (!cancelled) setRole(null);
+        if (!cancelled) {
+          setRole(null);
+          setRoleLoading(false);
+        }
       }
     })();
 
@@ -96,7 +124,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     };
   }, []);
 
-  const filteredNav = useMemo(() => filterNavByRole(NAV, role), [role]);
+  const filteredNav = useMemo(() => filterNavByRole(role, NAV), [role]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -110,14 +138,12 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             "transition-transform duration-200"
           )}
         >
-          {/* Logo / Brand */}
           <div className="p-4 border-b border-white/10">
             <div className="rounded-xl overflow-hidden bg-white/5 p-3 flex items-center justify-center">
               <img src="/licencia.png" alt="Licencia Cámara Costa" className="max-h-24 object-contain" />
             </div>
           </div>
 
-          {/* Nav */}
           <nav className="p-3 space-y-1">
             {filteredNav.map((item) => {
               const active = isActive(pathname, item.href);
@@ -142,32 +168,30 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             })}
           </nav>
 
-          {/* Footer / Mini badge */}
           <div className="mt-auto p-4 border-t border-white/10">
-            <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">Cámara Costa • Admin UI</div>
+            {roleLoading ? (
+              <div className="rounded-xl bg-white/5 p-3 text-xs text-white/60">Cargando…</div>
+            ) : (
+              <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">Cámara Costa • Admin UI</div>
+            )}
           </div>
         </aside>
 
-        {/* Overlay mobile */}
         {mobileOpen ? (
           <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileOpen(false)} />
         ) : null}
 
-        {/* Main */}
         <div className="flex-1 md:ml-0">
-          {/* Topbar */}
           <header className="sticky top-0 z-20 bg-white border-b">
             <div className="h-14 px-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button className="md:hidden border rounded-lg px-3 py-2 text-sm" onClick={() => setMobileOpen((v) => !v)}>
                   Menú
                 </button>
-
                 <div className="text-sm text-gray-500">
                   Admin / <span className="text-gray-900 font-medium">Dashboard</span>
                 </div>
               </div>
-
               <div className="flex items-center gap-3">
                 <button className="text-xl leading-none" aria-label="Notificaciones">
                   🔔
@@ -176,8 +200,6 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
               </div>
             </div>
           </header>
-
-          {/* Content */}
           <main className="p-6">{children}</main>
         </div>
       </div>

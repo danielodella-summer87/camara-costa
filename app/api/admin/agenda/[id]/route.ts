@@ -48,6 +48,12 @@ export async function PATCH(
     const nota = body?.nota !== undefined ? (body.nota ? String(body.nota) : null) : undefined;
     const lugar = body?.lugar !== undefined ? (body.lugar ? String(body.lugar) : null) : undefined;
     const comercialId = body?.comercial_id !== undefined ? (body.comercial_id ? String(body.comercial_id) : null) : undefined;
+    const invitedUserIds =
+      body?.invited_user_ids !== undefined
+        ? Array.isArray(body.invited_user_ids)
+          ? (body.invited_user_ids as string[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
+          : []
+        : undefined;
 
     // Validar fecha_limite si viene
     if (fechaLimiteRaw !== undefined) {
@@ -75,6 +81,7 @@ export async function PATCH(
     if (nota !== undefined) updatePayload.nota = nota;
     if (lugar !== undefined) updatePayload.lugar = lugar;
     if (comercialId !== undefined) updatePayload.comercial_id = comercialId;
+    if (invitedUserIds !== undefined) updatePayload.invited_user_ids = invitedUserIds;
 
     if (Object.keys(updatePayload).length === 0) {
       return NextResponse.json(

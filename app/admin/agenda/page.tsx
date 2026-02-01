@@ -21,6 +21,7 @@ type AgendaItem = {
   owner_name: string | null;
   comercial_id?: string | null;
   comerciales?: { id: string; nombre: string } | null;
+  invited_user_ids?: string[] | null;
 };
 
 type AgendaApiResponse = {
@@ -58,12 +59,20 @@ export default function AgendaPage() {
     nota: "",
     lugar: "",
     comercial_id: "",
+    invited_user_ids: [] as string[],
   });
   const [creating, setCreating] = useState<boolean>(false);
   
   // Comerciales para el selector
   const [comerciales, setComerciales] = useState<Array<{ id: string; nombre: string }>>([]);
   const [loadingComerciales, setLoadingComerciales] = useState(false);
+
+  // Usuarios para invitados (app_users)
+  type UserOption = { id: string; nombre: string | null; email: string | null; role: string | null };
+  const [usersList, setUsersList] = useState<UserOption[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
+  const [invitedSearch, setInvitedSearch] = useState<string>("");
 
   // Select con búsqueda
   const [ownersData, setOwnersData] = useState<{ leads: Array<{ id: string; nombre: string }>; socios: Array<{ id: string; nombre: string }> }>({
@@ -161,7 +170,7 @@ export default function AgendaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quick]);
 
-  // Cargar owners y comerciales cuando se abre el modal
+  // Cargar owners, comerciales y usuarios cuando se abre el modal
   useEffect(() => {
     if (showCreateModal) {
       async function loadOwners() {
@@ -177,7 +186,7 @@ export default function AgendaPage() {
           console.error("Error cargando owners:", e);
         }
       }
-      
+
       async function loadComerciales() {
         setLoadingComerciales(true);
         try {
@@ -195,11 +204,53 @@ export default function AgendaPage() {
           setLoadingComerciales(false);
         }
       }
-      
+
+      async function loadUsersAndAuth() {
+        setLoadingUsers(true);
+        try {
+          const [authRes, usersRes] = await Promise.all([
+            fetch("/api/auth/me", { cache: "no-store" }),
+            fetch("/api/admin/users", { cache: "no-store" }),
+          ]);
+          const authJson = (await authRes.json()) as { app_user?: { id?: string } };
+          const appUserId = authJson?.app_user?.id ?? null;
+          setCurrentAppUserId(appUserId);
+          // GET /api/admin/users devuelve usuarios activos (id, nombre, email, role). Fallback: array vacío si el endpoint no existe aún.
+          let list: UserOption[] = [];
+          try {
+            const usersJson = (await usersRes.json()) as { data?: UserOption[] };
+            if (usersRes.ok && Array.isArray(usersJson?.data)) {
+              list = usersJson.data.map((u) => ({
+                id: u.id,
+                nombre: u.nombre ?? null,
+                email: u.email ?? null,
+                role: u.role ?? null,
+              }));
+            }
+          } catch {
+            // TODO: fallback cuando backend/migración no esté listo; conectar GET /api/admin/users en paso 2
+            list = [];
+          }
+          setUsersList(list);
+          // Nueva actividad: si invited_user_ids vacío → default [usuario logueado]. Editar: si vacío → [usuario logueado].
+          setCreateForm((prev) => {
+            const current = prev.invited_user_ids ?? [];
+            if (current.length > 0) return prev;
+            const next = appUserId ? [appUserId] : [];
+            return { ...prev, invited_user_ids: next };
+          });
+        } catch (e) {
+          console.error("Error cargando usuarios:", e);
+        } finally {
+          setLoadingUsers(false);
+        }
+      }
+
       loadOwners();
       loadComerciales();
+      loadUsersAndAuth();
     }
-  }, [showCreateModal]);
+  }, [showCreateModal, editingItemId]);
 
   // Función para abrir modal en modo edición
   async function handleEditActivity(item: AgendaItem) {
@@ -214,6 +265,7 @@ export default function AgendaPage() {
       nota: item.nota || "",
       lugar: item.lugar || "",
       comercial_id: item.comercial_id || "",
+      invited_user_ids: Array.isArray(item.invited_user_ids) ? [...item.invited_user_ids] : [],
     });
 
     // Cargar owners y comerciales si no están cargados
@@ -286,9 +338,11 @@ export default function AgendaPage() {
       nota: "",
       lugar: "",
       comercial_id: "",
+      invited_user_ids: [],
     });
     setOwnerSearch("");
     setShowOwnerDropdown(false);
+    setInvitedSearch("");
   }
 
   // Cerrar dropdown al hacer click fuera
@@ -352,6 +406,17 @@ export default function AgendaPage() {
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [agendaItems]);
+
+  // Lista de usuarios filtrada por búsqueda (nombre/email) para el bloque Invitados
+  const usersFilteredBySearch = useMemo(() => {
+    const qq = invitedSearch.trim().toLowerCase();
+    if (!qq) return usersList;
+    return usersList.filter((u) => {
+      const nombre = (u.nombre ?? "").toLowerCase();
+      const email = (u.email ?? "").toLowerCase();
+      return nombre.includes(qq) || email.includes(qq);
+    });
+  }, [usersList, invitedSearch]);
 
   const filteredItems = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -478,6 +543,12 @@ export default function AgendaPage() {
 
     setCreating(true);
     try {
+      // invited_user_ids: siempre array, nunca null; si queda vacío y hay usuario logueado, forzar [currentAppUserId]
+      let invitedIds: string[] = Array.isArray(createForm.invited_user_ids) ? createForm.invited_user_ids : [];
+      if (currentAppUserId && invitedIds.length === 0) {
+        invitedIds = [currentAppUserId];
+      }
+
       if (editingItemId) {
         // Modo edición: PATCH
         const payload: {
@@ -487,6 +558,7 @@ export default function AgendaPage() {
           nota: string | null;
           lugar: string | null;
           comercial_id: string | null;
+          invited_user_ids: string[];
         } = {
           fecha_limite: createForm.fecha_limite,
           hora: createForm.hora || "00:00",
@@ -494,6 +566,7 @@ export default function AgendaPage() {
           nota: createForm.nota?.trim() || null,
           lugar: createForm.lugar?.trim() || null,
           comercial_id: createForm.comercial_id?.trim() || null,
+          invited_user_ids: invitedIds,
         };
 
         const res = await fetch(`/api/admin/agenda/${editingItemId}`, {
@@ -522,6 +595,7 @@ export default function AgendaPage() {
           nota: string | null;
           lugar: string | null;
           comercial_id: string | null;
+          invited_user_ids: string[];
           lead_id?: string;
           socio_id?: string;
         } = {
@@ -532,6 +606,7 @@ export default function AgendaPage() {
           nota: createForm.nota?.trim() || null,
           lugar: createForm.lugar?.trim() || null,
           comercial_id: createForm.comercial_id?.trim() || null,
+          invited_user_ids: invitedIds,
         };
 
         if (createForm.owner_type === "lead") {
@@ -800,6 +875,90 @@ export default function AgendaPage() {
                 </select>
                 {loadingComerciales && (
                   <p className="mt-1 text-xs text-slate-500">Cargando comerciales...</p>
+                )}
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Invitados</label>
+                <p className="mt-0.5 text-xs text-slate-500">Seleccioná quién participa en esta actividad.</p>
+                {loadingUsers ? (
+                  <p className="mt-2 text-xs text-slate-500">Cargando usuarios...</p>
+                ) : (
+                  <>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Seleccionados: {createForm.invited_user_ids?.length ?? 0}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCreateForm({ ...createForm, invited_user_ids: currentAppUserId ? [currentAppUserId] : [] })}
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Seleccionarme solo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCreateForm({
+                            ...createForm,
+                            invited_user_ids: usersList.map((u) => u.id),
+                          })
+                        }
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Seleccionar todos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCreateForm({ ...createForm, invited_user_ids: [] })}
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Limpiar
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={invitedSearch}
+                      onChange={(e) => setInvitedSearch(e.target.value)}
+                      placeholder="Buscar por nombre o email..."
+                      className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                    />
+                    <div className="mt-2 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/50 p-3 space-y-2">
+                      {usersFilteredBySearch.map((u) => {
+                        const checked = (createForm.invited_user_ids ?? []).includes(u.id);
+                        return (
+                          <label
+                            key={u.id}
+                            className="flex items-center gap-2 cursor-pointer hover:bg-white/60 rounded-lg px-2 py-1.5"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                const ids = createForm.invited_user_ids ?? [];
+                                const next = checked
+                                  ? ids.filter((id) => id !== u.id)
+                                  : [...ids, u.id];
+                                setCreateForm({ ...createForm, invited_user_ids: next });
+                              }}
+                              className="rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+                            />
+                            <span className="text-sm text-slate-800">
+                              {u.nombre || "—"} {u.role ? `(${u.role})` : ""} {u.email ? `— ${u.email}` : ""}
+                            </span>
+                          </label>
+                        );
+                      })}
+                      {usersFilteredBySearch.length === 0 && !loadingUsers && (
+                        <p className="text-xs text-slate-500">
+                          {usersList.length === 0 ? "No hay usuarios activos." : "No hay coincidencias."}
+                        </p>
+                      )}
+                    </div>
+                    {currentAppUserId && !usersList.some((u) => u.id === currentAppUserId) && (createForm.invited_user_ids ?? []).includes(currentAppUserId) && (
+                      <p className="mt-1 text-xs text-slate-500">Incluido: tú (no aparece en la lista)</p>
+                    )}
+                  </>
                 )}
               </div>
             </div>

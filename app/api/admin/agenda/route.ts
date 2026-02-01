@@ -27,6 +27,7 @@ type SocioAccionRow = {
   socio_id: string | null;
   comercial_id: string | null;
   comerciales?: { id: string; nombre: string } | null;
+  invited_user_ids?: string[] | null;
 };
 
 type AgendaItem = {
@@ -49,6 +50,7 @@ type AgendaItem = {
   owner_phone?: string | null;
   owner_whatsapp?: string | null;
   owner_meet_url?: string | null;
+  invited_user_ids?: string[] | null;
 };
 
 type RowObj = Record<string, unknown>;
@@ -124,7 +126,7 @@ export async function GET(req: NextRequest) {
     let query = supabase
       .from("socio_acciones")
       .select(
-        "id,tipo,nota,fecha_limite,hora,lugar,realizada_at,created_at,lead_id,socio_id,comercial_id,comerciales:comercial_id(id,nombre)"
+        "id,tipo,nota,fecha_limite,hora,lugar,realizada_at,created_at,lead_id,socio_id,comercial_id,comerciales:comercial_id(id,nombre),invited_user_ids"
       )
       .is("realizada_at", null)
       .not("fecha_limite", "is", null);
@@ -258,6 +260,7 @@ export async function GET(req: NextRequest) {
         owner_phone,
         owner_whatsapp,
         owner_meet_url,
+        invited_user_ids: Array.isArray(a.invited_user_ids) ? a.invited_user_ids : (a.invited_user_ids ? [a.invited_user_ids] : []),
       });
     }
 
@@ -301,6 +304,9 @@ export async function POST(req: NextRequest) {
     const nota = body?.nota ? String(body.nota) : null;
     const lugar = body?.lugar ? String(body.lugar) : null;
     const comercialId = (body?.comercial_id ?? null) as string | null;
+    const invitedUserIds = Array.isArray(body?.invited_user_ids)
+      ? (body.invited_user_ids as string[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
+      : [];
 
     if (!tipo) throw new Error("Falta tipo");
     if (!fechaLimiteRaw) throw new Error("Falta fecha_limite");
@@ -335,6 +341,7 @@ export async function POST(req: NextRequest) {
       comercial_id: comercialId,
       lead_id: ownerType === "lead" ? leadId : null,
       socio_id: ownerType === "socio" ? socioId : null,
+      invited_user_ids: invitedUserIds.length > 0 ? invitedUserIds : [],
     };
 
     const { data, error } = await supabase
