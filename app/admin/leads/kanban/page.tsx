@@ -62,6 +62,7 @@ type PipelineRow = {
   color: string | null;
   created_at?: string;
   updated_at?: string;
+  orden?: number | null;
 };
 
 type ApiResp<T> = {
@@ -174,6 +175,22 @@ export default function LeadsKanbanPage() {
   // ✅ anti-loop: evita setState repetido en preview move durante drag
   const lastPreviewMoveRef = useRef<{ cardId: string; toCol: string } | null>(null);
 
+  // ✅ Scroll horizontal duplicado (top + body)
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+
+  // ✅ ancho estimado del tablero (columna fija + gap)
+  const COL_W = 320;
+  const COL_GAP = 16;
+  const kanbanTotalWidth = useMemo(
+    () =>
+      Math.max(
+        0,
+        pipelines.length * COL_W + Math.max(0, pipelines.length - 1) * COL_GAP
+      ),
+    [pipelines.length]
+  );
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -203,7 +220,12 @@ export default function LeadsKanbanPage() {
       const pData = Array.isArray(pJson?.data) ? pJson.data : [];
       const lData = Array.isArray(lJson?.data) ? lJson.data : [];
 
-      pData.sort((a, b) => (a.posicion ?? 0) - (b.posicion ?? 0));
+      pData.sort((a, b) => {
+        const ordenA = a.orden ?? 999999;
+        const ordenB = b.orden ?? 999999;
+        if (ordenA !== ordenB) return ordenA - ordenB;
+        return (a.created_at ?? "").localeCompare(b.created_at ?? "");
+      });
 
       setPipelines(pData);
       setLeads(lData);
@@ -262,6 +284,40 @@ export default function LeadsKanbanPage() {
 
   useEffect(() => {
     fetchAll();
+  }, []);
+
+  // Sincronizar scroll horizontal: barra superior ↔ cuerpo
+  useEffect(() => {
+    const top = topScrollRef.current;
+    const body = bodyScrollRef.current;
+    if (!top || !body) return;
+
+    let syncing = false;
+
+    const onTop = () => {
+      if (syncing) return;
+      syncing = true;
+      body.scrollLeft = top.scrollLeft;
+      syncing = false;
+    };
+
+    const onBody = () => {
+      if (syncing) return;
+      syncing = true;
+      top.scrollLeft = body.scrollLeft;
+      syncing = false;
+    };
+
+    top.addEventListener("scroll", onTop, { passive: true });
+    body.addEventListener("scroll", onBody, { passive: true });
+
+    // arrancan alineados
+    top.scrollLeft = body.scrollLeft;
+
+    return () => {
+      top.removeEventListener("scroll", onTop);
+      body.removeEventListener("scroll", onBody);
+    };
   }, []);
 
   // Limpiar "Guardado" después de 2s
@@ -731,7 +787,19 @@ export default function LeadsKanbanPage() {
 
         <div className="mt-5 rounded-2xl border bg-white">
           <div className="p-4">
+            {/* ✅ Scroll horizontal superior (duplicado y visible) */}
+            <div className="sticky top-0 z-30 bg-white">
+              <div
+                ref={topScrollRef}
+                className="overflow-x-scroll overflow-y-hidden h-10 border-b bg-slate-50"
+                style={{ scrollbarGutter: "stable" as React.CSSProperties["scrollbarGutter"] }}
+              >
+                {/* Spacer con el ancho real del tablero */}
+                <div style={{ width: kanbanTotalWidth, height: 1 }} />
+              </div>
+            </div>
             <div
+              ref={bodyScrollRef}
               className="max-h-[70vh] overflow-auto pb-4"
               style={{ scrollbarGutter: "stable both-edges" as any }}
             >

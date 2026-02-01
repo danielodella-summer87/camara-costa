@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 type Pipeline = {
   id: string;
   nombre: string;
+  // legacy:
   posicion: number;
+  // nuevo:
+  orden?: number;
   tipo: "normal" | "ganado" | "perdido";
   color: string | null;
   created_at?: string;
@@ -53,7 +56,7 @@ export default function PipelinesTab() {
       if (!res.ok) throw new Error(json?.error ?? "Error cargando etapas");
 
       const list = Array.isArray(json?.data) ? json.data : [];
-      list.sort((a, b) => a.posicion - b.posicion);
+      list.sort((a, b) => (a.orden ?? a.posicion) - (b.orden ?? b.posicion));
       setRows(list);
     } catch (e: any) {
       setError(e?.message ?? "Error cargando etapas");
@@ -181,21 +184,19 @@ export default function PipelinesTab() {
     setMutatingId(id);
 
     try {
-      // Intercambiar posiciones
-      const currentPos = current.posicion;
-      const targetPos = target.posicion;
+      const currentOrder = current.orden ?? current.posicion;
+      const targetOrder = target.orden ?? target.posicion;
 
-      // Actualizar ambas etapas
       await Promise.all([
         fetch(`/api/admin/leads/pipelines/${id}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ posicion: targetPos }),
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+          body: JSON.stringify({ orden: targetOrder }),
         }),
         fetch(`/api/admin/leads/pipelines/${target.id}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ posicion: currentPos }),
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+          body: JSON.stringify({ orden: currentOrder }),
         }),
       ]);
 
@@ -253,7 +254,8 @@ export default function PipelinesTab() {
 
         {/* listado */}
         <div className="mt-5 overflow-hidden rounded-2xl border">
-          <div className="grid grid-cols-[1fr_120px_100px_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+          <div className="grid grid-cols-[70px_1fr_120px_100px_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+            <div>#</div>
             <div>Nombre</div>
             <div>Tipo</div>
             <div>Color</div>
@@ -272,7 +274,37 @@ export default function PipelinesTab() {
                 const isSystem = norm(p.nombre) === "nuevo" || norm(p.nombre) === "ganado" || norm(p.nombre) === "perdido";
 
                 return (
-                  <div key={p.id} className="grid grid-cols-[1fr_120px_100px_200px] items-center px-4 py-3">
+                  <div key={p.id} className="grid grid-cols-[70px_1fr_120px_100px_200px] items-center px-4 py-3">
+                    {/* Orden + mover */}
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-8 text-right tabular-nums text-sm text-slate-700"
+                        title={`orden=${p.orden ?? "null"} posicion=${p.posicion}`}
+                      >
+                        {index + 1}
+                      </span>
+
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          className="rounded-md border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
+                          disabled={index === 0 || busy}
+                          onClick={() => movePipeline(p.id, "up")}
+                          title="Subir"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="mt-1 rounded-md border px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
+                          disabled={index === rows.length - 1 || busy}
+                          onClick={() => movePipeline(p.id, "down")}
+                          title="Bajar"
+                        >
+                          ↓
+                        </button>
+                      </div>
+                    </div>
                     {/* Nombre */}
                     <div>
                       {!editing ? (

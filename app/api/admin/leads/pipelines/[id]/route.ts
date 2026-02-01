@@ -13,7 +13,7 @@ function supabaseAdmin() {
 }
 
 const TABLE = "leads_pipelines";
-const SELECT = "id,created_at,updated_at,nombre,posicion,tipo,color";
+const SELECT = "id,created_at,updated_at,nombre,posicion,tipo,color,orden";
 
 type PipelineRow = {
   id: string;
@@ -23,6 +23,7 @@ type PipelineRow = {
   posicion: number;
   tipo: "normal" | "ganado" | "perdido";
   color: string | null;
+  orden?: number | null;
 };
 
 type ApiResp<T> = { data?: T | null; error?: string | null };
@@ -90,6 +91,7 @@ export async function GET(_req: NextRequest, ctx: { params?: { id?: string } | P
 type UpdateInput = {
   nombre?: string | null;
   posicion?: number | null;
+  orden?: number | null;
   tipo?: "normal" | "ganado" | "perdido" | null;
   color?: string | null;
 };
@@ -179,6 +181,11 @@ export async function PATCH(req: NextRequest, ctx: { params?: { id?: string } | 
     // Actualizar posicion si viene
     if (body.posicion !== undefined && body.posicion !== null) {
       update.posicion = safeInt(body.posicion, 0);
+    }
+
+    // Actualizar orden si viene (nuevo; compat con posicion)
+    if (body.orden !== undefined && body.orden !== null) {
+      update.orden = safeInt(body.orden, 0);
     }
 
     // Actualizar color si viene

@@ -145,10 +145,13 @@ export default function TicketDetailPage() {
     setError(null);
 
     try {
+      const { data: authData } = await supabase.auth.getUser();
+      const user_email = authData?.user?.email ?? null;
+
       const res = await fetch(`/api/admin/helpdesk/tickets/${id}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        body: JSON.stringify({ body, is_internal: internal }),
+        body: JSON.stringify({ body, is_internal: internal, user_email }),
       });
 
       const json = await res.json();
@@ -213,24 +216,41 @@ export default function TicketDetailPage() {
   }
 
   async function applyAdminChanges() {
-    if (!ticket) return;
+    if (!id) {
+      setError("ID inválido");
+      return;
+    }
 
     setBusy(true);
     setError(null);
 
     try {
-      const res = await fetch(`/api/admin/helpdesk/tickets/${ticket.id}`, {
+      const payload: Record<string, any> = {};
+
+      if (editStatus) payload.status = editStatus;
+      if (editPriority) payload.priority = editPriority;
+      if (editType) payload.type = editType;
+
+      if (Object.keys(payload).length === 0) {
+        setError("Nada que actualizar");
+        return;
+      }
+
+      const res = await fetch(`/api/admin/helpdesk/tickets/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        body: JSON.stringify({ status: editStatus, priority: editPriority, type: editType }),
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: JSON.stringify(payload),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Error actualizando (solo admin)");
+      if (!res.ok) throw new Error(json?.error ?? "Error actualizando ticket");
 
       await fetchOne();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error");
+    } catch (e: any) {
+      setError(e?.message ?? "Error");
     } finally {
       setBusy(false);
     }
@@ -397,7 +417,7 @@ export default function TicketDetailPage() {
                   <button
                     type="button"
                     onClick={applyAdminChanges}
-                    disabled={busy}
+                    disabled={busy || !ticket}
                     className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                   >
                     {busy ? "Actualizando…" : "Aplicar cambios"}

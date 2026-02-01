@@ -229,12 +229,12 @@ export async function PATCH(req: Request) {
     const supabase = supabaseAdmin();
     const now = new Date().toISOString();
 
-    // actualizamos posiciones en paralelo
+    // actualizamos posiciones y orden en paralelo
     const updates = await Promise.all(
       uniq.map(async (id, idx) => {
         const { data, error } = await supabase
           .from(TABLE)
-          .update({ posicion: idx, updated_at: now })
+          .update({ posicion: idx, orden: idx, updated_at: now })
           .eq("id", id)
           .select("id,posicion,updated_at")
           .maybeSingle();
