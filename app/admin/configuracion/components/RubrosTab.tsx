@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Rubro = {
   id: string;
@@ -17,6 +18,7 @@ function norm(s: string) {
 }
 
 export default function RubrosTab() {
+  const { hasPermission } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [mutatingId, setMutatingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,25 +180,27 @@ export default function RubrosTab() {
         </div>
 
         {/* crear */}
-        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
-          <div className="text-xs font-semibold text-slate-600">Nuevo rubro</div>
-          <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center">
-            <input
-              value={newNombre}
-              onChange={(e) => setNewNombre(e.target.value)}
-              placeholder="Ej: Construcción"
-              className="w-full rounded-xl border px-4 py-2 text-sm"
-            />
-            <button
-              type="button"
-              onClick={createRubro}
-              disabled={!newNombre.trim() || mutatingId === "new"}
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-white disabled:opacity-50"
-            >
-              {mutatingId === "new" ? "…" : "Crear"}
-            </button>
+        {hasPermission("admin") && (
+          <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+            <div className="text-xs font-semibold text-slate-600">Nuevo rubro</div>
+            <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-center">
+              <input
+                value={newNombre}
+                onChange={(e) => setNewNombre(e.target.value)}
+                placeholder="Ej: Construcción"
+                className="w-full rounded-xl border px-4 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={createRubro}
+                disabled={!newNombre.trim() || mutatingId === "new"}
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-white disabled:opacity-50"
+              >
+                {mutatingId === "new" ? "…" : "Crear"}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* listado */}
         <div className="mt-5 overflow-hidden rounded-2xl border">
@@ -232,27 +236,31 @@ export default function RubrosTab() {
                     <div className="flex items-center justify-end gap-2">
                       {!editing ? (
                         <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingId(r.id);
-                              setEditingNombre(r.nombre ?? "");
-                            }}
-                            className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                            disabled={busy || loading}
-                          >
-                            Editar
-                          </button>
+                          {hasPermission("admin") && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingId(r.id);
+                                setEditingNombre(r.nombre ?? "");
+                              }}
+                              className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
+                              disabled={busy || loading}
+                            >
+                              Editar
+                            </button>
+                          )}
 
-                          <button
-                            type="button"
-                            onClick={() => deleteRubro(r.id)}
-                            className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-                            disabled={busy || loading}
-                            title="Eliminar rubro"
-                          >
-                            Eliminar
-                          </button>
+                          {hasPermission("admin") && (
+                            <button
+                              type="button"
+                              onClick={() => deleteRubro(r.id)}
+                              className="rounded-xl border px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
+                              disabled={busy || loading}
+                              title="Eliminar rubro"
+                            >
+                              Eliminar
+                            </button>
+                          )}
                         </>
                       ) : (
                         <>

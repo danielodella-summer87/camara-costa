@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createServerSupabase } from "@/lib/supabase/server";
+import InviteForm from "./InviteForm";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +107,11 @@ export default async function ConfigUsuariosPage() {
               Ver Roles
             </Link>
           </div>
+        </div>
+
+        <div className="mt-4">
+          <div className="text-sm font-semibold text-gray-700 mb-2">Invitar usuario (allowlist)</div>
+          <InviteForm />
         </div>
       </div>
 

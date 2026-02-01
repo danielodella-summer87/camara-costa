@@ -1,6 +1,6 @@
 import "server-only";
-import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+import { createServerSupabase } from "@/lib/supabase/server";
 import { extractPermissionKeys } from "./extractPermissionKeys";
 
 function supabaseAdmin() {
@@ -11,51 +11,38 @@ function supabaseAdmin() {
 }
 
 /**
- * Obtiene el userId activo desde la cookie x-user-id o fallback al primer usuario activo.
- * Para usar en Server Components (layout, page, etc.).
+ * Obtiene el auth_user_id de la sesión actual (para usar en Server Components).
  */
 export async function getActiveUserId(): Promise<string | null> {
-  const sb = supabaseAdmin();
-  if (!sb) return null;
-
-  const cookieStore = await cookies();
-  const userId = cookieStore.get("x-user-id")?.value ?? null;
-  if (userId) return userId;
-
-  const { data: first } = await sb
-    .from("app_users")
-    .select("id")
-    .eq("is_active", true)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  return first?.id ?? null;
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id ?? null;
 }
 
 /**
- * Devuelve la lista de permission keys (strings) del usuario activo.
- * Para usar en Server Components. Retorna [] si no hay usuario o no hay permisos.
+ * Devuelve la lista de permission keys (strings) del usuario de la sesión.
+ * Lookup por app_users.auth_user_id. Retorna [] si no hay sesión o no hay permisos.
  */
 export async function getActiveUserPermissions(): Promise<string[]> {
+  const supabase = await createServerSupabase();
+  const { data: { user: authUser } } = await supabase.auth.getUser();
+  if (!authUser) return [];
+
   const sb = supabaseAdmin();
   if (!sb) return [];
 
-  const userId = await getActiveUserId();
-  if (!userId) return [];
-
-  const { data: user, error: userErr } = await sb
+  const { data: appUser, error: userErr } = await sb
     .from("app_users")
-    .select("id, role_id, is_active")
-    .eq("id", userId)
+    .select("role_id, is_active")
+    .eq("auth_user_id", authUser.id)
     .maybeSingle();
 
-  if (userErr || !user || user.is_active === false || !user.role_id) return [];
+  if (userErr || !appUser || appUser.is_active === false || !appUser.role_id) return [];
 
   const { data: perms, error: permsErr } = await sb
     .from("role_permissions")
     .select("permission_id, permissions:permission_id(key)")
-    .eq("role_id", user.role_id);
+    .eq("role_id", appUser.role_id);
 
   if (permsErr) return [];
 

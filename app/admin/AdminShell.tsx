@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { usePathname } from "next/navigation";
+import UserMenu from "@/app/admin/components/UserMenu";
 
 type NavItem = { label: string; href: string };
 
@@ -33,24 +33,13 @@ function isActive(pathname: string | null, href: string) {
 }
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const pathname = usePathname();
-  const supabase = useMemo(() => createClient(), []);
-
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Cierra el menú cuando cambia la ruta (ej. tocás "Leads" → navega → se cierra solo)
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
-
-  async function onLogout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-    router.refresh();
-  }
-
-  const userLabel = "Usuario"; // luego lo conectamos a app_users/auth
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -140,18 +129,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                 <button className="text-xl leading-none" aria-label="Notificaciones">
                   🔔
                 </button>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-700">
-                    U
-                  </div>
-                  <div className="text-sm text-gray-700">{userLabel}</div>
-                </div>
-                <button
-                  className="border rounded-lg px-3 py-2 text-sm"
-                  onClick={onLogout}
-                >
-                  Cerrar sesión
-                </button>
+                <UserMenu />
               </div>
             </div>
           </header>

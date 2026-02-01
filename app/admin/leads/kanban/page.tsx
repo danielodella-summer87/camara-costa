@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 import {
   DndContext,
@@ -154,6 +155,7 @@ const BASE_PIPELINES = [
 ];
 
 export default function LeadsKanbanPage() {
+  const { hasPermission } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -737,12 +739,14 @@ export default function LeadsKanbanPage() {
               Importar
             </Link>
 
-            <Link
-              href="/admin/leads/nuevo"
-              className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
-            >
-              Nuevo lead
-            </Link>
+            {hasPermission("leads.write") && (
+              <Link
+                href="/admin/leads/nuevo"
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+              >
+                Nuevo lead
+              </Link>
+            )}
 
             <button
               type="button"

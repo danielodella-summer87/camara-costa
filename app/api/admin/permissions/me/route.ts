@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+import { createServerSupabase } from "@/lib/supabase/server";
 import { extractPermissionKeys } from "@/lib/rbac/extractPermissionKeys";
+import { normalizeRole } from "@/app/lib/rbac";
 
 export const dynamic = "force-dynamic";
 
@@ -14,60 +15,66 @@ function supabaseAdmin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function resolveActiveUserId(sb: ReturnType<typeof supabaseAdmin>) {
-  // 1) Cookie de usuario activo
-  const cookieStore = await cookies();
-  const cookieUserId = cookieStore.get("x-user-id")?.value ?? null;
-  if (cookieUserId) return cookieUserId;
-
-  // 2) Fallback: primer usuario activo
-  const { data: admin } = await sb
-    .from("app_users")
-    .select("id")
-    .eq("is_active", true)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  return admin?.id ?? null;
-}
-
 /**
  * GET /api/admin/permissions/me
- * Devuelve lista de permission keys (strings) para el usuario activo
+ * Devuelve rol y permission keys del usuario de la sesión (app_users por auth_user_id).
  */
 export async function GET(req: NextRequest) {
   try {
-    const sb = supabaseAdmin();
+    const supabase = await createServerSupabase();
+    const { data: { user: authUser } } = await supabase.auth.getUser();
 
-    const userId = await resolveActiveUserId(sb);
-    if (!userId) {
-      return NextResponse.json({ data: [], error: null } satisfies ApiResp<string[]>, { status: 200 });
+    if (!authUser) {
+      return NextResponse.json(
+        { user: { role: null }, data: [], error: null },
+        { status: 200 }
+      );
     }
 
-    // Traer role_id del usuario
-    const { data: user, error: userErr } = await sb
+    const sb = supabaseAdmin();
+    const { data: appUser, error: userErr } = await sb
       .from("app_users")
-      .select("id, role_id, is_active")
-      .eq("id", userId)
+      .select("roles:role_id(name), is_active, role_id")
+      .eq("auth_user_id", authUser.id)
       .maybeSingle();
 
     if (userErr) throw userErr;
-    if (!user || user.is_active === false || !user.role_id) {
-      return NextResponse.json({ data: [], error: null } satisfies ApiResp<string[]>, { status: 200 });
+    if (!appUser || appUser.is_active === false) {
+      return NextResponse.json(
+        { user: { role: null }, data: [], error: null },
+        { status: 200 }
+      );
     }
 
-    // role_permissions.permission_id es UUID => hay que resolver contra permissions.key
+    const rolesRel = (appUser as { roles?: { name?: string } | { name?: string }[] }).roles;
+    const roleRaw =
+      rolesRel == null
+        ? null
+        : Array.isArray(rolesRel)
+          ? rolesRel[0]?.name ?? null
+          : (rolesRel as { name?: string })?.name ?? null;
+    const roleName = normalizeRole(roleRaw);
+
+    if (!appUser.role_id) {
+      return NextResponse.json(
+        { user: { role: roleName }, data: [], error: null },
+        { status: 200 }
+      );
+    }
+
     const { data: perms, error: permsErr } = await sb
       .from("role_permissions")
       .select("permission_id, permissions:permission_id(id,key)")
-      .eq("role_id", user.role_id);
+      .eq("role_id", appUser.role_id);
 
     if (permsErr) throw permsErr;
 
     const keys = extractPermissionKeys(perms);
 
-    return NextResponse.json({ data: keys, error: null } satisfies ApiResp<string[]>, { status: 200 });
+    return NextResponse.json(
+      { user: { role: roleName }, data: keys, error: null },
+      { status: 200 }
+    );
   } catch (e: any) {
     return NextResponse.json(
       { data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>,

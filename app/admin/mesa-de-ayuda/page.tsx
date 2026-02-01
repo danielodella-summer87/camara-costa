@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
+import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Ticket = {
   id: string;
@@ -20,6 +21,7 @@ type Ticket = {
 };
 
 export default function MesaDeAyudaPage() {
+  const { hasPermission } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<Ticket[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -118,12 +120,14 @@ export default function MesaDeAyudaPage() {
             </select>
           </div>
 
-          <Link
-            href="/admin/mesa-de-ayuda/create"
-            className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
-          >
-            + Nuevo ticket
-          </Link>
+          {hasPermission("helpdesk.write") && (
+            <Link
+              href="/admin/mesa-de-ayuda/create"
+              className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              + Nuevo ticket
+            </Link>
+          )}
         </div>
 
         <div className="overflow-hidden rounded-2xl border bg-white">
