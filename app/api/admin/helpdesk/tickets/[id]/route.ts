@@ -3,93 +3,104 @@ import { createServerSupabase } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+const TABLE = "helpdesk_tickets";
+
+function norm(s: string | null | undefined) {
+  return (s ?? "").trim();
 }
 
-async function getSessionUser(supabase: Awaited<ReturnType<typeof createServerSupabase>>) {
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data?.user) return null;
-  return data.user;
+function isUUID(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-async function isAdmin(supabase: Awaited<ReturnType<typeof createServerSupabase>>, userId: string) {
-  const { data } = await supabase
-    .from("app_users")
-    .select("is_admin")
-    .eq("id", userId)
-    .maybeSingle();
-  return !!data?.is_admin;
+type Params = { params?: { id?: string } | Promise<{ id?: string }> };
+
+async function getId(ctx: Params): Promise<string | null> {
+  const p = ctx.params instanceof Promise ? await ctx.params : ctx.params ?? {};
+  return p.id ?? null;
 }
 
-type RouteContext = { params?: { id?: string } | Promise<{ id?: string }> };
-
-export async function GET(_req: Request, ctx: RouteContext) {
+export async function GET(req: Request, ctx: Params) {
   const supabase = await createServerSupabase();
-  const user = await getSessionUser(supabase);
-  if (!user) return jsonError("No autenticado", 401);
+  const id = await getId(ctx);
 
-  const params = await (ctx.params instanceof Promise ? ctx.params : Promise.resolve(ctx.params ?? {}));
-  const id = params.id;
-  if (!id) return jsonError("id requerido", 400);
+  if (!id || !isUUID(id)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
 
-  const admin = await isAdmin(supabase, user.id);
-
-  let tq = supabase.from("helpdesk_tickets").select("*").eq("id", id);
-  if (!admin) tq = tq.eq("created_by", user.id);
-
-  const { data: ticket, error: tErr } = await tq.single();
-  if (tErr) return jsonError(tErr.message, 404);
-
-  const { data: comments } = await supabase
-    .from("helpdesk_comments")
+  // ✅ maybeSingle para evitar "Cannot coerce..."
+  const { data: ticket, error } = await supabase
+    .from(TABLE)
     .select("*")
-    .eq("ticket_id", id)
-    .order("created_at", { ascending: true });
-
-  const { data: attachments } = await supabase
-    .from("helpdesk_attachments")
-    .select("*")
-    .eq("ticket_id", id)
-    .order("created_at", { ascending: true });
-
-  return NextResponse.json({
-    data: { ticket, comments: comments ?? [], attachments: attachments ?? [] },
-  });
-}
-
-export async function PATCH(req: Request, ctx: RouteContext) {
-  const supabase = await createServerSupabase();
-  const user = await getSessionUser(supabase);
-  if (!user) return jsonError("No autenticado", 401);
-
-  const params = await (ctx.params instanceof Promise ? ctx.params : Promise.resolve(ctx.params ?? {}));
-  const id = params.id;
-  if (!id) return jsonError("id requerido", 400);
-
-  const admin = await isAdmin(supabase, user.id);
-  if (!admin) return jsonError("Solo admin puede actualizar tickets", 403);
-
-  const body = await req.json().catch(() => null);
-  const payload: Record<string, unknown> = {};
-
-  if (typeof body?.status === "string") payload.status = body.status;
-  if (typeof body?.priority === "string") payload.priority = body.priority;
-  if (typeof body?.type === "string") payload.type = body.type;
-  if (typeof body?.admin_assignee === "string" || body?.admin_assignee === null)
-    payload.admin_assignee = body.admin_assignee;
-
-  if (payload.status === "closed") payload.closed_at = new Date().toISOString();
-  if (payload.status && payload.status !== "closed") payload.closed_at = null;
-
-  const { data, error } = await supabase
-    .from("helpdesk_tickets")
-    .update(payload)
     .eq("id", id)
-    .select("*")
-    .single();
+    .maybeSingle();
 
-  if (error) return jsonError(error.message, 500);
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!ticket) return NextResponse.json({ data: null }, { status: 404 });
 
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: ticket });
+}
+
+export async function PATCH(req: Request, ctx: Params) {
+  const supabase = await createServerSupabase();
+  const id = await getId(ctx);
+
+  if (!id || !isUUID(id)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
+
+  try {
+    const body = await req.json();
+
+    const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
+    const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
+    const tipo = norm(body?.tipo);
+    const prioridad = norm(body?.prioridad);
+    const estado = norm(body?.estado);
+
+    // Mapeo a columnas del schema (title, description, type, priority, status)
+    const typeMap: Record<string, string> = { mejora: "improvement", error: "bug", sugerencia: "suggestion" };
+    const priorityMap: Record<string, string> = { baja: "low", media: "medium", alta: "high", critica: "critical" };
+
+    const payload: Record<string, string | null> = {};
+    if (titulo) payload.title = titulo;
+    if (descripcion) payload.description = descripcion;
+    if (tipo) payload.type = typeMap[tipo] ?? tipo;
+    if (prioridad) payload.priority = priorityMap[prioridad] ?? prioridad;
+    if (estado) payload.status = estado === "open" ? "new" : estado;
+
+    if (Object.keys(payload).length === 0) {
+      return NextResponse.json({ error: "Nada que actualizar" }, { status: 400 });
+    }
+
+    const { data, error } = await supabase
+      .from(TABLE)
+      .update(payload)
+      .eq("id", id)
+      .select("*"); // ✅ sin single
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return NextResponse.json({ data: null }, { status: 404 });
+
+    return NextResponse.json({ data: row });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Error actualizando ticket";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
+
+export async function DELETE(req: Request, ctx: Params) {
+  const supabase = await createServerSupabase();
+  const id = await getId(ctx);
+
+  if (!id || !isUUID(id)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
+
+  const { error } = await supabase.from(TABLE).delete().eq("id", id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  return NextResponse.json({ ok: true });
 }

@@ -3,64 +3,87 @@ import { createServerSupabase } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-function jsonError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+const COMMENTS_TABLE = "helpdesk_comments";
+const TICKETS_TABLE = "helpdesk_tickets";
+
+function norm(s: string | null | undefined) {
+  return (s ?? "").trim();
 }
 
-async function getSessionUser(supabase: Awaited<ReturnType<typeof createServerSupabase>>) {
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data?.user) return null;
-  return data.user;
+function isUUID(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-async function isAdmin(supabase: Awaited<ReturnType<typeof createServerSupabase>>, userId: string) {
-  const { data } = await supabase
-    .from("app_users")
-    .select("is_admin")
-    .eq("id", userId)
-    .maybeSingle();
-  return !!data?.is_admin;
+type Params = { params?: { id?: string } | Promise<{ id?: string }> };
+
+async function getTicketId(ctx: Params): Promise<string | null> {
+  const p = ctx.params instanceof Promise ? await ctx.params : ctx.params ?? {};
+  return p.id ?? null;
 }
 
-type RouteContext = { params?: { id?: string } | Promise<{ id?: string }> };
-
-export async function POST(req: Request, ctx: RouteContext) {
+export async function GET(req: Request, ctx: Params) {
   const supabase = await createServerSupabase();
-  const user = await getSessionUser(supabase);
-  if (!user) return jsonError("No autenticado", 401);
+  const ticketId = await getTicketId(ctx);
 
-  const params = await (ctx.params instanceof Promise ? ctx.params : Promise.resolve(ctx.params ?? {}));
-  const ticketId = params.id;
-  if (!ticketId) return jsonError("id de ticket requerido", 400);
-
-  const admin = await isAdmin(supabase, user.id);
-
-  const body = await req.json().catch(() => null);
-  const text = String(body?.body ?? "").trim();
-  const is_internal = !!body?.is_internal;
-
-  if (!text) return jsonError("Comentario vacío");
-
-  const finalInternal = admin ? is_internal : false;
-
-  const tq = supabase.from("helpdesk_tickets").select("id,created_by").eq("id", ticketId).single();
-  const { data: t, error: tErr } = await tq;
-  if (tErr || !t) return jsonError("Ticket no encontrado", 404);
-
-  if (!admin && t.created_by !== user.id) return jsonError("Sin permiso", 403);
+  if (!ticketId || !isUUID(ticketId)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
 
   const { data, error } = await supabase
-    .from("helpdesk_comments")
-    .insert({
-      ticket_id: ticketId,
-      created_by: user.id,
-      body: text,
-      is_internal: finalInternal,
-    })
+    .from(COMMENTS_TABLE)
     .select("*")
-    .single();
+    .eq("ticket_id", ticketId)
+    .order("created_at", { ascending: true });
 
-  if (error) return jsonError(error.message, 500);
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-  return NextResponse.json({ data });
+  return NextResponse.json({ data: data ?? [] });
+}
+
+export async function POST(req: Request, ctx: Params) {
+  const supabase = await createServerSupabase();
+  const ticketId = await getTicketId(ctx);
+
+  if (!ticketId || !isUUID(ticketId)) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
+
+  try {
+    const body = await req.json();
+    const contenido = norm(body?.contenido ?? body?.content ?? body?.comentario ?? body?.body);
+    const isInternal = !!body?.is_internal;
+
+    if (!contenido) return NextResponse.json({ error: "Comentario requerido" }, { status: 400 });
+
+    // ✅ Validar ticket existe sin .single()
+    const { data: ticket, error: tErr } = await supabase
+      .from(TICKETS_TABLE)
+      .select("id,created_by")
+      .eq("id", ticketId)
+      .maybeSingle();
+
+    if (tErr) return NextResponse.json({ error: tErr.message }, { status: 400 });
+    if (!ticket) return NextResponse.json({ error: "Ticket no encontrado" }, { status: 404 });
+
+    // ✅ author nullable por ahora (si la columna created_by es nullable)
+    const created_by = null as string | null;
+
+    const { data, error } = await supabase
+      .from(COMMENTS_TABLE)
+      .insert({
+        ticket_id: ticketId,
+        body: contenido,
+        is_internal: isInternal,
+        created_by,
+      })
+      .select("*"); // ✅ sin single
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+    const row = Array.isArray(data) ? data[0] : data;
+    return NextResponse.json({ data: row ?? null });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Error creando comentario";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 }
