@@ -55,6 +55,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
+    // ✅ aceptar aliases (por si el front manda title/description)
     const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
     const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
     const tipo = norm(body?.tipo) || "mejora";
@@ -63,34 +64,39 @@ export async function POST(req: Request) {
     if (!titulo) return NextResponse.json({ error: "Título requerido" }, { status: 400 });
     if (!descripcion) return NextResponse.json({ error: "Descripción requerida" }, { status: 400 });
 
-    // Mapeo a valores del schema (title, description, type, priority, status)
+    // ✅ sin auth por ahora (columna ya es nullable)
+    const created_by = null;
+
+    // Mapeo a columnas del schema (title, description, type, priority, status)
     const typeMap: Record<string, string> = { mejora: "improvement", error: "bug", sugerencia: "suggestion" };
     const priorityMap: Record<string, string> = { baja: "low", media: "medium", alta: "high", critica: "critical" };
-    const title = titulo;
-    const description = descripcion;
-    const type = typeMap[tipo] ?? "improvement";
-    const priority = priorityMap[prioridad] ?? "medium";
 
-    // Si el server no lee sesión, created_by puede ser null solo si la columna es nullable.
-    // En la migración 022 es NOT NULL; si querés permitir anónimos, alterá la columna.
-    const created_by = null as string | null;
-
+    // ⚠️ NO usamos .single(): a veces PostgREST devuelve array o 0/varias filas
     const { data, error } = await supabase
       .from(TABLE)
       .insert({
-        title,
-        description,
-        type,
-        priority,
+        title: titulo,
+        description: descripcion,
+        type: typeMap[tipo] ?? "improvement",
+        priority: priorityMap[prioridad] ?? "medium",
         status: "new",
         created_by,
       })
-      .select("*")
-      .single();
+      .select("*");
 
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-    return NextResponse.json({ data });
+    // data puede ser objeto, array o null según config; normalizamos a 1 ticket
+    const ticket = Array.isArray(data) ? data[0] : data;
+
+    if (!ticket) {
+      return NextResponse.json(
+        { error: "Ticket creado, pero no se pudo obtener el registro devuelto (returning vacío)." },
+        { status: 200 }
+      );
+    }
+
+    return NextResponse.json({ data: ticket });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Error creando ticket";
     return NextResponse.json({ error: message }, { status: 400 });
