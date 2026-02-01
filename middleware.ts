@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { canAccessPath, normalizeRole } from "@/app/lib/rbac";
+import { canAccessPath } from "@/app/lib/rbac";
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
@@ -21,7 +21,6 @@ export async function middleware(req: NextRequest) {
     },
   });
 
-  // 1) Auth user (Supabase Auth)
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -33,35 +32,29 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  const pathname = req.nextUrl.pathname;
-
-  // 2) RBAC: buscar app_user por auth_user_id (NO por id); rol solo desde roles.name
-  const { data: appUser, error: appUserErr } = await supabase
+  // ✅ RBAC: traer rol desde app_users por auth_user_id (NO por id)
+  const { data: appUser } = await supabase
     .from("app_users")
-    .select("roles:role_id(name), is_active, auth_user_id, email")
+    .select("is_active, roles:role_id(name)")
     .eq("auth_user_id", user.id)
     .maybeSingle();
 
-  // Si no existe registro en app_users -> deny (allowlist)
-  if (appUserErr || !appUser) {
-    const deniedUrl = req.nextUrl.clone();
-    deniedUrl.pathname = "/403";
-    return NextResponse.redirect(deniedUrl);
-  }
-
-  // Si está inactivo -> deny
-  if (appUser.is_active === false) {
-    const deniedUrl = req.nextUrl.clone();
-    deniedUrl.pathname = "/403";
-    return NextResponse.redirect(deniedUrl);
-  }
-
   const rel = (appUser as { roles?: { name?: string } | { name?: string }[] } | null)?.roles;
-  const roleRaw =
-    rel == null ? null : Array.isArray(rel) ? rel[0]?.name ?? null : (rel as { name?: string })?.name ?? null;
-  const role = normalizeRole(roleRaw);
+  const roleFromRelation =
+    rel == null ? null : Array.isArray(rel) ? rel[0]?.name ?? null : rel?.name ?? null;
 
-  if (!canAccessPath({ role }, pathname)) {
+  const isActive = (appUser as { is_active?: boolean } | null)?.is_active ?? false;
+
+  const pathname = req.nextUrl.pathname;
+
+  // si no está activo (o no tiene app_user), lo consideramos sin acceso
+  if (!isActive) {
+    const deniedUrl = req.nextUrl.clone();
+    deniedUrl.pathname = "/403";
+    return NextResponse.redirect(deniedUrl);
+  }
+
+  if (!canAccessPath({ role: roleFromRelation }, pathname)) {
     const deniedUrl = req.nextUrl.clone();
     deniedUrl.pathname = "/403";
     return NextResponse.redirect(deniedUrl);

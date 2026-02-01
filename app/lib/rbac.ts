@@ -82,6 +82,10 @@ export function roleToLabel(role: string | null | undefined): string {
 const PATH_ROLES: { prefix: string; allowed: RoleKey[] }[] = [
   { prefix: "/admin/configuracion", allowed: ["admin"] },
   { prefix: "/admin/ia", allowed: ["admin"] },
+
+  // ✅ Operaciones: solo admin + operador
+  { prefix: "/admin/operaciones", allowed: ["admin", "operador"] },
+
   { prefix: "/admin/mesa-de-ayuda", allowed: ["admin", "operador"] },
   { prefix: "/admin/leads", allowed: ["admin", "comercial", "operador"] },
 ];
