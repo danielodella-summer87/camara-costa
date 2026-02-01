@@ -78,6 +78,15 @@ function inferOwnerName(obj: RowObj | null | undefined): string | null {
   return pickFirstString(obj, ["nombre", "razon_social", "razonSocial", "empresa", "title"]);
 }
 
+function getCookieFromHeader(cookieHeader: string | null, name: string): string | null {
+  if (!cookieHeader) return null;
+  const parts = cookieHeader.split(";").map((p) => p.trim());
+  for (const p of parts) {
+    if (p.startsWith(name + "=")) return decodeURIComponent(p.slice(name.length + 1));
+  }
+  return null;
+}
+
 /**
  * GET /api/admin/agenda
  */
@@ -87,8 +96,12 @@ export async function GET(req: NextRequest) {
 
     // Querystring
     const { searchParams } = new URL(req.url);
+    const scope = searchParams.get("scope") === "all" ? "all" : "mine";
     const overdueOnly = searchParams.get("overdueOnly") === "1";
     const todayOnly = searchParams.get("todayOnly") === "1";
+
+    const currentAppUserId =
+      getCookieFromHeader(req.headers.get("cookie"), "x-user-id") ?? null;
 
     // Defaults: últimos 30 días + próximos 14 días
     const pastDays = overdueOnly ? 365 : parseInt(searchParams.get("pastDays") || "30", 10);
@@ -130,6 +143,11 @@ export async function GET(req: NextRequest) {
       )
       .is("realizada_at", null)
       .not("fecha_limite", "is", null);
+
+    // Lo mío: solo actividades donde soy invitado (invited_user_ids contiene mi app_user id)
+    if (scope === "mine" && currentAppUserId) {
+      query = query.contains("invited_user_ids", [currentAppUserId]);
+    }
 
     if (todayOnly) {
       query = query.eq("fecha_limite", todayStr);

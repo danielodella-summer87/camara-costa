@@ -20,6 +20,7 @@ type Lead = {
   is_member?: boolean | null;
   member_since?: string | null;
   score?: number | null;
+  comerciales?: { id: string; nombre: string } | null;
 };
 
 type PipelineRow = {
@@ -789,7 +790,7 @@ export default function LeadsPage() {
               {mutating ? "…" : "Aplicar"}
             </button>
 
-            {hasPermission("leads.delete") && (
+            {hasPermission("leads.write") && (
               <button
                 type="button"
                 onClick={bulkDelete}
@@ -832,163 +833,45 @@ export default function LeadsPage() {
                         className="flex items-center justify-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleOne(l.id)}
-                        disabled={disabled}
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleOne(l.id)}
+                          disabled={disabled}
                           className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
-                      />
-                    </div>
+                        />
+                      </div>
 
-                      {/* Fila clickeable - navega al lead */}
-                      <Link
-                        href={`/admin/leads/${l.id}`}
-                        className="flex flex-1 items-center gap-4 min-w-0 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded"
-                        onClick={(e) => {
-                          // Si el click viene del checkbox o botones, no navegar
-                          if ((e.target as HTMLElement).closest('input[type="checkbox"]') || 
-                              (e.target as HTMLElement).closest('button') ||
-                              (e.target as HTMLElement).closest('a[href*="/admin/leads/"]')) {
-                            e.preventDefault();
-                          }
-                        }}
-                      >
-                        {/* Desktop: Layout horizontal completo */}
-                        <div className="hidden md:flex flex-1 items-center gap-6 min-w-0">
-                          {/* Columna izquierda: Empresa + Contacto */}
-                          <div className="flex min-w-0 flex-col gap-0.5 flex-[2]">
-                            <div className={`truncate font-semibold ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
-                              {l.nombre ?? <span className="text-slate-400">—</span>}
-                            </div>
-                            {l.contacto && (
-                              <div className="truncate text-xs text-slate-500">{l.contacto}</div>
-                            )}
-                          </div>
-
-                          {/* Centro: Email + Teléfono */}
-                          <div className="flex min-w-0 flex-col gap-0.5 flex-[2]">
-                            {l.email && (
-                              <div
-                                className="truncate text-sm text-slate-700"
-                                title={l.email}
-                              >
-                                {l.email}
-                              </div>
-                            )}
-                            {l.telefono && (
-                              <div className="truncate text-sm text-slate-700">{l.telefono}</div>
-                            )}
-                            {!l.email && !l.telefono && (
-                              <span className="text-xs text-slate-400">—</span>
-                            )}
-                          </div>
-
-                          {/* Derecha: Chips + Botón */}
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            {/* Score (estrellas) */}
-                            {l.score !== null && l.score !== undefined && (
-                              <div className="flex items-center gap-0.5" title={`Score: ${l.score} de 5`}>
-                                {[1, 2, 3, 4, 5].map((star) => (
-                                  <span
-                                    key={star}
-                                    className={`text-sm ${
-                                      star <= l.score!
-                                        ? "text-yellow-400"
-                                        : "text-slate-300"
-                                    }`}
-                                  >
-                                    ★
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {l.origen && (
-                              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700">
-                                {l.origen}
-                              </span>
-                            )}
-                            {l.pipeline && (
-                              <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                                {l.pipeline}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Mobile: Layout compacto 2 líneas */}
-                        <div className="flex md:hidden flex-1 flex-col gap-2 min-w-0">
-                          {/* Línea 1: Empresa + Acción */}
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex min-w-0 flex-col gap-0.5 flex-1">
-                              <div className={`truncate font-semibold ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
-                                {l.nombre ?? <span className="text-slate-400">—</span>}
-                              </div>
-                              {l.contacto && (
-                                <div className="truncate text-xs text-slate-500">{l.contacto}</div>
-                              )}
-                            </div>
-                            {/* Score en mobile */}
-                            {l.score !== null && l.score !== undefined && (
-                              <div className="flex items-center gap-0.5 flex-shrink-0" title={`Score: ${l.score} de 5`}>
-                                {[1, 2, 3, 4, 5].map((star) => (
-                                  <span
-                                    key={star}
-                                    className={`text-xs ${
-                                      star <= l.score!
-                                        ? "text-yellow-400"
-                                        : "text-slate-300"
-                                    }`}
-                                  >
-                                    ★
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          {/* Línea 2: Email/Teléfono + Chips */}
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 flex-col gap-0.5 flex-1">
-                              {l.email && (
-                                <div
-                                  className="truncate text-xs text-slate-600"
-                                  title={l.email}
-                                >
-                                  {l.email}
-                                </div>
-                              )}
-                              {l.telefono && (
-                                <div className="truncate text-xs text-slate-600">{l.telefono}</div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-shrink-0">
-                              {l.origen && (
-                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-                                  {l.origen}
-                                </span>
-                              )}
-                              {l.pipeline && (
-                                <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                                  {l.pipeline}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </Link>
-
-                      {/* Botón Ver - no navega desde el Link padre */}
-                      <div
-                        className="flex items-center flex-shrink-0"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      {/* Fila: izquierda nombre + comercial, derecha botones */}
+                      <div className="flex flex-1 items-center justify-between gap-4 min-w-0">
+                        {/* IZQUIERDA: Nombre del lead + Comercial (clickeable) */}
                         <Link
                           href={`/admin/leads/${l.id}`}
-                          className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
-                      >
-                        Ver
-                      </Link>
-                    </div>
+                          className="flex min-w-0 flex-1 flex-wrap items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded"
+                        >
+                          <span className={`font-semibold truncate ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
+                            {l.nombre ?? <span className="text-slate-400">—</span>}
+                          </span>
+                          {l.comerciales?.nombre && (
+                            <span className="text-xs rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 whitespace-nowrap font-medium">
+                              {l.comerciales.nombre}
+                            </span>
+                          )}
+                          <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                            Etapa: {l.pipeline ?? "—"}
+                          </span>
+                        </Link>
+
+                        {/* DERECHA: Botones */}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Link
+                            href={`/admin/leads/${l.id}`}
+                            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
+                          >
+                            Ver
+                          </Link>
+                        </div>
+                      </div>
                   </div>
                 );
               })}

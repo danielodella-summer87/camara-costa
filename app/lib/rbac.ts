@@ -86,7 +86,12 @@ const PATH_ROLES: { prefix: string; allowed: RoleKey[] }[] = [
   // ✅ Operaciones: solo admin + operador
   { prefix: "/admin/operaciones", allowed: ["admin", "operador"] },
 
-  { prefix: "/admin/mesa-de-ayuda", allowed: ["admin", "operador", "comercial", "viewer"] },
+  // ✅ Mesa de ayuda: todos los roles operativos
+  { prefix: "/admin/mesa-de-ayuda", allowed: ["admin", "comercial", "operador"] },
+
+  // ✅ Agenda: todos los roles operativos
+  { prefix: "/admin/agenda", allowed: ["admin", "comercial", "operador"] },
+
   { prefix: "/admin/leads", allowed: ["admin", "comercial", "operador"] },
 ];
 

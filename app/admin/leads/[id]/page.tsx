@@ -363,8 +363,35 @@ export default function LeadDetailPage() {
   const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
 
   // ✅ Permisos RBAC
-  const { hasPermission, loading: permissionsLoading } = usePermissions();
-  
+  const { hasPermission, role, loading: permissionsLoading } = usePermissions();
+
+  // ✅ Usuario actual (app_user.id, comercial_id cuando la API lo exponga)
+  const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
+  const [currentComercialId, setCurrentComercialId] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: { app_user?: { id?: string; comercial_id?: string | null } }) => {
+        setCurrentAppUserId(j?.app_user?.id ?? null);
+        setCurrentComercialId(j?.app_user?.comercial_id ?? null);
+      })
+      .catch(() => {
+        setCurrentAppUserId(null);
+        setCurrentComercialId(null);
+      });
+  }, []);
+
+  // Helper: el lead es "mío" si soy comercial y lead.comercial_id coincide con mi comercial (o app_user id como fallback)
+  const isLeadOwner =
+    role === "comercial" &&
+    !!lead?.comercial_id &&
+    (currentComercialId ?? currentAppUserId) === lead.comercial_id;
+
+  const canEditLead = !!lead && (hasPermission("leads.write") || isLeadOwner);
+
+  // Eliminar: solo admin (opción 1; si querés comercial dueño, usar canEditLead)
+  const canDeleteThisLead = role === "admin";
+
   // ✅ Etapas (pipelines)
   type EtapaRow = { id: string; nombre: string };
   const [etapas, setEtapas] = useState<string[]>([]);
@@ -570,6 +597,7 @@ export default function LeadDetailPage() {
       meet_url: norm(draft.meet_url),
       score: draft.score ?? null,
       score_categoria: draft.score_categoria ?? null,
+      comercial_id: draft.comercial_id ?? null,
     };
 
     // Preservar linkedin_empresa y linkedin_director si el draft está vacío pero el lead tiene valores
@@ -1285,7 +1313,7 @@ export default function LeadDetailPage() {
               )}
 
               {!editing ? (
-                hasPermission("leads.update") && (
+                canEditLead && (
                   <button
                     type="button"
                     onClick={startEdit}
@@ -1305,7 +1333,7 @@ export default function LeadDetailPage() {
                   >
                     Cancelar
                   </button>
-                  {hasPermission("leads.update") && (
+                  {canEditLead && (
                     <button
                       type="button"
                       onClick={saveEdit}
@@ -1318,7 +1346,7 @@ export default function LeadDetailPage() {
                 </>
               )}
 
-              {hasPermission("leads.delete") && (
+              {canDeleteThisLead && (
                 <button
                   type="button"
                   onClick={deleteLead}

@@ -43,7 +43,9 @@ type LeadRow = {
   comercial_id: string | null;
   score: number | null;
   score_categoria: string | null;
-  
+
+  comerciales?: { id: string; nombre: string } | null;
+
   // Campos adicionales usados en UI y endpoints
   website?: string | null;
   objetivos?: string | null;
@@ -123,7 +125,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -167,15 +169,20 @@ export async function GET(req: Request) {
     
     const { searchParams } = new URL(req.url);
     const pipelineParam = searchParams.get("pipeline");
-    
+    const comercialIdParam = searchParams.get("comercial_id")?.trim() ?? null;
+
     let q = supabase
       .from("leads")
       .select(SELECT);
-    
+
     if (pipelineParam && pipelineParam.trim()) {
       q = q.eq("pipeline", pipelineParam.trim());
     }
-    
+
+    if (comercialIdParam) {
+      q = q.eq("comercial_id", comercialIdParam);
+    }
+
     const { data, error } = await q
       .order("created_at", { ascending: false })
       .limit(limit);

@@ -123,6 +123,26 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
+    // Si no es admin, solo puede editar leads donde comercial_id === app_user.id
+    const roleRow = await sb.from("roles").select("name").eq("id", user.role_id).maybeSingle();
+    const roleName = (roleRow.data as { name?: string } | null)?.name?.trim().toLowerCase();
+    const isAdmin = roleName === "admin";
+
+    const leadRow = await sb.from("leads").select("comercial_id").eq("id", id).maybeSingle();
+    if (!leadRow.data) {
+      return NextResponse.json({ data: null, error: "Lead no encontrado" } satisfies ApiResp<null>, { status: 404 });
+    }
+    const leadComercialId = (leadRow.data as { comercial_id?: string | null }).comercial_id ?? null;
+
+    if (!isAdmin) {
+      if (leadComercialId !== user.id) {
+        return NextResponse.json(
+          { data: null, error: "No tenés permiso para editar este lead" } satisfies ApiResp<null>,
+          { status: 403 }
+        );
+      }
+    }
+
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== "object") {
       return NextResponse.json({ data: null, error: "Body inválido" } satisfies ApiResp<null>, { status: 400 });

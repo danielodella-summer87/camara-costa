@@ -4,6 +4,7 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Trash2, Pencil } from "lucide-react";
+import clsx from "clsx";
 
 type OwnerType = "lead" | "socio";
 
@@ -31,6 +32,14 @@ type AgendaApiResponse = {
 
 type QuickFilter = "all" | "overdue" | "today" | "next7";
 
+type UnassignedLead = {
+  id: string;
+  nombre: string | null;
+  created_at?: string | null;
+  empresa_id?: string | null;
+  empresas?: { id: string; nombre: string | null } | null;
+};
+
 export default function AgendaPage() {
   const [agendaItems, setAgendaItems] = useState<AgendaItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -41,6 +50,7 @@ export default function AgendaPage() {
   const [owner, setOwner] = useState<"all" | OwnerType>("all");
   const [tipo, setTipo] = useState<string>("all");
   const [quick, setQuick] = useState<QuickFilter>("all");
+  const [onlyMine, setOnlyMine] = useState<boolean>(true);
 
   // UX: marcar realizada desde agenda
   const [markingId, setMarkingId] = useState<string | null>(null);
@@ -72,6 +82,8 @@ export default function AgendaPage() {
   const [usersList, setUsersList] = useState<UserOption[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
+  const [currentRole, setCurrentRole] = useState<string | null>(null);
+  const [currentComercialId, setCurrentComercialId] = useState<string | null>(null);
   const [invitedSearch, setInvitedSearch] = useState<string>("");
 
   // Select con búsqueda
@@ -82,20 +94,49 @@ export default function AgendaPage() {
   const [ownerSearch, setOwnerSearch] = useState<string>("");
   const [showOwnerDropdown, setShowOwnerDropdown] = useState<boolean>(false);
 
-  // Leads en env propuesta
+  // Leads en env propuesta (solo los del comercial efectivo; fetch con comercial_id)
   type LeadMini = { id: string; nombre: string | null };
   const [leadsEnvPropuesta, setLeadsEnvPropuesta] = useState<LeadMini[]>([]);
   const [loadingEnvPropuesta, setLoadingEnvPropuesta] = useState(false);
   const [errorEnvPropuesta, setErrorEnvPropuesta] = useState<string | null>(null);
 
+  // Una única fuente de verdad para rol y comercial del usuario logueado (comercial_id viene del join user ↔ comercial)
+  const currentUser = useMemo(
+    () => ({ role: currentRole, comercial_id: currentComercialId }),
+    [currentRole, currentComercialId]
+  );
+
+  const isAdmin = currentUser?.role === "admin";
+  const isComercial = currentUser?.role === "comercial";
+  const myComercialId = currentUser?.comercial_id ?? null;
+
+  // Admin → null inicial (elige por tab). Comercial → su comercial_id fijo.
+  const [selectedComercialId, setSelectedComercialId] = useState<string | null>(null);
+
+  const onlyMineEffective = isAdmin ? onlyMine : true;
+  const scope = onlyMineEffective ? "mine" : "all";
+
+  useEffect(() => {
+    if (comerciales.length && !selectedComercialId) {
+      setSelectedComercialId(comerciales[0].id);
+    }
+  }, [comerciales]);
+
+  // Leads sin comercial (admin only)
+  const [unassignedLeads, setUnassignedLeads] = useState<UnassignedLead[]>([]);
+  const [loadingUnassigned, setLoadingUnassigned] = useState(false);
+  const [assigningLeadId, setAssigningLeadId] = useState<string | null>(null);
+  const [assignMap, setAssignMap] = useState<Record<string, string>>({});
+
   // Defaults: últimos 30 días + próximos 14 días
   const defaultPastDays = 30;
   const defaultFutureDays = 14;
 
-  // Construir URL con parámetros según el filtro
-  const buildApiUrl = (filter: QuickFilter): string => {
+  // Construir URL con parámetros según el filtro y scope (Lo mío / Todo)
+  const buildApiUrl = (filter: QuickFilter, scopeParam: "mine" | "all"): string => {
     const baseUrl = "/api/admin/agenda";
     const params = new URLSearchParams();
+    params.set("scope", scopeParam);
 
     if (filter === "overdue") {
       params.set("overdueOnly", "1");
@@ -107,7 +148,6 @@ export default function AgendaPage() {
       params.set("pastDays", "0");
       params.set("futureDays", "7");
     } else {
-      // "all" - default
       params.set("pastDays", String(defaultPastDays));
       params.set("futureDays", String(defaultFutureDays));
     }
@@ -120,7 +160,7 @@ export default function AgendaPage() {
     setError(null);
 
     try {
-      const url = buildApiUrl(quick);
+      const url = buildApiUrl(quick, scope);
       const res = await fetch(url, {
         cache: "no-store",
         headers: { "Cache-Control": "no-store" },
@@ -143,19 +183,24 @@ export default function AgendaPage() {
     }
   }
 
+  useEffect(() => {
+    fetchAgenda();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quick, scope]);
+
   async function loadLeadsEnvPropuesta() {
-    setLoadingEnvPropuesta(true);
     setErrorEnvPropuesta(null);
+    setLoadingEnvPropuesta(true);
     try {
-      const res = await fetch(`/api/admin/leads?pipeline=${encodeURIComponent("env propuesta")}`, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-store" },
-      });
+      const params = new URLSearchParams({ pipeline: "env propuesta" });
+      if (selectedComercialId) {
+        params.set("comercial_id", selectedComercialId);
+      }
+      const res = await fetch(`/api/admin/leads?${params.toString()}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Error cargando leads en env propuesta");
-
-      const rows = Array.isArray(json?.data) ? json.data : [];
-      setLeadsEnvPropuesta(rows.map((r: any) => ({ id: r.id, nombre: r.nombre ?? null })));
+      const data = Array.isArray(json?.data) ? json.data : [];
+      setLeadsEnvPropuesta(data.map((r: any) => ({ id: r.id, nombre: r.nombre ?? null })));
     } catch (e: any) {
       setErrorEnvPropuesta(e?.message ?? "Error cargando env propuesta");
       setLeadsEnvPropuesta([]);
@@ -165,10 +210,123 @@ export default function AgendaPage() {
   }
 
   useEffect(() => {
-    fetchAgenda();
+    if (!selectedComercialId) {
+      setLeadsEnvPropuesta([]);
+      setErrorEnvPropuesta(null);
+      setLoadingEnvPropuesta(false);
+      return;
+    }
     loadLeadsEnvPropuesta();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quick]);
+  }, [selectedComercialId]);
+
+  async function loadUnassignedLeadsIfAdmin(role: string | null) {
+    try {
+      setLoadingUnassigned(true);
+      if (role !== "admin") {
+        setUnassignedLeads([]);
+        return;
+      }
+      const res = await fetch("/api/admin/leads/unassigned?limit=100", { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando leads sin comercial");
+      setUnassignedLeads(Array.isArray(json?.data) ? json.data : []);
+    } catch (e: any) {
+      console.warn("[Agenda] loadUnassignedLeads error:", e?.message);
+      setUnassignedLeads([]);
+    } finally {
+      setLoadingUnassigned(false);
+    }
+  }
+
+  async function assignComercialToLead(leadId: string) {
+    const comercialId = assignMap[leadId]?.trim();
+    if (!comercialId) {
+      alert("Elegí un comercial para asignar.");
+      return;
+    }
+
+    try {
+      setAssigningLeadId(leadId);
+
+      const res = await fetch(`/api/admin/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ comercial_id: comercialId }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? "Error asignando comercial");
+
+      setUnassignedLeads((prev) => prev.filter((l) => l.id !== leadId));
+      setAssignMap((p) => {
+        const next = { ...p };
+        delete next[leadId];
+        return next;
+      });
+    } catch (e: any) {
+      alert(e?.message ?? "Error asignando comercial");
+    } finally {
+      setAssigningLeadId(null);
+    }
+  }
+
+  // Cargar usuario actual (app_user.id, role) y currentComercialId por match email con comerciales
+  useEffect(() => {
+    async function loadAuthMe() {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const me = (await res.json()) as { app_user?: { id?: string; role?: string; email?: string | null } };
+        const appUserId = me?.app_user?.id ?? null;
+        const role = me?.app_user?.role ?? null;
+        setCurrentAppUserId(appUserId);
+        setCurrentRole(role);
+        setOnlyMine(role === "admin" ? false : true);
+
+        const comercialesRes = await fetch("/api/admin/comerciales", { cache: "no-store" });
+        const comercialesJson = (await comercialesRes.json()) as { data?: Array<{ id: string; nombre?: string; email?: string | null }> };
+        const comercialesList = comercialesJson?.data ?? [];
+
+        const meEmail = (me?.app_user?.email ?? "").toLowerCase().trim();
+        const myComercial = comercialesList.find((c: { email?: string | null }) => {
+          const cEmail = (c?.email ?? "").toLowerCase().trim();
+          return !!meEmail && !!cEmail && cEmail === meEmail;
+        });
+        setCurrentComercialId(myComercial?.id ?? null);
+        setComerciales(comercialesList.map((c: { id: string; nombre?: string }) => ({ id: c.id, nombre: c.nombre ?? "" })));
+
+        await loadUnassignedLeadsIfAdmin(role);
+      } catch (e) {
+        console.error("Error cargando auth/me:", e);
+      }
+    }
+    loadAuthMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cargar lista completa de usuarios del CRM al montar (para mostrar invitados en las tarjetas)
+  useEffect(() => {
+    async function loadUsersForCards() {
+      try {
+        const res = await fetch("/api/admin/users", { cache: "no-store" });
+        const json = (await res.json()) as { data?: UserOption[] };
+        if (res.ok && Array.isArray(json?.data)) {
+          setUsersList(
+            json.data.map((u) => ({
+              id: u.id,
+              nombre: u.nombre ?? null,
+              email: u.email ?? null,
+              role: u.role ?? null,
+            }))
+          );
+        }
+      } catch (e) {
+        console.error("Error cargando usuarios para cards:", e);
+      }
+    }
+    loadUsersForCards();
+  }, []);
 
   // Cargar owners, comerciales y usuarios cuando se abre el modal
   useEffect(() => {
@@ -399,6 +557,11 @@ export default function AgendaPage() {
     return `https://waze.com/ul?q=${encodeURIComponent(lugar)}&navigate=yes`;
   }
 
+  function userNameById(id: string): string {
+    const u = usersList.find((x) => x.id === id);
+    return u?.nombre ?? id.slice(0, 8);
+  }
+
   const tiposDisponibles = useMemo(() => {
     const set = new Set<string>();
     for (const it of agendaItems) {
@@ -407,7 +570,13 @@ export default function AgendaPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [agendaItems]);
 
-  // Lista de usuarios filtrada por búsqueda (nombre/email) para el bloque Invitados
+  // Mapa id -> usuario (lista completa del CRM) para resolver invitados en las tarjetas
+  const usersById = useMemo(
+    () => new Map(usersList.map((u) => [u.id, u])),
+    [usersList]
+  );
+
+  // Lista de usuarios filtrada por búsqueda (nombre/email) para el bloque Invitados del modal
   const usersFilteredBySearch = useMemo(() => {
     const qq = invitedSearch.trim().toLowerCase();
     if (!qq) return usersList;
@@ -445,16 +614,27 @@ export default function AgendaPage() {
     });
   }, [agendaItems, owner, tipo, q]);
 
-  // Agrupar por día
+  // Lo mío: si no tenemos currentAppUserId, mostrar 0 actividades; si tenemos, filtrar por invitado
+  const isMineMode = scope === "mine";
+  const itemsForDisplay = useMemo(() => {
+    if (!isMineMode) return filteredItems;
+    if (!currentAppUserId) return [];
+    return filteredItems.filter((it) => {
+      const invited = Array.isArray(it.invited_user_ids) ? it.invited_user_ids : [];
+      return invited.includes(currentAppUserId);
+    });
+  }, [isMineMode, filteredItems, currentAppUserId]);
+
+  // Agrupar por día (usa itemsForDisplay para respetar "Lo mío")
   const groupedByDay = useMemo(() => {
     const groups: Record<string, AgendaItem[]> = {};
-    for (const item of filteredItems) {
+    for (const item of itemsForDisplay) {
       const dayKey = item.fecha_limite; // YYYY-MM-DD
       if (!groups[dayKey]) groups[dayKey] = [];
       groups[dayKey].push(item);
     }
     return groups;
-  }, [filteredItems]);
+  }, [itemsForDisplay]);
 
   const sortedDays = useMemo(() => {
     return Object.keys(groupedByDay).sort((a, b) => a.localeCompare(b));
@@ -642,16 +822,135 @@ export default function AgendaPage() {
 
   return (
     <PageContainer>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={onlyMineEffective}
+            onChange={(e) => {
+              if (isAdmin) setOnlyMine(e.target.checked);
+            }}
+            disabled={!isAdmin}
+            className="rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+          />
+          Ver solo lo mío
+        </label>
+        <span className="text-xs text-slate-500">
+          {isAdmin ? "Admin: podés ver todo o solo lo tuyo." : "Incluye actividades donde sos invitado."}
+        </span>
+      </div>
+
+      {currentRole === "admin" && (
+        <div className="mb-4 rounded-2xl border bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                ⚠️ Leads sin comercial asignado
+              </div>
+              <div className="text-xs text-slate-500">
+                Asigná un comercial para habilitar el ownership y el control.
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-500">
+              {loadingUnassigned ? "Cargando..." : `${unassignedLeads.length}`}
+            </div>
+          </div>
+
+          {!loadingUnassigned && unassignedLeads.length === 0 ? (
+            <div className="mt-3 text-sm text-slate-500">No hay leads sin comercial. ✅</div>
+          ) : null}
+
+          {unassignedLeads.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {unassignedLeads.slice(0, 20).map((l) => (
+                <div
+                  key={l.id}
+                  className="flex flex-col gap-2 rounded-xl border px-3 py-3 md:flex-row md:items-center md:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-900">
+                      {l.nombre ?? "Sin nombre"}
+                    </div>
+                    {l.empresas?.nombre ? (
+                      <div className="truncate text-xs text-slate-500">
+                        Entidad: {l.empresas.nombre}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
+                      value={assignMap[l.id] ?? ""}
+                      onChange={(e) =>
+                        setAssignMap((p) => ({ ...p, [l.id]: e.target.value }))
+                      }
+                    >
+                      <option value="">— Elegir comercial —</option>
+                      {comerciales.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nombre}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:opacity-95 disabled:opacity-50"
+                      disabled={assigningLeadId === l.id}
+                      onClick={() => assignComercialToLead(l.id)}
+                    >
+                      {assigningLeadId === l.id ? "Asignando..." : "Asignar"}
+                    </button>
+
+                    <a
+                      href={`/admin/leads/${l.id}`}
+                      className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50"
+                    >
+                      Abrir
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {unassignedLeads.length > 20 ? (
+            <div className="mt-3 text-xs text-slate-500">
+              Mostrando 20 de {unassignedLeads.length}. (Podemos agregar "Ver todos" luego.)
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="mb-3 flex gap-2">
+        {comerciales.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => setSelectedComercialId(c.id)}
+            className={clsx(
+              "rounded-full px-3 py-1 text-sm transition",
+              selectedComercialId === c.id ? "bg-slate-900 text-white" : "bg-slate-100 hover:bg-slate-200"
+            )}
+          >
+            {c.nombre}
+          </button>
+        ))}
+      </div>
+
       {/* Bloque leads en env propuesta */}
       <div className="mb-4 rounded-2xl border bg-white p-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">Leads en etapa: env propuesta</div>
-            <div className="text-xs text-slate-500">Acceso rápido</div>
+            <h3 className="text-sm font-semibold">
+              Leads en etapa: env propuesta
+            </h3>
           </div>
-          <div className="text-xs text-slate-500">
+          <span className="text-xs text-slate-500">
             {loadingEnvPropuesta ? "Cargando..." : `${leadsEnvPropuesta.length}`}
-          </div>
+          </span>
         </div>
 
         {errorEnvPropuesta ? <div className="mt-2 text-sm text-red-600">{errorEnvPropuesta}</div> : null}
@@ -1064,7 +1363,7 @@ export default function AgendaPage() {
             })}
 
             <div className="ml-auto text-xs text-slate-500 self-center">
-              Mostrando: <span className="font-semibold text-slate-800">{filteredItems.length}</span>
+              Mostrando: <span className="font-semibold text-slate-800">{itemsForDisplay.length}</span>
             </div>
           </div>
         </div>
@@ -1073,6 +1372,12 @@ export default function AgendaPage() {
       {error && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {scope === "mine" && !currentAppUserId && !loading && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          No se pudo identificar el usuario. En &quot;Lo mío&quot; no se muestran actividades.
         </div>
       )}
 
@@ -1132,110 +1437,130 @@ export default function AgendaPage() {
                 <div className="divide-y">
                   {items.map((item) => (
                     <div key={item.id} className="px-6 py-4">
-                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span
-                              className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${getTipoBadge(
-                                item.tipo
-                              )}`}
-                            >
-                              {item.tipo || "Acción"}
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              • {item.hora?.trim() || "00:00"}
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              {getOwnerLabel(item)} •{" "}
-                              <span className="font-semibold text-slate-700">
-                                {item.owner_name ?? "—"}
-                              </span>
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              • Comercial:{" "}
-                              <span className={item.comerciales?.nombre ? "font-semibold text-slate-900" : "text-slate-400"}>
-                                {item.comerciales?.nombre ?? "Sin asignar"}
-                              </span>
-                            </span>
-                          </div>
+                      {/* 1. Header (tipo + fecha/hora + estado) */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${getTipoBadge(
+                            item.tipo
+                          )}`}
+                        >
+                          {item.tipo || "Acción"}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          {item.fecha_limite} • {item.hora?.trim() || "00:00"}
+                        </span>
+                      </div>
 
-                          {item.nota && (
-                            <div className="mt-1 text-sm text-slate-700 whitespace-pre-wrap break-words">
-                              {item.nota}
-                            </div>
-                          )}
+                      {/* 2. Nota / Lugar (si aplica) */}
+                      {item.nota && (
+                        <div className="mt-2 text-sm text-slate-700 whitespace-pre-wrap break-words">
+                          {item.nota}
+                        </div>
+                      )}
+                      {item.lugar && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-xs text-slate-600">📍 {item.lugar}</span>
+                          <a
+                            href={buildMapsLink(item.lugar)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-blue-600 hover:underline"
+                          >
+                            Maps
+                          </a>
+                          <span className="text-xs text-slate-400">•</span>
+                          <a
+                            href={buildWazeLink(item.lugar)}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-blue-600 hover:underline"
+                          >
+                            Waze
+                          </a>
+                        </div>
+                      )}
 
-                          {item.lugar && (
-                            <div className="mt-2 flex items-center gap-2">
-                              <span className="text-xs text-slate-600">📍 {item.lugar}</span>
-                              <a
-                                href={buildMapsLink(item.lugar)}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs text-blue-600 hover:underline"
-                              >
-                                Maps
-                              </a>
-                              <span className="text-xs text-slate-400">•</span>
-                              <a
-                                href={buildWazeLink(item.lugar)}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs text-blue-600 hover:underline"
-                              >
-                                Waze
-                              </a>
-                            </div>
+                      {/* Lead + Comercial + Invitados en una línea (chips, wrap) */}
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] font-semibold text-slate-500">
+                          {item.owner_type === "lead" ? "LEAD:" : "SOCIO:"}
+                        </span>
+                        <span className="text-sm font-semibold text-slate-900">
+                          {item.owner_name ?? "—"}
+                        </span>
+
+                        <span className="mx-2 text-slate-200">|</span>
+
+                        <span className="text-[11px] font-semibold text-slate-500">COMERCIAL:</span>
+                        <span className="text-sm text-slate-900">{item.comerciales?.nombre ?? "—"}</span>
+
+                        <span className="mx-2 text-slate-200">|</span>
+
+                        <span className="text-[11px] font-semibold text-slate-500">INVITADOS:</span>
+                        <div className="flex flex-wrap gap-1">
+                          {(item.invited_user_ids ?? []).length === 0 ? (
+                            <span className="text-xs text-slate-500">—</span>
+                          ) : (
+                            (item.invited_user_ids ?? []).map((uid) => {
+                              const u = usersById.get(uid);
+                              return (
+                                <span
+                                  key={uid}
+                                  title={u ? `${u.nombre ?? ""} — ${u.email ?? ""}` : uid}
+                                  className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700"
+                                >
+                                  {userNameById(uid)}
+                                </span>
+                              );
+                            })
                           )}
                         </div>
+                      </div>
 
-                        <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                          <Link
-                            href={getOwnerLink(item)}
-                            className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                          >
-                            Abrir {getOwnerLabel(item)}
-                          </Link>
-
-                          <button
-                            type="button"
-                            onClick={() => handleEditActivity(item)}
-                            disabled={creating}
-                            className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                            Editar Oportunidad
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={markingId === item.id}
-                            onClick={() => markAsDone(item)}
-                            className={`rounded-xl px-3 py-2 text-xs font-semibold border ${
-                              markingId === item.id
-                                ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                                : "bg-slate-900 text-white border-slate-900 hover:opacity-95"
-                            }`}
-                          >
-                            {markingId === item.id ? "Marcando..." : "Marcar realizada"}
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={deletingId === item.id}
-                            onClick={() => deleteActivity(item)}
-                            className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
-                              deletingId === item.id
-                                ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                                : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
-                            }`}
-                            title="Borrar actividad"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                      {/* 5. Footer acciones (SIEMPRE abajo) */}
+                      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+                        <Link
+                          href={getOwnerLink(item)}
+                          className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Abrir {getOwnerLabel(item)}
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => handleEditActivity(item)}
+                          disabled={creating}
+                          className="rounded-xl border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={markingId === item.id}
+                          onClick={() => markAsDone(item)}
+                          className={`rounded-xl px-3 py-2 text-xs font-semibold border ${
+                            markingId === item.id
+                              ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                              : "bg-slate-900 text-white border-slate-900 hover:opacity-95"
+                          }`}
+                        >
+                          {markingId === item.id ? "Marcando..." : "Marcar realizada"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingId === item.id}
+                          onClick={() => deleteActivity(item)}
+                          className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+                            deletingId === item.id
+                              ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                              : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                          }`}
+                          title="Borrar actividad"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       </div>
                     </div>
                   ))}

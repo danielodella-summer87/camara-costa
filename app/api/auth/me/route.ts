@@ -26,6 +26,7 @@ export async function GET() {
     is_active,
     role_id,
     auth_user_id,
+    comercial_id,
     roles:roles ( id, name )
   `;
 
@@ -95,6 +96,7 @@ export async function GET() {
             role_id: appUser.role_id,
             role,
             auth_user_id: appUser.auth_user_id,
+            comercial_id: appUser.comercial_id ?? null,
           }
         : null,
     },
