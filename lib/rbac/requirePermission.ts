@@ -2,6 +2,10 @@ import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
 import { extractPermissionKeys } from "./extractPermissionKeys";
 
+const PERMISSION_ALIASES: Record<string, string> = {
+  "leads.create": "leads.write",
+};
+
 type AppUser = {
   id: string;
   role_id: string;
@@ -24,6 +28,7 @@ function getCookieFromHeader(cookieHeader: string | null, name: string) {
 }
 
 export async function requirePermission(req: Request, permissionKey: string) {
+  const key = PERMISSION_ALIASES[permissionKey] ?? permissionKey;
   const sb = supabaseAdmin();
   if (!sb) return null;
 
@@ -70,7 +75,7 @@ export async function requirePermission(req: Request, permissionKey: string) {
 
   const keys = extractPermissionKeys(perms);
 
-  if (!keys.includes(permissionKey)) return null;
+  if (!keys.includes(key)) return null;
 
   return user as AppUser;
 }
