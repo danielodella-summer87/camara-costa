@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import UserMenu from "@/app/admin/components/UserMenu";
+import { usePersonalizacion } from "@/lib/personalizacion";
+import { resolveUILabel } from "@/lib/ui/labels";
 
 type NavItem = { label: string; href: string };
 type RoleKey = "admin" | "operador" | "comercial" | "viewer";
@@ -19,8 +21,9 @@ const NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin" },
   { label: "Entidades", href: "/admin/empresas" },
   { label: "Leads", href: "/admin/leads" },
-  { label: "Socios", href: "/admin/socios" },
+  { label: "socios", href: "/admin/socios" },
   { label: "Agenda", href: "/admin/agenda" },
+  { label: "Reuniones", href: "/admin/reuniones" },
   { label: "Operaciones", href: "/admin/operaciones" },
   { label: "Reportes", href: "/admin/reportes" },
   { label: "Eventos", href: "/admin/eventos" },
@@ -30,7 +33,7 @@ const NAV: NavItem[] = [
   { label: "Configuración", href: "/admin/configuracion" },
 ];
 
-function cx(...classes: Array<string | false | null | undefined>) {
+function cx(...classes: Array<false | null | string | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
@@ -90,6 +93,11 @@ function filterNavByRole(role: RoleKey | null, nav: NavItem[]): NavItem[] {
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { clientePlural, clienteSingular } = usePersonalizacion();
+  const personalizacion = useMemo(
+    () => ({ clientePlural, clienteSingular }),
+    [clientePlural, clienteSingular]
+  );
   const [mobileOpen, setMobileOpen] = useState(false);
   const [role, setRole] = useState<RoleKey | null>(null);
   const [roleLoading, setRoleLoading] = useState(true);
@@ -147,6 +155,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <nav className="p-3 space-y-1">
             {filteredNav.map((item) => {
               const active = isActive(pathname, item.href);
+              const resolvedLabel = resolveUILabel(item.label as any, personalizacion);
               return (
                 <Link
                   key={item.href}
@@ -162,7 +171,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                   )}
                 >
                   <span className="h-2 w-2 rounded-full bg-white/20" />
-                  {item.label}
+                  <span>{resolvedLabel}</span>
                 </Link>
               );
             })}

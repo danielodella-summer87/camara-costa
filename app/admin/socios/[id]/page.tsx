@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
+import { getServerLabels } from "@/lib/labels/server";
 import EditSocioForm from "./EditSocioForm";
 import SocioAcciones from "./SocioAcciones";
 import DeleteSocioButton from "./DeleteSocioButton";
@@ -16,6 +17,7 @@ type Accion = {
 
 export default async function SocioDetailPage({ params }: { params: Promise<Params> }) {
   const { id } = await params;
+  const labels = await getServerLabels();
 
   // Socio con join a empresas
   const { data: socio, error: socioError } = await supabaseServer
@@ -32,14 +34,23 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
         </Link>
 
         <div className="mt-6 rounded-xl border bg-white p-6">
-          <div className="text-red-600 font-semibold">No pude cargar el socio.</div>
+          <div className="text-red-600 font-semibold">{`No pude cargar el ${labels.memberSingular.toLowerCase()}.`}</div>
           <div className="text-sm text-slate-600 mt-2">
-            {socioError?.message ?? "No se encontró el socio."}
+            {socioError?.message ?? `No se encontró el ${labels.memberSingular.toLowerCase()}.`}
           </div>
         </div>
       </div>
     );
   }
+
+  // Leads de este cliente (socio_id = id)
+  const { data: leadsRows } = await supabaseServer
+    .from("leads")
+    .select("id, nombre, email, telefono, estado, pipeline, is_member, member_since, created_at")
+    .eq("socio_id", id)
+    .order("created_at", { ascending: false });
+
+  const leadsDelCliente = Array.isArray(leadsRows) ? leadsRows : [];
 
   // Acciones (últimas 25)
   const { data: accionesRows } = await supabaseServer
@@ -68,6 +79,35 @@ export default async function SocioDetailPage({ params }: { params: Promise<Para
           <div className="text-sm text-slate-600">
             Alta: {socio.fecha_alta ?? "—"} · Próxima acción: {socio.proxima_accion ?? "—"}
           </div>
+
+          {/* Leads de este cliente */}
+          {leadsDelCliente.length > 0 && (
+            <div className="mt-4 rounded-xl border bg-slate-50 p-4">
+              <h2 className="text-sm font-semibold text-slate-900 mb-2">Leads de este cliente</h2>
+              <ul className="divide-y divide-slate-200 text-sm">
+                {leadsDelCliente.map((lead: { id: string; nombre?: string | null; email?: string | null; estado?: string | null; pipeline?: string | null; is_member?: boolean | null }) => (
+                  <li key={lead.id} className="py-2 flex items-center justify-between gap-2">
+                    <div>
+                      <Link href={`/admin/leads/${lead.id}`} className="font-medium text-blue-600 hover:underline">
+                        {lead.nombre ?? "—"}
+                      </Link>
+                      {lead.email && <span className="text-slate-600 ml-2">{lead.email}</span>}
+                      <span className="text-slate-500 ml-2">
+                        {lead.estado ?? "—"} · {lead.pipeline ?? "—"}
+                        {lead.is_member ? ` · ${labels.memberSingular}` : ""}
+                      </span>
+                    </div>
+                    <Link
+                      href={`/admin/leads/${lead.id}`}
+                      className="text-xs text-slate-500 hover:text-slate-700"
+                    >
+                      Ver →
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Datos de la empresa */}
           {(socio.empresas as any) && (

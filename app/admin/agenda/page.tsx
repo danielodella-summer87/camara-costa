@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Trash2, Pencil } from "lucide-react";
 import clsx from "clsx";
+import { usePersonalizacion } from "@/lib/personalizacion";
+import { resolveEntityName } from "@/lib/ui/labels";
 
 type OwnerType = "lead" | "socio";
 
@@ -544,9 +546,14 @@ export default function AgendaPage() {
     return "#";
   }
 
+  const { clientePlural, clienteSingular } = usePersonalizacion();
+  const personalizacion = { clientePlural, clienteSingular };
+  const labelSingularAgenda = resolveEntityName("singular", personalizacion);
+  const labelPluralAgenda = resolveEntityName("plural", personalizacion);
+
   function getOwnerLabel(item: AgendaItem): string {
     if (item.owner_type === "lead") return "Lead";
-    return "Socio";
+    return labelSingularAgenda;
   }
 
   function buildMapsLink(lugar: string): string {
@@ -928,13 +935,13 @@ export default function AgendaPage() {
                       className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                     >
                       <option value="lead">Lead</option>
-                      <option value="socio">Socio</option>
+                      <option value="socio">{labelSingularAgenda}</option>
                     </select>
                   </div>
 
                   <div className="relative owner-dropdown-container">
                     <label className="text-xs font-semibold text-slate-600">
-                      {createForm.owner_type === "lead" ? "Lead" : "Socio"} *
+                      {createForm.owner_type === "lead" ? "Lead" : labelSingularAgenda} *
                     </label>
                     <div className="relative">
                       <input
@@ -945,7 +952,7 @@ export default function AgendaPage() {
                           setShowOwnerDropdown(true);
                         }}
                         onFocus={() => setShowOwnerDropdown(true)}
-                        placeholder={`Buscar ${createForm.owner_type === "lead" ? "lead" : "socio"}...`}
+                        placeholder={`Buscar ${createForm.owner_type === "lead" ? "lead" : labelSingularAgenda.toLowerCase()}...`}
                         className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-200"
                       />
                       {showOwnerDropdown && (
@@ -1214,7 +1221,7 @@ export default function AgendaPage() {
               >
                 <option value="all">Todos</option>
                 <option value="lead">Leads</option>
-                <option value="socio">Socios</option>
+                <option value="socio">{labelPluralAgenda}</option>
               </select>
             </div>
 

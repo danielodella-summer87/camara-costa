@@ -12,7 +12,7 @@ export default function MesaDeAyudaCreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [type, setType] = useState<"bug" | "improvement" | "suggestion">("bug");
+  const [type, setType] = useState<"bug" | "improvement" | "suggestion">("improvement");
   const [priority, setPriority] = useState<"low" | "medium" | "high" | "critical">("medium");
 
   async function onSubmit(e: React.FormEvent) {
@@ -48,17 +48,8 @@ export default function MesaDeAyudaCreatePage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? "Error creando ticket");
 
-      // ✅ Blindado: data puede ser objeto o array
-      const raw = json?.data;
-      const id = Array.isArray(raw) ? raw?.[0]?.id : raw?.id;
-
-      if (id) {
-        router.push(`/admin/mesa-de-ayuda/${id}`);
-        router.refresh();
-      } else {
-        router.push("/admin/mesa-de-ayuda");
-        router.refresh();
-      }
+      router.push("/admin/mesa-de-ayuda");
+      router.refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error");
     } finally {

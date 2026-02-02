@@ -143,12 +143,9 @@ export default function MesaDeAyudaPage() {
         </div>
 
         <div className="overflow-hidden rounded-2xl border bg-white">
-          <div className="grid grid-cols-[1fr_140px_140px_140px_180px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+          <div className="grid grid-cols-[1fr_140px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
             <div>Título</div>
-            <div>Tipo</div>
-            <div>Prioridad</div>
             <div>Estado</div>
-            <div>Última actividad</div>
           </div>
 
           {loading ? (
@@ -161,23 +158,11 @@ export default function MesaDeAyudaPage() {
                 <Link
                   key={t.id}
                   href={`/admin/mesa-de-ayuda/${t.id}`}
-                  className="grid grid-cols-[1fr_140px_140px_140px_180px] items-center px-4 py-3 hover:bg-slate-50"
+                  className="grid grid-cols-[1fr_140px] items-center px-4 py-3 hover:bg-slate-50"
                 >
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-slate-900">{t.title}</div>
                     <div className="truncate text-xs text-slate-500">{t.description}</div>
-                  </div>
-
-                  <div>
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[t.type]}`}>
-                      {t.type === "bug" ? "Error" : t.type === "improvement" ? "Mejora" : "Sugerencia"}
-                    </span>
-                  </div>
-
-                  <div>
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${badge[t.priority]}`}>
-                      {t.priority === "low" ? "Baja" : t.priority === "medium" ? "Media" : t.priority === "high" ? "Alta" : "Crítica"}
-                    </span>
                   </div>
 
                   <div>
@@ -192,10 +177,6 @@ export default function MesaDeAyudaPage() {
                         ? "Resuelto"
                         : "Cerrado"}
                     </span>
-                  </div>
-
-                  <div className="text-xs text-slate-600">
-                    {new Date(t.last_activity_at ?? t.updated_at ?? t.created_at).toLocaleString()}
                   </div>
                 </Link>
               ))}

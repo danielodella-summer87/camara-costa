@@ -125,7 +125,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -170,6 +170,8 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const pipelineParam = searchParams.get("pipeline");
     const comercialIdParam = searchParams.get("comercial_id")?.trim() ?? null;
+    const socioIdParam = searchParams.get("socio_id")?.trim() ?? null;
+    const empresaIdParam = searchParams.get("empresa_id")?.trim() ?? null;
 
     let q = supabase
       .from("leads")
@@ -181,6 +183,14 @@ export async function GET(req: Request) {
 
     if (comercialIdParam) {
       q = q.eq("comercial_id", comercialIdParam);
+    }
+
+    if (socioIdParam) {
+      q = q.eq("socio_id", socioIdParam);
+    }
+
+    if (empresaIdParam) {
+      q = q.eq("empresa_id", empresaIdParam);
     }
 
     const { data, error } = await q

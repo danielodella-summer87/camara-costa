@@ -1234,7 +1234,7 @@ export default function LeadDetailPage() {
                 {lead?.is_member && (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                     <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-                    Socio
+                    {labels.memberSingular}
                     {lead.member_since && (
                       <span className="text-emerald-600">
                         desde {new Date(lead.member_since).toLocaleDateString("es-UY", { year: "numeric", month: "short", day: "numeric" })}
@@ -1292,10 +1292,9 @@ export default function LeadDetailPage() {
 
               <button
                 type="button"
-                onClick={() => setActiveTab("meet")}
-                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                disabled={disabled || !lead}
-                title="Ir a Meet Asistido"
+                disabled
+                className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-400 cursor-not-allowed"
+                title="Meet Asistido (en pausa)"
               >
                 Meet Asistido
               </button>
@@ -1410,22 +1409,11 @@ export default function LeadDetailPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab("meet")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "meet"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
+                disabled
+                className="px-4 py-2 text-sm font-semibold text-slate-400 bg-slate-100 cursor-not-allowed rounded-lg"
+                title="Meet Asistido (en pausa)"
               >
-                <span className="inline-flex items-center gap-2">
-                  Meet Asistido
-                  {activeSession?.id && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 border border-emerald-200">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-                      Activa
-                    </span>
-                  )}
-                </span>
+                Meet Asistido
               </button>
               <button
                 type="button"

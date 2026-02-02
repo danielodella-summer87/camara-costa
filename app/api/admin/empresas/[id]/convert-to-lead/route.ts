@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +25,12 @@ export async function POST(
   ctx: { params?: { id?: string } | Promise<{ id?: string }> }
 ) {
   try {
+    const { requirePermission } = await import("@/lib/rbac/requirePermission");
+    const user = await requirePermission(req as any, "leads.create");
+    if (!user) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+    }
+
     const params = ctx?.params ? await Promise.resolve(ctx.params as any) : undefined;
     const empresaId = params?.id;
 
@@ -35,7 +40,7 @@ export async function POST(
 
     const sb = supabaseAdmin();
 
-    // Validar "empresa existe" (NO formato)
+    // Validar "empresa existe"
     const { data: empresa, error: empErr } = await sb
       .from("empresas")
       .select("id,nombre,email,telefono,web,instagram,direccion,rubro_id")
@@ -45,42 +50,49 @@ export async function POST(
     if (empErr) return NextResponse.json({ error: empErr.message }, { status: 500 });
     if (!empresa) return NextResponse.json({ error: "Empresa no encontrada" }, { status: 404 });
 
-    // Evitar duplicados (si ya existe lead para esa empresa)
-    const { data: existingLead, error: leadCheckErr } = await sb
-      .from("leads")
-      .select("id")
-      .eq("empresa_id", empresaId)
-      .order("created_at", { ascending: false })
-      .limit(1)
+    // Resolver comercial_id: usuario logueado (app_users.comercial_id o email) o fallbacks
+    const { data: appUser } = await sb
+      .from("app_users")
+      .select("email, comercial_id")
+      .eq("id", user.id)
       .maybeSingle();
 
-    if (leadCheckErr) return NextResponse.json({ error: leadCheckErr.message }, { status: 500 });
+    let comercialId: string | null = appUser?.comercial_id ?? null;
 
-    if (existingLead?.id) {
-      // Asegurar que empresa_id esté seteado (por si quedó nulo por alguna corrida anterior)
-      // Usar helper seguro (aquí queremos SETEAR empresa_id explícitamente, es un cambio intencional)
-      await updateLeadSafe(sb, existingLead.id, { empresa_id: empresa.id }, {
-        force_unlink_entity: false, // Estamos vinculando, no desvinculando
-      });
-      
-      return NextResponse.json({ data: { lead_id: existingLead.id, already_existed: true } });
+    if (!comercialId && appUser?.email) {
+      const { data: byEmail } = await sb
+        .from("comerciales")
+        .select("id")
+        .ilike("email", String(appUser.email).trim())
+        .limit(1)
+        .maybeSingle();
+      comercialId = byEmail?.id ?? null;
     }
 
-    // Resolver comercial por defecto
-    const DEFAULT_COMERCIAL_NAME = "Sin asignar";
-
-    const { data: comercialDefault, error: comercialError } = await sb
-      .from("comerciales")
-      .select("id")
-      .eq("nombre", DEFAULT_COMERCIAL_NAME)
-      .maybeSingle();
-
-    if (comercialError || !comercialDefault?.id) {
-      throw new Error("No existe comercial por defecto 'Sin asignar'");
+    if (!comercialId) {
+      const { data: firstComercial } = await sb
+        .from("comerciales")
+        .select("id")
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      comercialId = firstComercial?.id ?? null;
     }
 
-    // Insert del lead (vinculando empresa_id y comercial_id)
-    const payload: any = {
+    if (!comercialId) {
+      const { data: sinAsignar } = await sb
+        .from("comerciales")
+        .select("id")
+        .eq("nombre", "Sin asignar")
+        .maybeSingle();
+      comercialId = sinAsignar?.id ?? null;
+    }
+
+    const DEFAULT_COMERCIAL_ID = "3ceafb59-8e5a-478c-b534-1dc6f9b22583";
+    if (!comercialId) comercialId = DEFAULT_COMERCIAL_ID;
+
+    // Siempre insert: nuevo lead con empresa_id y comercial_id
+    const payload: Record<string, unknown> = {
       empresa_id: empresa.id,
       nombre: empresa.nombre,
       email: empresa.email ?? null,
@@ -89,13 +101,8 @@ export async function POST(
       notas: empresa.instagram ? `IG: ${empresa.instagram}` : null,
       origen: "Desde entidad",
       pipeline: "Nuevo",
-      comercial_id: comercialDefault.id,
+      comercial_id: comercialId,
     };
-
-    // Blindaje extra (defensivo)
-    if (!payload.comercial_id) {
-      payload.comercial_id = comercialDefault.id;
-    }
 
     const { data: created, error: createErr } = await sb
       .from("leads")
@@ -105,7 +112,7 @@ export async function POST(
 
     if (createErr) return NextResponse.json({ error: createErr.message }, { status: 500 });
 
-    return NextResponse.json({ data: { lead_id: created.id, already_existed: false } });
+    return NextResponse.json({ data: { lead_id: created.id } });
   } catch (err: any) {
     return NextResponse.json({ error: String(err?.message || err) }, { status: 500 });
   }

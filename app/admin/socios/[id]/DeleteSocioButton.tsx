@@ -2,17 +2,22 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { usePersonalizacion } from "@/lib/personalizacion";
+import { resolveEntityName } from "@/lib/ui/labels";
 
 type ApiResp<T> = { data?: T | null; error?: string | null; warning?: string };
 
 export default function DeleteSocioButton({ socioId }: { socioId: string }) {
   const router = useRouter();
+  const { clienteSingular, clientePlural } = usePersonalizacion();
+  const personalizacion = { clienteSingular, clientePlural };
+  const labelSingular = resolveEntityName("singular", personalizacion);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleDelete() {
     const confirmed = window.confirm(
-      "¿Eliminar este socio? El lead asociado volverá a etapa 'Nuevo'. Esta acción no se puede deshacer."
+      `¿Eliminar este ${labelSingular.toLowerCase()}? El lead asociado volverá a etapa 'Nuevo'. Esta acción no se puede deshacer.`
     );
 
     if (!confirmed) return;
@@ -35,16 +40,16 @@ export default function DeleteSocioButton({ socioId }: { socioId: string }) {
 
       // Mostrar feedback
       if (json?.warning) {
-        alert(`Socio eliminado. ${json.warning}`);
+        alert(`${labelSingular} eliminado. ${json.warning}`);
       } else {
-        alert("Socio eliminado. Lead devuelto a Nuevo.");
+        alert(`${labelSingular} eliminado. Lead devuelto a Nuevo.`);
       }
 
       // Redirigir a lista de socios
       router.push("/admin/socios");
       router.refresh();
     } catch (e: any) {
-      setError(e?.message ?? "Error eliminando socio");
+      setError(e?.message ?? `Error eliminando ${labelSingular.toLowerCase()}`);
       setDeleting(false);
     }
   }
@@ -55,7 +60,7 @@ export default function DeleteSocioButton({ socioId }: { socioId: string }) {
         <div>
           <div className="text-sm font-semibold text-red-900">Zona de peligro</div>
           <div className="mt-1 text-xs text-red-700">
-            Eliminar este socio devolverá el lead asociado a etapa "Nuevo".
+            Eliminar este {labelSingular.toLowerCase()} devolverá el lead asociado a etapa "Nuevo".
           </div>
         </div>
         <button
@@ -64,7 +69,7 @@ export default function DeleteSocioButton({ socioId }: { socioId: string }) {
           disabled={deleting}
           className="rounded-xl border border-red-300 bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {deleting ? "Eliminando…" : "Eliminar socio"}
+          {deleting ? "Eliminando…" : `Eliminar ${labelSingular.toLowerCase()}`}
         </button>
       </div>
 

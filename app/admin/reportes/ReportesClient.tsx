@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { RoleTabs } from "@/components/reports/RoleTabs";
+import { usePersonalizacion } from "@/lib/personalizacion";
+import { resolveEntityName } from "@/lib/ui/labels";
 
 type TabKey =
   | "resumen"
@@ -62,6 +64,8 @@ function Card({ r }: { r: ReportCard }) {
 export default function ReportesClient() {
   const sp = useSearchParams();
   const tab = (sp.get("tab") as TabKey | null) ?? "resumen";
+  const { clientePlural, clienteSingular } = usePersonalizacion();
+  const labelPlural = resolveEntityName("plural", { clientePlural, clienteSingular });
 
   const title = "Reportes";
   const subtitle = "Catálogo de reportes (listados con filtros + export). Elegí un rol.";
@@ -77,7 +81,7 @@ export default function ReportesClient() {
     ],
     direccion: [
       {
-        title: "Ingresos / Socios / Renovaciones (demo)",
+        title: `Ingresos / ${labelPlural} / Renovaciones (demo)`,
         desc: "KPIs y listados ejecutivos (cuando tengamos datos reales).",
         disabled: true,
         tag: "próximo",

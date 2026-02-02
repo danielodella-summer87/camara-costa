@@ -6,6 +6,8 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import { RoleTabs } from "@/components/reports/RoleTabs";
 import { RolePanels } from "@/components/reports/RolePanels";
 import { WhatsAppCallCard } from "@/components/admin/WhatsAppCallCard";
+import { usePersonalizacion } from "@/lib/personalizacion";
+import { resolveEntityName } from "@/lib/ui/labels";
 
 type TabKey =
   | "resumen"
@@ -33,6 +35,9 @@ export default function AdminClient() {
   const sp = useSearchParams();
   const tab = safeTab(sp.get("tab"));
   const areaLabel = TAB_LABEL[tab];
+  const { clientePlural, clienteSingular } = usePersonalizacion();
+  const personalizacion = { clientePlural, clienteSingular };
+  const labelPlural = resolveEntityName("plural", personalizacion);
 
   return (
     <PageContainer>
@@ -57,6 +62,12 @@ export default function AdminClient() {
                 className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
               >
                 Ir a Leads
+              </Link>
+              <Link
+                href="/admin/socios"
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+              >
+                Ir a {labelPlural}
               </Link>
             </div>
           </div>

@@ -46,12 +46,12 @@ const roleColorMap: Record<string, { bg: string; text: string }> = {
 };
 const defaultRoleColor = { bg: "bg-gray-400", text: "text-gray-600" };
 
-/** Detecta si un valor parece username técnico (ej: test-comercial, admin, user_123). */
+/** Detecta si un valor parece username técnico (ej: test-comercial, user_123). */
 function isTechnicalUsername(s: string | null | undefined): boolean {
   if (!s || !s.trim()) return true;
   const t = s.trim().toLowerCase();
   if (t.length < 2) return true;
-  if (/^test[-_]/.test(t) || /^demo[-_]?/.test(t) || /^user[-_]?\d*$/.test(t)) return true;
+  if (/^test[-_]/.test(t) || /^user[-_]?\d*$/.test(t)) return true;
   if (t === "admin") return true;
   return false;
 }

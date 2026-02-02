@@ -85,6 +85,7 @@ export default function EmpresaDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [empresa, setEmpresa] = useState<Empresa | null>(null);
+  const [leadsCount, setLeadsCount] = useState<number | null>(null);
 
   // modo edición
   const [editing, setEditing] = useState(false);
@@ -125,6 +126,14 @@ export default function EmpresaDetailPage() {
             }
           : null
       );
+
+      setLeadsCount(null);
+      fetch(`/api/admin/leads?empresa_id=${finalId}&limit=500`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((j: { data?: unknown[] }) => {
+          setLeadsCount(Array.isArray(j?.data) ? j.data.length : 0);
+        })
+        .catch(() => setLeadsCount(0));
 
       // si NO estoy editando, limpio draft
       if (!editing) setDraft({});
@@ -345,14 +354,27 @@ export default function EmpresaDetailPage() {
                   Editar
                 </button>
 
-                <button
-                  type="button"
-                  onClick={convertToLead}
-                  className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                  disabled={disabled || !empresa}
-                >
-                  Convertir en lead
-                </button>
+                <div className="flex flex-col items-start gap-0.5">
+                  <button
+                    type="button"
+                    onClick={convertToLead}
+                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    disabled={disabled || !empresa}
+                  >
+                    + Crear nuevo lead
+                  </button>
+                  {leadsCount !== null && leadsCount > 0 && (
+                    <p className="text-sm text-slate-600">
+                      Esta entidad ya tiene{" "}
+                      <Link
+                        href={`/admin/leads?empresa_id=${id}`}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        {leadsCount} lead{leadsCount !== 1 ? "s" : ""}
+                      </Link>
+                    </p>
+                  )}
+                </div>
               </>
             ) : (
               <>

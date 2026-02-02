@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
@@ -14,6 +15,7 @@ type Lead = {
   origen: string | null;
   pipeline: string | null;
   notas: string | null;
+  objetivos?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   estado?: string | null;
@@ -307,6 +309,9 @@ export default function LeadsPage() {
   // ✅ Permisos RBAC
   const { hasPermission } = usePermissions();
 
+  const searchParams = useSearchParams();
+  const empresaIdFromUrl = searchParams.get("empresa_id")?.trim() ?? null;
+
   // filtros
   const [q, setQ] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<string>("Todos");
@@ -345,7 +350,10 @@ export default function LeadsPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/admin/leads", {
+      const url = empresaIdFromUrl
+        ? `/api/admin/leads?empresa_id=${encodeURIComponent(empresaIdFromUrl)}`
+        : "/api/admin/leads";
+      const res = await fetch(url, {
         method: "GET",
         cache: "no-store",
         headers: { "Cache-Control": "no-store" },
@@ -383,7 +391,7 @@ export default function LeadsPage() {
   useEffect(() => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [empresaIdFromUrl]);
 
   const pipelineOptions = useMemo(() => {
     // usamos pipelines de DB para que aparezcan aunque no tengan leads todavía
@@ -655,6 +663,14 @@ export default function LeadsPage() {
             <p className="mt-2 text-sm text-zinc-600">
               Captura, origen, pipeline, notas y seguimiento. (A = texto)
             </p>
+            {empresaIdFromUrl && (
+              <p className="mt-1 text-sm text-slate-600">
+                Filtrando por entidad{" "}
+                <Link href="/admin/leads" className="text-blue-600 hover:underline">
+                  (ver todos)
+                </Link>
+              </p>
+            )}
 
             {/* ✅ Switch en modo LISTA */}
             <div className="mt-3 flex items-center gap-3">
@@ -819,63 +835,81 @@ export default function LeadsPage() {
           ) : filtered.length === 0 ? (
             <div className="px-4 py-6 text-sm text-slate-500">No hay leads para mostrar.</div>
           ) : (
-              <div className="divide-y divide-slate-200">
+            <table className="w-full min-w-[640px]">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="w-10 px-3 py-2 text-left text-xs font-semibold text-slate-600">
+                    <span className="sr-only">Selección</span>
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
+                    Nombre
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
+                    Objetivo
+                  </th>
+                  <th className="w-20 px-3 py-2 text-right text-xs font-semibold text-slate-600">
+                    Acciones
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
               {filtered.map((l) => {
                 const checked = selectedIds.has(l.id);
 
                 return (
-                  <div
+                  <tr
                     key={l.id}
-                      className="group relative flex items-center gap-4 border-b border-slate-100 px-4 py-3 transition-colors hover:bg-slate-50 focus-within:bg-slate-50 md:min-h-[56px]"
+                    className="group transition-colors hover:bg-slate-50 focus-within:bg-slate-50"
+                  >
+                    <td
+                      className="px-3 py-2 align-top"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {/* Checkbox - no navega */}
-                      <div
-                        className="flex items-center justify-center"
-                        onClick={(e) => e.stopPropagation()}
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOne(l.id)}
+                        disabled={disabled}
+                        className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
+                      />
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <Link
+                        href={`/admin/leads/${l.id}`}
+                        className="flex flex-wrap items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded"
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleOne(l.id)}
-                          disabled={disabled}
-                          className="h-4 w-4 cursor-pointer rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
-                        />
-                      </div>
-
-                      {/* Fila: izquierda nombre + comercial, derecha botones */}
-                      <div className="flex flex-1 items-center justify-between gap-4 min-w-0">
-                        {/* IZQUIERDA: Nombre del lead + Comercial (clickeable) */}
-                        <Link
-                          href={`/admin/leads/${l.id}`}
-                          className="flex min-w-0 flex-1 flex-wrap items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded"
-                        >
-                          <span className={`font-semibold truncate ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
-                            {l.nombre ?? <span className="text-slate-400">—</span>}
+                        <span className={`font-semibold truncate ${norm(l.pipeline) === norm("Ganado") ? "text-emerald-700" : "text-slate-900"}`}>
+                          {l.nombre ?? <span className="text-slate-400">—</span>}
+                        </span>
+                        {l.comerciales?.nombre && (
+                          <span className="text-xs rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 whitespace-nowrap font-medium">
+                            {l.comerciales.nombre}
                           </span>
-                          {l.comerciales?.nombre && (
-                            <span className="text-xs rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 whitespace-nowrap font-medium">
-                              {l.comerciales.nombre}
-                            </span>
-                          )}
-                          <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                            Etapa: {l.pipeline ?? "—"}
-                          </span>
-                        </Link>
-
-                        {/* DERECHA: Botones */}
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <Link
-                            href={`/admin/leads/${l.id}`}
-                            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
-                          >
-                            Ver
-                          </Link>
-                        </div>
-                      </div>
-                  </div>
+                        )}
+                        <span className="rounded-full border border-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                          Etapa: {l.pipeline ?? "—"}
+                        </span>
+                      </Link>
+                    </td>
+                    <td
+                      className="px-3 py-2 text-sm text-slate-700 max-w-[280px] truncate align-top"
+                      title={l.objetivos || ""}
+                    >
+                      {l.objetivos?.trim() || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right align-top">
+                      <Link
+                        href={`/admin/leads/${l.id}`}
+                        className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap"
+                      >
+                        Ver
+                      </Link>
+                    </td>
+                  </tr>
                 );
               })}
-            </div>
+              </tbody>
+            </table>
           )}
           </div>
         </div>

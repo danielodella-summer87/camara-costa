@@ -24,8 +24,8 @@ type ApiResp<T> = { data?: T | null; error?: string | null };
 /**
  * POST /api/admin/leads/:id/convert-to-member
  * Convierte un lead en socio:
- * - Actualiza lead: is_member=true, member_since=now()
- * - Crea o actualiza registro en tabla socios con datos del lead
+ * - Si ya existe socio para esa empresa_id → no crear; setear lead (socio_id, is_member, member_since).
+ * - Si no existe socio → crear y luego setear lead.
  */
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
-    // 1. Obtener datos completos del lead
+    // 1. Obtener lead (incluyendo empresa_id)
     const leadCheck = await sb
       .from("leads")
       .select("id, nombre, email, telefono, is_member, empresa_id")
@@ -49,43 +49,28 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     }
 
     const lead = leadCheck.data;
-    const now = new Date().toISOString();
     const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
 
-    // 2. Actualizar lead: is_member=true, member_since=now()
-    const updateLead = await sb
-      .from("leads")
-      .update({
-        is_member: true,
-        member_since: now,
-      })
-      .eq("id", id)
-      .select("id, nombre, is_member, member_since")
-      .maybeSingle();
-
-    if (updateLead.error) {
+    // 2. Si no hay empresa_id → error claro
+    if (lead.empresa_id == null || lead.empresa_id === "") {
       return NextResponse.json(
-        { data: null, error: `Error actualizando lead: ${updateLead.error.message}` } satisfies ApiResp<null>,
-        { status: 500 }
+        { data: null, error: "empresa_id requerido para convertir a socio" } satisfies ApiResp<null>,
+        { status: 400 }
       );
     }
 
-    // 3. Calcular socioId de forma segura
-    // 3.1 Buscar socio existente por lead_id
-    const existingSocio = await sb
+    // 3. Buscar socio existente
+    const existing = await sb
       .from("socios")
       .select("id")
-      .eq("lead_id", id)
+      .eq("empresa_id", lead.empresa_id)
       .maybeSingle();
 
-    let socioId: string;
+    // 4. socioId = existing?.data?.id ?? (crear socio y tomar id)
+    let socioId: string | undefined = existing?.data?.id ?? undefined;
+    let socioForResponse: { id: string; [k: string]: unknown } | null = existing?.data ?? null;
 
-    if (existingSocio.data?.id) {
-      // Si ya existe, usar su id
-      socioId = existingSocio.data.id;
-    } else {
-      // Si no existe, generar uno nuevo tipo S-001, S-002...
-      // Buscar el último socio ordenando por id desc (o created_at desc)
+    if (socioId == null) {
       const lastSocio = await sb
         .from("socios")
         .select("id")
@@ -98,49 +83,75 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         const match = String(lastSocio.data.id).match(/^S-(\d+)$/);
         if (match) {
           const num = parseInt(match[1], 10);
-          const nextNum = num + 1;
-          socioId = `S-${String(nextNum).padStart(3, "0")}`;
+          socioId = `S-${String(num + 1).padStart(3, "0")}`;
         }
       }
+
+      const socioDataBase: Record<string, unknown> = {
+        id: socioId,
+        lead_id: id,
+        nombre: lead.nombre ?? null,
+        email: lead.email ?? null,
+        telefono: lead.telefono ?? null,
+        empresa_id: lead.empresa_id,
+        plan: "Bronce",
+        estado: "Activo",
+        fecha_alta: today,
+        proxima_accion: null,
+      };
+
+      let upsertSocio = await sb
+        .from("socios")
+        .upsert({ ...socioDataBase, codigo: socioId }, { onConflict: "lead_id" })
+        .select("id, codigo, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
+        .maybeSingle();
+
+      if (upsertSocio.error?.message?.includes("codigo")) {
+        upsertSocio = await sb
+          .from("socios")
+          .upsert(socioDataBase, { onConflict: "lead_id" })
+          .select("id, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
+          .maybeSingle();
+      }
+
+      if (upsertSocio.error) {
+        return NextResponse.json(
+          { data: null, error: `Error creando socio: ${upsertSocio.error.message}` } satisfies ApiResp<null>,
+          { status: 500 }
+        );
+      }
+      socioForResponse = upsertSocio.data ?? null;
+    } else if (socioForResponse && Object.keys(socioForResponse).length <= 1) {
+      const full = await sb
+        .from("socios")
+        .select("id, codigo, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
+        .eq("id", socioId)
+        .maybeSingle();
+      if (full.data) socioForResponse = full.data as { id: string; [k: string]: unknown };
     }
 
-    // 4. Preparar socioData con id SIEMPRE presente
-    const socioDataBase: any = {
-      id: socioId,
-      lead_id: id,
-      nombre: lead.nombre ?? null,
-      email: lead.email ?? null,
-      telefono: lead.telefono ?? null,
-      empresa_id: lead.empresa_id ?? null,
-      plan: "Bronce",
-      estado: "Activo",
-      fecha_alta: today,
-      proxima_accion: null,
-    };
+    if (!socioId) {
+      return NextResponse.json(
+        { data: null, error: "Error obteniendo o creando socio" } satisfies ApiResp<null>,
+        { status: 500 }
+      );
+    }
 
-    // 5. Intentar upsert con codigo (si existe la columna)
-    let upsertSocio;
-    let socioData = { ...socioDataBase, codigo: socioId };
-
-    upsertSocio = await sb
-      .from("socios")
-      .upsert(socioData, { onConflict: "lead_id" })
-      .select("id, codigo, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
+    // 5. Actualizar lead
+    const updateLead = await sb
+      .from("leads")
+      .update({
+        socio_id: socioId,
+        is_member: true,
+        member_since: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select("id, nombre, is_member, member_since, socio_id")
       .maybeSingle();
 
-    // Si falla por columna codigo, reintentar sin codigo
-    if (upsertSocio.error && upsertSocio.error.message?.includes("codigo")) {
-      socioData = socioDataBase; // Sin codigo
-      upsertSocio = await sb
-        .from("socios")
-        .upsert(socioData, { onConflict: "lead_id" })
-        .select("id, lead_id, empresa_id, plan, estado, fecha_alta, proxima_accion, nombre, email, telefono")
-        .maybeSingle();
-    }
-
-    if (upsertSocio.error) {
+    if (updateLead.error) {
       return NextResponse.json(
-        { data: null, error: `Error creando/actualizando socio: ${upsertSocio.error.message}` } satisfies ApiResp<null>,
+        { data: null, error: `Error actualizando lead: ${updateLead.error.message}` } satisfies ApiResp<null>,
         { status: 500 }
       );
     }
@@ -181,7 +192,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       {
         data: {
           lead: updateLead.data,
-          socio: upsertSocio.data,
+          socio: socioForResponse,
         },
         error: null,
       } satisfies ApiResp<any>,
