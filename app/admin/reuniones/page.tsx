@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type MeetingType = "discovery" | "proposal" | "closing";
@@ -467,6 +467,171 @@ function saveChecklistState(key: string, state: Record<string, boolean>): void {
   }
 }
 
+// ——— Draft único por lead + tipo (localStorage): checkState + cierre + log ———
+const DRAFT_STORAGE_PREFIX = "reuniones:draft";
+
+function getDraftKey(leadId: string, activeTypeId: string): string {
+  return `${DRAFT_STORAGE_PREFIX}:${leadId}:${activeTypeId}`;
+}
+
+type DraftState = {
+  checkState: Record<string, boolean>;
+  emotional_state: string;
+  conviction: string;
+  next_objective: string;
+  log: { at: string; text: string }[];
+};
+
+type TemplateItemLike = { id: string };
+
+function loadDraft(
+  leadId: string,
+  activeTypeId: string,
+  templateItems: TemplateItemLike[]
+): DraftState {
+  if (typeof window === "undefined") {
+    const checkState: Record<string, boolean> = {};
+    for (const it of templateItems) checkState[it.id] = false;
+    return { checkState, emotional_state: "", conviction: "", next_objective: "", log: [] };
+  }
+  try {
+    const raw = window.localStorage.getItem(getDraftKey(leadId, activeTypeId));
+    if (!raw) {
+      const checkState: Record<string, boolean> = {};
+      for (const it of templateItems) checkState[it.id] = false;
+      return { checkState, emotional_state: "", conviction: "", next_objective: "", log: [] };
+    }
+    const parsed = JSON.parse(raw) as Partial<DraftState>;
+    const checkState: Record<string, boolean> = {};
+    for (const it of templateItems) {
+      checkState[it.id] = parsed?.checkState?.[it.id] === true;
+    }
+    const logRaw = Array.isArray(parsed?.log) ? parsed.log : [];
+    const log = logRaw.map((e) => ({
+      at: typeof e?.at === "string" ? e.at : new Date().toISOString(),
+      text: typeof e?.text === "string" ? e.text : "",
+    }));
+    return {
+      checkState,
+      emotional_state: typeof parsed?.emotional_state === "string" ? parsed.emotional_state : "",
+      conviction: typeof parsed?.conviction === "string" ? parsed.conviction : "",
+      next_objective: typeof parsed?.next_objective === "string" ? parsed.next_objective : "",
+      log,
+    };
+  } catch {
+    const checkState: Record<string, boolean> = {};
+    for (const it of templateItems) checkState[it.id] = false;
+    return { checkState, emotional_state: "", conviction: "", next_objective: "", log: [] };
+  }
+}
+
+function saveDraft(leadId: string, activeTypeId: string, draft: DraftState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getDraftKey(leadId, activeTypeId), JSON.stringify(draft));
+  } catch (e) {
+    console.error("Error guardando draft en localStorage:", e);
+  }
+}
+
+// ——— Preferencias UI (acordeón Mapa de ruta / Checklist) por lead + tipo ———
+const UI_PREFS_PREFIX = "reuniones:ui";
+
+function getUiPrefsKey(leadId: string, activeTypeId: string): string {
+  return `${UI_PREFS_PREFIX}:${leadId}:${activeTypeId}`;
+}
+
+type UiPrefs = { openRuta: boolean; openChecklist: boolean };
+
+function loadUiPrefs(key: string): UiPrefs | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<UiPrefs>;
+    if (parsed && typeof parsed.openRuta === "boolean" && typeof parsed.openChecklist === "boolean") {
+      return { openRuta: parsed.openRuta, openChecklist: parsed.openChecklist };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveUiPrefs(key: string, prefs: UiPrefs): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(prefs));
+  } catch (e) {
+    console.error("Error guardando UI prefs en localStorage:", e);
+  }
+}
+
+// ——— activeItemId (modo foco checklist) por lead + tipo ———
+const FOCUS_STORAGE_PREFIX = "reuniones:focus";
+
+function getFocusKey(leadId: string, meetingType: string): string {
+  return `${FOCUS_STORAGE_PREFIX}:${leadId}:${meetingType}`;
+}
+
+function loadActiveItemId(leadId: string, meetingType: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(getFocusKey(leadId, meetingType));
+    if (!raw) return null;
+    const s = String(raw).trim();
+    return s.length ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveItemId(leadId: string, meetingType: string, id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(getFocusKey(leadId, meetingType), id);
+    else window.localStorage.removeItem(getFocusKey(leadId, meetingType));
+  } catch (e) {
+    console.error("Error guardando activeItemId en localStorage:", e);
+  }
+}
+
+// ——— Micro-notas rápidas por lead + tipo ———
+type QuickNoteItem = { id: string; atISO: string; text: string };
+const NOTES_STORAGE_PREFIX = "reuniones:notes";
+
+function getNotesKey(leadId: string, meetingType: string): string {
+  return `${NOTES_STORAGE_PREFIX}:${leadId}:${meetingType}`;
+}
+
+function loadQuickNotes(leadId: string, meetingType: string): QuickNoteItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(getNotesKey(leadId, meetingType));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((e: unknown) => e && typeof e === "object" && "id" in e && "atISO" in e && "text" in e)
+      .map((e: { id: string; atISO: string; text: string }) => ({
+        id: String(e.id),
+        atISO: String(e.atISO),
+        text: String(e.text),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveQuickNotes(leadId: string, meetingType: string, notes: QuickNoteItem[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getNotesKey(leadId, meetingType), JSON.stringify(notes));
+  } catch (e) {
+    console.error("Error guardando notas en localStorage:", e);
+  }
+}
+
 const MAPA_DESCUBRIMIENTO: EtapaRuta[] = [
   { etapa: "Apertura y rapport", tiempo: "2 min", regla: "Hablar (presentación breve)" },
   { etapa: "Objetivo de la reunión", tiempo: "1 min", regla: "Hablar" },
@@ -554,6 +719,18 @@ type LeadDoc = {
   created_at: string | null;
 };
 
+type ClosingForm = {
+  emotional_state: string;
+  conviction: string;
+  next_objective: string;
+};
+
+const EMOTIONAL_CHIPS = [
+  { value: "positivo", label: "Positivo" },
+  { value: "neutro", label: "Neutro" },
+  { value: "negativo", label: "Negativo" },
+] as const;
+
 export default function ReunionesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -587,29 +764,77 @@ export default function ReunionesPage() {
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
 
+  const [closingFormByType, setClosingFormByType] = useState<Record<string, ClosingForm>>({});
+
+  const [openRuta, setOpenRuta] = useState(true);
+  const [openChecklist, setOpenChecklist] = useState(true);
+
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const [quickNote, setQuickNote] = useState("");
+  const [notes, setNotes] = useState<QuickNoteItem[]>([]);
+  const [openNotePanel, setOpenNotePanel] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  const mapPanelRef = useRef<HTMLDivElement>(null);
+  const checklistPanelRef = useRef<HTMLDivElement>(null);
+
+  const draftPayloadRef = useRef<DraftState | null>(null);
+  const draftLeadIdRef = useRef<string>("");
+  const draftTypeIdRef = useRef<string>("");
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DRAFT_DEBOUNCE_MS = 600;
+
   const activeMeeting = TYPE_ID_TO_KEY[activeTypeId] ?? "discovery";
 
-  // Cargar checklist del tab activo al cambiar leadId o activeTypeId
+  // Cargar draft (checkState + cierre + log) al cambiar leadId o activeTypeId
   useEffect(() => {
     if (!leadId) return;
-    const key = getChecklistKey(leadId, activeTypeId);
     const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
     const templateItems = typeDef?.items ?? [];
-    const state = loadChecklistState(key, templateItems);
-    setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: state }));
+    const draft = loadDraft(leadId, activeTypeId, templateItems);
+    setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: draft.checkState }));
+    setClosingFormByType((prev) => ({
+      ...prev,
+      [activeTypeId]: {
+        emotional_state: draft.emotional_state,
+        conviction: draft.conviction,
+        next_objective: draft.next_objective,
+      },
+    }));
+    setMeetingState((prev) => ({ ...prev, log: draft.log }));
   }, [leadId, activeTypeId]);
 
-  // Cargar meeting state (log) desde localStorage al entrar al tab
+  // Guardar draft con debounce; flush al desmontar
   useEffect(() => {
     if (!leadId) return;
-    const st = loadMeetingState(leadId, activeMeeting);
-    setMeetingState(st);
-  }, [leadId, activeMeeting]);
+    const payload: DraftState = {
+      checkState: checkStateByType[activeTypeId] ?? {},
+      emotional_state: closingFormByType[activeTypeId]?.emotional_state ?? "",
+      conviction: closingFormByType[activeTypeId]?.conviction ?? "",
+      next_objective: closingFormByType[activeTypeId]?.next_objective ?? "",
+      log: meetingState.log ?? [],
+    };
+    draftPayloadRef.current = payload;
+    draftLeadIdRef.current = leadId;
+    draftTypeIdRef.current = activeTypeId;
 
-  useEffect(() => {
-    if (!leadId) return;
-    saveMeetingState(leadId, activeMeeting, meetingState);
-  }, [leadId, activeMeeting, meetingState]);
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = setTimeout(() => {
+      saveDraft(leadId, activeTypeId, payload);
+      draftSaveTimerRef.current = null;
+    }, DRAFT_DEBOUNCE_MS);
+
+    return () => {
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+      const ld = draftLeadIdRef.current;
+      const ty = draftTypeIdRef.current;
+      const pl = draftPayloadRef.current;
+      if (ld && ty && pl) saveDraft(ld, ty, pl);
+    };
+  }, [leadId, activeTypeId, checkStateByType[activeTypeId], closingFormByType[activeTypeId], meetingState.log]);
 
   // Ocultar "Guardado automático ✅" después de 2,5 s
   useEffect(() => {
@@ -617,6 +842,58 @@ export default function ReunionesPage() {
     const t = setTimeout(() => setChecklistSavedAt(null), 2500);
     return () => clearTimeout(t);
   }, [checklistSavedAt]);
+
+  // Cargar preferencias UI (acordeón) al cambiar leadId o activeTypeId: localStorage o default mobile/desktop
+  useEffect(() => {
+    if (!leadId) return;
+    const key = getUiPrefsKey(leadId, activeTypeId);
+    const stored = loadUiPrefs(key);
+    if (stored) {
+      setOpenRuta(stored.openRuta);
+      setOpenChecklist(stored.openChecklist);
+    } else {
+      const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches;
+      setOpenRuta(!isMobile);
+      setOpenChecklist(!isMobile);
+    }
+  }, [leadId, activeTypeId]);
+
+  // Guardar preferencias UI cuando cambian openRuta u openChecklist
+  useEffect(() => {
+    if (!leadId) return;
+    saveUiPrefs(getUiPrefsKey(leadId, activeTypeId), { openRuta, openChecklist });
+  }, [leadId, activeTypeId, openRuta, openChecklist]);
+
+  // Detección mobile (max-width: 768px)
+  useEffect(() => {
+    const mq = typeof window !== "undefined" ? window.matchMedia("(max-width: 768px)") : null;
+    if (!mq) return;
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  // Cargar activeItemId y notas al cambiar leadId o activeTypeId
+  useEffect(() => {
+    if (!leadId) {
+      setActiveItemId(null);
+      setNotes([]);
+      return;
+    }
+    const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
+    const items = typeDef?.items ?? [];
+    const storedId = loadActiveItemId(leadId, activeTypeId);
+    const validId = storedId && items.some((it) => it.id === storedId) ? storedId : null;
+    setActiveItemId(validId);
+    setNotes(loadQuickNotes(leadId, activeTypeId));
+  }, [leadId, activeTypeId]);
+
+  // Guardar activeItemId cuando cambia (para modo foco)
+  useEffect(() => {
+    if (!leadId || activeItemId == null) return;
+    saveActiveItemId(leadId, activeTypeId, activeItemId);
+  }, [leadId, activeTypeId, activeItemId]);
 
   // Propuestas del lead: traer al montar/cambiar leadId; quedarse con la más reciente (list[0], API ordena por created_at desc)
   useEffect(() => {
@@ -675,6 +952,16 @@ export default function ReunionesPage() {
       alive = false;
     };
   }, [leadId]);
+
+  function setClosingField(field: keyof ClosingForm, value: string) {
+    setClosingFormByType((prev) => ({
+      ...prev,
+      [activeTypeId]: {
+        ...(prev[activeTypeId] ?? { emotional_state: "", conviction: "", next_objective: "" }),
+        [field]: value,
+      },
+    }));
+  }
 
   // Cargar checks + bitácora desde localStorage cuando cambia leadId o activeTab
   useEffect(() => {
@@ -879,38 +1166,30 @@ export default function ReunionesPage() {
   /** Estado de checks del tab activo (por itemId → boolean). */
   const checkState = checkStateByType[activeTypeId] ?? {};
 
-  /** Toggle de un ítem del checklist; actualiza state y guarda en localStorage. */
+  /** Toggle de un ítem del checklist; actualiza state (el debounce guarda en localStorage). */
   function toggleItem(id: string) {
     const current = checkStateByType[activeTypeId] ?? {};
     const nextState = { ...current, [id]: !current[id] };
     setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: nextState }));
-    if (leadId) {
-      const key = getChecklistKey(leadId, activeTypeId);
-      saveChecklistState(key, nextState);
-      setChecklistSavedAt(Date.now());
-    }
+    setChecklistSavedAt(Date.now());
   }
 
-  /** Resetea para nueva sesión: sticky o resetOnNewSession=false se mantienen; el resto en false. Guarda con el mismo key. */
-  function resetForNewSession(typeId: string) {
-    const typeDef = MEETING_TYPES.find((t) => t.id === typeId);
+  /** Reiniciar checklist: pone en false los items no sticky; sticky mantienen valor. El debounce guarda. */
+  function reiniciarChecklist() {
+    const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
     if (!typeDef) return;
-    const current = checkStateByType[typeId] ?? {};
+    const current = checkStateByType[activeTypeId] ?? {};
     const nextState: Record<string, boolean> = {};
     for (const it of typeDef.items) {
       if (it.sticky === true) nextState[it.id] = current[it.id] ?? false;
       else if (it.resetOnNewSession === false) nextState[it.id] = current[it.id] ?? false;
       else nextState[it.id] = false;
     }
-    setCheckStateByType((prev) => ({ ...prev, [typeId]: nextState }));
-    if (leadId) {
-      const key = getChecklistKey(leadId, typeId);
-      saveChecklistState(key, nextState);
-      setChecklistSavedAt(Date.now());
-    }
+    setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: nextState }));
+    setChecklistSavedAt(Date.now());
   }
 
-  /** Utilidad: marca true solo los items no sticky (sticky mantienen valor actual). */
+  /** Marca true solo los items no sticky (sticky mantienen valor actual). */
   function markAllNonSticky() {
     const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
     if (!typeDef) return;
@@ -920,13 +1199,10 @@ export default function ReunionesPage() {
       nextState[it.id] = it.sticky === true ? (current[it.id] ?? false) : true;
     }
     setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: nextState }));
-    if (leadId) {
-      saveChecklistState(getChecklistKey(leadId, activeTypeId), nextState);
-      setChecklistSavedAt(Date.now());
-    }
+    setChecklistSavedAt(Date.now());
   }
 
-  /** Utilidad: pone en false solo los items no sticky (sticky mantienen valor actual). */
+  /** Pone en false solo los items no sticky (sticky mantienen valor actual). */
   function clearAllNonSticky() {
     const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
     if (!typeDef) return;
@@ -936,10 +1212,7 @@ export default function ReunionesPage() {
       nextState[it.id] = it.sticky === true ? (current[it.id] ?? false) : false;
     }
     setCheckStateByType((prev) => ({ ...prev, [activeTypeId]: nextState }));
-    if (leadId) {
-      saveChecklistState(getChecklistKey(leadId, activeTypeId), nextState);
-      setChecklistSavedAt(Date.now());
-    }
+    setChecklistSavedAt(Date.now());
   }
 
   function toggleCheck(id: string) {
@@ -1017,11 +1290,21 @@ export default function ReunionesPage() {
     );
   };
 
+  const typeLabel = MEETING_TYPES.find((t) => t.id === activeTypeId)?.label ?? activeTypeId;
+
   return (
-    <div className="px-4 py-6">
+    <div className="px-4 py-6 pb-24 md:pb-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Reuniones</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-xl font-semibold text-slate-900">Reuniones</h1>
+            {leadId ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+                Reunión activa · {typeLabel}
+              </span>
+            ) : null}
+          </div>
           <p className="mt-1 text-sm text-slate-500">
             Guía operativa por tipo de reunión + bitácora + preparación.
           </p>
@@ -1181,48 +1464,164 @@ export default function ReunionesPage() {
               <div className="mt-2 text-sm text-slate-800">{tpl.goal}</div>
             </div>
 
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-sm font-semibold text-slate-900">Mapa de ruta</div>
-              <div className="mt-3 space-y-3">
-                {tpl.roadmap.map((r) => (
-                  <div key={r.title} className="rounded-xl border p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="font-semibold text-slate-900 text-sm">{r.title}</div>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="rounded-full border px-2 py-0.5 text-slate-700">{r.timebox}</span>
-                        <span className="rounded-full border px-2 py-0.5 text-slate-700">
-                          {r.mode === "hablar" ? "Hablar" : r.mode === "escuchar" ? "Escuchar" : "Silencio"}
-                        </span>
+            <div ref={mapPanelRef} className="rounded-2xl border bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenRuta((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-50 transition"
+                aria-expanded={openRuta}
+              >
+                <span className="text-sm font-semibold text-slate-900">
+                  Mapa de ruta
+                  <span className="ml-2 font-normal text-slate-500">
+                    Etapas: {tpl.roadmap.length}
+                  </span>
+                </span>
+                <span className="text-slate-500 text-lg leading-none" aria-hidden>
+                  {openRuta ? "▾" : "▸"}
+                </span>
+              </button>
+              {openRuta && (
+                <div className="px-4 pb-4 pt-0 space-y-3">
+                  {tpl.roadmap.map((r) => (
+                    <div key={r.title} className="rounded-xl border p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-semibold text-slate-900 text-sm">{r.title}</div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="rounded-full border px-2 py-0.5 text-slate-700">{r.timebox}</span>
+                          <span className="rounded-full border px-2 py-0.5 text-slate-700">
+                            {r.mode === "hablar" ? "Hablar" : r.mode === "escuchar" ? "Escuchar" : "Silencio"}
+                          </span>
+                        </div>
                       </div>
+                      <ul className="mt-2 list-disc pl-5 text-sm text-slate-700 space-y-1">
+                        {r.bullets.map((b, i) => (
+                          <li key={i}>{b}</li>
+                        ))}
+                      </ul>
                     </div>
-                    <ul className="mt-2 list-disc pl-5 text-sm text-slate-700 space-y-1">
-                      {r.bullets.map((b, i) => (
-                        <li key={i}>{b}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="rounded-2xl border bg-white p-4">
-              <div className="text-sm font-semibold text-slate-900">Checklist</div>
-
-              {/* Arriba del checklist: Nueva sesión + utilidades (marcar/limpiar no sticky) */}
-              <div className="mt-3 mb-3 flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        resetForNewSession(activeTypeId);
-                        e.target.checked = false;
+            <div ref={checklistPanelRef} className="rounded-2xl border bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setOpenChecklist((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-50 transition"
+                aria-expanded={openChecklist}
+              >
+                <span className="text-sm font-semibold text-slate-900">
+                  Checklist
+                  <span className="ml-2 font-normal text-slate-500">
+                    {(() => {
+                      const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
+                      const total = typeDef?.items.length ?? 0;
+                      const done = total ? Object.keys(checkState).filter((id) => checkState[id]).length : 0;
+                      return `${done}/${total}`;
+                    })()}
+                  </span>
+                </span>
+                <span className="text-slate-500 text-lg leading-none" aria-hidden>
+                  {openChecklist ? "▾" : "▸"}
+                </span>
+              </button>
+              {openChecklist && (
+                <div className="px-4 pb-4 pt-0">
+              {/* Mobile: modo foco (1 ítem). Desktop: lista completa + utilidades */}
+              {isMobile ? (
+                <>
+                  {(() => {
+                    const typeDef = MEETING_TYPES.find((t) => t.id === activeTypeId);
+                    const items = typeDef?.items ?? [];
+                    const firstPending = items.find((it) => !checkState[it.id]);
+                    const allDone = items.length > 0 && items.every((it) => checkState[it.id]);
+                    const currentFocusId =
+                      activeItemId && items.some((it) => it.id === activeItemId)
+                        ? activeItemId
+                        : firstPending?.id ?? (allDone ? items[items.length - 1].id : items[0]?.id ?? null);
+                    const currentIndex = currentFocusId ? items.findIndex((it) => it.id === currentFocusId) : 0;
+                    const currentItem = currentFocusId ? items.find((it) => it.id === currentFocusId) : items[0];
+                    const stepNum = currentIndex >= 0 ? currentIndex + 1 : 1;
+                    const totalSteps = items.length;
+                    const isDone = currentItem ? !!checkState[currentItem.id] : false;
+                    const goNext = () => {
+                      if (!currentFocusId) return;
+                      const idx = items.findIndex((it) => it.id === currentFocusId);
+                      if (idx < items.length - 1) setActiveItemId(items[idx + 1].id);
+                      else setActiveItemId(items[items.length - 1].id);
+                    };
+                    const goPrev = () => {
+                      if (!currentFocusId) return;
+                      const idx = items.findIndex((it) => it.id === currentFocusId);
+                      if (idx > 0) setActiveItemId(items[idx - 1].id);
+                    };
+                    const markDone = () => {
+                      if (currentFocusId) {
+                        toggleItem(currentFocusId);
+                        if (stepNum < totalSteps) setActiveItemId(items[stepNum].id);
                       }
-                    }}
-                    className="rounded border-slate-300 text-slate-600 focus:ring-slate-500"
-                  />
-                  <span>Nueva sesión de este tipo</span>
-                </label>
+                    };
+                    return (
+                      <div className="space-y-4">
+                        <p className="text-xs font-medium text-slate-500">
+                          PASO {stepNum} de {totalSteps}
+                        </p>
+                        {currentItem ? (
+                          <div
+                            className={`rounded-xl border-2 p-4 ${
+                              isDone
+                                ? "border-emerald-500 bg-emerald-50/50"
+                                : "border-blue-500 bg-blue-50/50"
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-slate-900">{currentItem.label}</p>
+                            <p className="mt-2 text-xs text-slate-600">
+                              Escuchá y confirmá antes de avanzar.
+                            </p>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={markDone}
+                                className="rounded-lg border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                              >
+                                ✔ Hecho
+                              </button>
+                              <button
+                                type="button"
+                                onClick={goNext}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                ⏭ Siguiente
+                              </button>
+                              <button
+                                type="button"
+                                onClick={goPrev}
+                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                ◀ Anterior
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-slate-500">No hay ítems en este checklist.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <>
+              {/* Arriba del checklist: Reiniciar + utilidades (marcar/limpiar no sticky) */}
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={reiniciarChecklist}
+                  className="rounded-lg border px-3 py-2 text-sm font-semibold bg-slate-900 text-white hover:bg-slate-800"
+                >
+                  Reiniciar checklist
+                </button>
                 <span className="text-slate-300">|</span>
                 <button
                   type="button"
@@ -1241,33 +1640,112 @@ export default function ReunionesPage() {
               </div>
 
               <div className="mt-3 space-y-4">
-                {tpl.checklist.map((sec) => (
-                  <div key={sec.title} className="rounded-xl border p-3">
-                    <div className="text-xs font-semibold text-slate-600">{sec.title}</div>
-                    <div className="mt-2 space-y-2">
-                      {sec.items.map((it) => {
-                        const checked = !!checkState[it.id];
-                        return (
-                          <label key={it.id} className="flex items-start gap-2 text-sm text-slate-800">
-                            <input
-                              type="checkbox"
-                              className="mt-1"
-                              checked={checked}
-                              onChange={() => toggleItem(it.id)}
-                            />
-                            <span className={checked ? "line-through text-slate-400" : ""}>{it.text}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
+                    {tpl.checklist.map((sec) => (
+                      <div key={sec.title} className="rounded-xl border p-3">
+                        <div className="text-xs font-semibold text-slate-600">{sec.title}</div>
+                        <div className="mt-2 space-y-2">
+                          {sec.items.map((it) => {
+                            const checked = !!checkState[it.id];
+                            return (
+                              <label key={it.id} className="flex items-start gap-2 text-sm text-slate-800">
+                                <input
+                                  type="checkbox"
+                                  className="mt-1"
+                                  checked={checked}
+                                  onChange={() => toggleItem(it.id)}
+                                />
+                                <span className={checked ? "line-through text-slate-400" : ""}>{it.text}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {checklistSavedAt != null && (
-                <div className="mt-3 text-xs text-emerald-600" aria-live="polite">
-                  Guardado automático ✅
+                  {checklistSavedAt != null && (
+                    <div className="mt-3 text-xs text-emerald-600" aria-live="polite">
+                      Guardado automático ✅
+                    </div>
+                  )}
+                </>
+              )}
                 </div>
               )}
+            </div>
+
+            {/* Notas rápidas (últimas 3) */}
+            {leadId && (
+              <div className="rounded-2xl border bg-white p-4">
+                <div className="text-sm font-semibold text-slate-900">Notas rápidas</div>
+                {notes.length === 0 ? (
+                  <p className="mt-2 text-sm text-slate-500">Aún no hay notas. Usá el botón Nota abajo para agregar.</p>
+                ) : (
+                  <ul className="mt-2 space-y-2">
+                    {notes.slice(0, 3).map((n) => (
+                      <li key={n.id} className="rounded-xl border p-3 text-sm">
+                        <span className="text-xs text-slate-500">
+                          {new Date(n.atISO).toLocaleString("es-UY", { dateStyle: "short", timeStyle: "short" })}
+                        </span>
+                        <p className="mt-1 text-slate-800 whitespace-pre-wrap">{n.text}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* Cierre de reunión: emocional + convicción + objetivo + Guardar cierre */}
+            <div className="rounded-2xl border bg-white p-4">
+              <div className="text-sm font-semibold text-slate-900">Cierre de reunión</div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <div className="text-xs font-medium text-slate-600 mb-1">Estado emocional</div>
+                  <div className="flex flex-wrap gap-2">
+                    {EMOTIONAL_CHIPS.map((chip) => {
+                      const form = closingFormByType[activeTypeId] ?? { emotional_state: "", conviction: "", next_objective: "" };
+                      const isOn = form.emotional_state === chip.value;
+                      return (
+                        <button
+                          key={chip.value}
+                          type="button"
+                          onClick={() => setClosingField("emotional_state", chip.value)}
+                          className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                            isOn ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-600">Convicción (1–5)</label>
+                  <select
+                    value={(closingFormByType[activeTypeId] ?? { conviction: "" }).conviction}
+                    onChange={(e) => setClosingField("conviction", e.target.value)}
+                    className="mt-1 block w-full max-w-[120px] rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800"
+                  >
+                    <option value="">—</option>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={String(n)}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-600">Próximo objetivo</label>
+                  <input
+                    type="text"
+                    value={(closingFormByType[activeTypeId] ?? { next_objective: "" }).next_objective}
+                    onChange={(e) => setClosingField("next_objective", e.target.value)}
+                    placeholder="Una línea: qué sigue"
+                    className="mt-1 block w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400"
+                  />
+                </div>
+                <p className="text-xs text-slate-500">Se guarda automáticamente en este dispositivo.</p>
+              </div>
             </div>
 
             <div className="rounded-2xl border bg-white p-4">
@@ -1308,6 +1786,94 @@ export default function ReunionesPage() {
           </div>
         )}
       </div>
+
+      {/* Sticky footer mobile: Ruta / Checklist / Nota */}
+      {isMobile && leadId ? (
+        <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-slate-200 bg-white/95 backdrop-blur safe-area-pb">
+          <button
+            type="button"
+            onClick={() => {
+              setOpenRuta(true);
+              mapPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className="flex-1 flex flex-col items-center justify-center gap-1 py-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <span className="text-lg">🗺</span>
+            Ruta
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpenChecklist(true);
+              checklistPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className="flex-1 flex flex-col items-center justify-center gap-1 py-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <span className="text-lg">✅</span>
+            Checklist
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpenNotePanel(true)}
+            className="flex-1 flex flex-col items-center justify-center gap-1 py-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <span className="text-lg">📝</span>
+            Nota
+          </button>
+        </div>
+      ) : null}
+
+      {/* Panel nota rápida (mobile, desde abajo) */}
+      {openNotePanel && leadId ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            onClick={() => setOpenNotePanel(false)}
+            className="absolute inset-0 bg-black/30"
+          />
+          <div className="relative w-full max-w-md rounded-t-2xl border-t border-slate-200 bg-white p-4 shadow-lg md:rounded-2xl md:border">
+            <div className="text-sm font-semibold text-slate-900 mb-3">Nota rápida</div>
+            <textarea
+              value={quickNote}
+              onChange={(e) => setQuickNote(e.target.value)}
+              placeholder="Escribí tu nota..."
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm min-h-[100px] text-slate-800 placeholder:text-slate-400"
+              autoFocus
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setOpenNotePanel(false)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const text = quickNote.trim();
+                  if (!text) return;
+                  const note: QuickNoteItem = {
+                    id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+                    atISO: new Date().toISOString(),
+                    text,
+                  };
+                  const next = [note, ...notes];
+                  setNotes(next);
+                  saveQuickNotes(leadId, activeTypeId, next);
+                  setQuickNote("");
+                  setOpenNotePanel(false);
+                }}
+                disabled={!quickNote.trim()}
+                className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                Guardar nota
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
