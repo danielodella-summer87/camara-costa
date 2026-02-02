@@ -430,11 +430,11 @@ function getChecklistKey(leadId: string, meetingType: string): string {
   return `${CHECKLIST_STORAGE_PREFIX}:${leadId}:${meetingType}`;
 }
 
-type TemplateItemLike = { id: string };
+type ChecklistItemId = { id: string };
 
 function loadChecklistState(
   key: string,
-  templateItems: TemplateItemLike[]
+  templateItems: ChecklistItemId[]
 ): Record<string, boolean> {
   if (typeof window === "undefined") return initCheckStateFromTemplate(templateItems);
   try {
@@ -452,7 +452,7 @@ function loadChecklistState(
   }
 }
 
-function initCheckStateFromTemplate(templateItems: TemplateItemLike[]): Record<string, boolean> {
+function initCheckStateFromTemplate(templateItems: ChecklistItemId[]): Record<string, boolean> {
   const state: Record<string, boolean> = {};
   for (const it of templateItems) state[it.id] = false;
   return state;
@@ -482,12 +482,10 @@ type DraftState = {
   log: { at: string; text: string }[];
 };
 
-type TemplateItemLike = { id: string };
-
 function loadDraft(
   leadId: string,
   activeTypeId: string,
-  templateItems: TemplateItemLike[]
+  templateItems: ChecklistItemId[]
 ): DraftState {
   if (typeof window === "undefined") {
     const checkState: Record<string, boolean> = {};
