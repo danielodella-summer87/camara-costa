@@ -40,3 +40,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# local secrets
+.env.local
+
+# local cookies
+.cookies*.txt
+
+# generated reports
+*.pdf
