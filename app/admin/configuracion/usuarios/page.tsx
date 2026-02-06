@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getAppUserFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 import InviteForm from "./InviteForm";
 
 export const dynamic = "force-dynamic";
@@ -16,17 +17,11 @@ type UserRow = {
 };
 
 export default async function ConfigUsuariosPage() {
-  const maybeClient = await createServerSupabase();
-  const supabase: any = (maybeClient as any)?.supabase ?? maybeClient;
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login?next=/admin/configuracion/usuarios");
+  const appUser = await getAppUserFromRequest();
+  if (!appUser) redirect("/login?next=/admin/configuracion/usuarios");
 
   // Roles
-  const { data: rolesData, error: rolesErr } = await supabase
+  const { data: rolesData, error: rolesErr } = await supabaseServer
     .from("roles")
     .select("id,name")
     .order("name", { ascending: true });
@@ -46,8 +41,7 @@ export default async function ConfigUsuariosPage() {
     (rolesData ?? []).map((r: any) => ({ id: r.id, name: r.name })) ?? [];
 
   // Usuarios (tu tabla app_users)
-  // Importante: esto asume FK app_users.role_id -> roles.id
-  const { data: usersData, error: usersErr } = await supabase
+  const { data: usersData, error: usersErr } = await supabaseServer
     .from("app_users")
     .select(
       `

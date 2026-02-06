@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getInternalUserIdFromRequest, getAppUserFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ function norm(s: string | null | undefined) {
 }
 
 export async function GET(req: Request) {
-  const supabase = await createServerSupabase();
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const url = new URL(req.url);
   const includeClosed = url.searchParams.get("include_closed") === "1";
@@ -30,7 +32,7 @@ export async function GET(req: Request) {
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  let query = supabase.from(TABLE).select("*", { count: "exact" });
+  let query = supabaseServer.from(TABLE).select("*", { count: "exact" });
 
   const statusFilter = status ?? estado;
   if (statusFilter && statusFilter !== "todos" && statusFilter !== "all") {
@@ -57,12 +59,12 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const supabase = await createServerSupabase();
+  const appUser = await getAppUserFromRequest();
+  if (!appUser) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   try {
     const body = await req.json();
 
-    // ✅ aceptar aliases (por si el front manda title/description)
     const titulo = norm(body?.titulo ?? body?.title ?? body?.subject);
     const descripcion = norm(body?.descripcion ?? body?.description ?? body?.detalle);
     const tipo = norm(body?.tipo) || "mejora";
@@ -71,15 +73,14 @@ export async function POST(req: Request) {
     if (!titulo) return NextResponse.json({ error: "Título requerido" }, { status: 400 });
     if (!descripcion) return NextResponse.json({ error: "Descripción requerida" }, { status: 400 });
 
-    // ✅ sin auth por ahora (columna ya es nullable)
-    const created_by = null;
+    const created_by = appUser.id;
 
     // Mapeo a columnas del schema (title, description, type, priority, status)
     const typeMap: Record<string, string> = { mejora: "improvement", error: "bug", sugerencia: "suggestion" };
     const priorityMap: Record<string, string> = { baja: "low", media: "medium", alta: "high", critica: "critical" };
 
     // ⚠️ NO usamos .single(): a veces PostgREST devuelve array o 0/varias filas
-    const { data, error } = await supabase
+    const { data, error } = await supabaseServer
       .from(TABLE)
       .insert({
         title: titulo,

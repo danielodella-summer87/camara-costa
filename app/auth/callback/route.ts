@@ -1,95 +1,122 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/supabase/server";
 
-export const dynamic = "force-dynamic";
+export async function GET(request: Request) {
+  const url = new URL(request.url);
 
-function r(url: URL, reason: string, extra?: Record<string, string | null | undefined>) {
-  const u = new URL("/403", url.origin);
-  u.searchParams.set("reason", reason);
-  if (extra?.email) u.searchParams.set("email", extra.email);
-  if (extra?.uid) u.searchParams.set("uid", extra.uid);
-  if (extra?.extra) u.searchParams.set("extra", extra.extra);
-  return NextResponse.redirect(u);
-}
-
-export async function GET(req: Request) {
-  const url = new URL(req.url);
   const code = url.searchParams.get("code");
+  const next = url.searchParams.get("next") ?? "/admin";
+  const origin = url.origin;
 
   if (!code) {
-    return NextResponse.redirect(new URL("/login?e=missing_code", url.origin));
+    const r = new URL("/login", origin);
+    r.searchParams.set("reason", "NO_CODE");
+    return NextResponse.redirect(r);
   }
 
+  // 1) Intercambiar code por sesión (esto setea cookies)
   const supabase = await createServerSupabase();
+  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
-  // 1) Intercambiar code por sesión (setea cookies)
-  const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
-  if (exErr) {
-    return NextResponse.redirect(new URL(`/login?e=${encodeURIComponent(exErr.message)}`, url.origin));
+  if (exchangeError) {
+    const r = new URL("/login", origin);
+    r.searchParams.set("reason", "EXCHANGE_FAILED");
+    r.searchParams.set("message", exchangeError.message);
+    return NextResponse.redirect(r);
   }
 
-  // 2) Obtener usuario auth
-  const { data: authData, error: authErr } = await supabase.auth.getUser();
-  const user = authData?.user ?? null;
+  // 2) Obtener el user ya autenticado
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-  if (authErr || !user) {
-    return r(url, "NO_AUTH_USER");
+  if (userError || !user?.email) {
+    const r = new URL("/403", origin);
+    r.searchParams.set("reason", "NO_AUTH_USER");
+    return NextResponse.redirect(r);
   }
 
-  const email = user.email ? String(user.email).toLowerCase().trim() : null;
+  const email = user.email.trim().toLowerCase();
 
-  // 3) Buscar app_user por auth_user_id
-  const select = `id,email,nombre,is_active,role_id,auth_user_id`;
+  // 3) Vincular allowlist (app_users) usando SERVICE ROLE (bypass RLS)
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const byAuth = await supabase
-    .from("app_users")
-    .select(select)
-    .eq("auth_user_id", user.id)
-    .maybeSingle();
+    if (!supabaseUrl || !serviceKey) {
+      console.warn("[AUTH CALLBACK] Missing SUPABASE_SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_URL");
+      const r = new URL("/403", origin);
+      r.searchParams.set("reason", "MISSING_SERVICE_ROLE");
+      r.searchParams.set("email", email);
+      return NextResponse.redirect(r);
+    }
 
-  if (byAuth.error) {
-    return r(url, "APP_USERS_QUERY_ERROR_BY_AUTH", { email, uid: user.id, extra: byAuth.error.message });
-  }
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false },
+    });
 
-  let appUser: any = byAuth.data ?? null;
-
-  // 4) Fallback por email + vincular auth_user_id
-  if (!appUser && email) {
-    const byEmail = await supabase
+    // Buscar en app_users por email
+    const { data: appUser, error: appUserErr } = await admin
       .from("app_users")
-      .select(select)
-      .ilike("email", email)
+      .select("id, auth_user_id, is_active")
+      .eq("email", email)
       .maybeSingle();
 
-    if (byEmail.error) {
-      return r(url, "APP_USERS_QUERY_ERROR_BY_EMAIL", { email, uid: user.id, extra: byEmail.error.message });
+    if (appUserErr) {
+      console.warn("[AUTH CALLBACK] app_users lookup error:", appUserErr.message, { email });
+      const r = new URL("/403", origin);
+      r.searchParams.set("reason", "APP_USER_LOOKUP_ERROR");
+      r.searchParams.set("email", email);
+      return NextResponse.redirect(r);
     }
 
-    if (byEmail.data?.id) {
-      const link = await supabase
+    // Si no existe en allowlist: NO puede entrar
+    if (!appUser) {
+      const r = new URL("/403", origin);
+      r.searchParams.set("reason", "NO_APP_USER");
+      r.searchParams.set("email", email);
+      return NextResponse.redirect(r);
+    }
+
+    // Si existe pero está inactivo: NO puede entrar
+    if (!appUser.is_active) {
+      const r = new URL("/403", origin);
+      r.searchParams.set("reason", "APP_USER_INACTIVE");
+      r.searchParams.set("email", email);
+      return NextResponse.redirect(r);
+    }
+
+    // Si existe fila en app_users con este email y auth_user_id es null → vincular (evita 403 y deja sistema consistente)
+    if (!appUser.auth_user_id) {
+      const { error: updErr } = await admin
         .from("app_users")
         .update({ auth_user_id: user.id })
-        .eq("id", byEmail.data.id)
-        .select(select)
-        .maybeSingle();
+        .eq("id", appUser.id);
 
-      if (link.error) {
-        return r(url, "APP_USERS_LINK_ERROR", { email, uid: user.id, extra: link.error.message });
+      if (updErr) {
+        console.warn("[AUTH CALLBACK] Failed to set auth_user_id:", updErr.message, { email, userId: user.id });
+        const r = new URL("/403", origin);
+        r.searchParams.set("reason", "APP_USER_UPDATE_ERROR");
+        r.searchParams.set("email", email);
+        return NextResponse.redirect(r);
       }
 
-      appUser = link.data ?? byEmail.data ?? null;
+      console.log("[AUTH CALLBACK] Linked app_users.auth_user_id OK:", { email, userId: user.id });
+    } else {
+      // Si ya estaba vinculado, ok
+      console.log("[AUTH CALLBACK] app_users already linked:", { email, auth_user_id: appUser.auth_user_id });
     }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[AUTH CALLBACK] Unexpected error:", msg);
+    const r = new URL("/403", origin);
+    r.searchParams.set("reason", "CALLBACK_EXCEPTION");
+    r.searchParams.set("email", email);
+    return NextResponse.redirect(r);
   }
 
-  // 5) Reglas de acceso
-  if (!appUser) {
-    return r(url, "NO_APP_USER", { email, uid: user.id });
-  }
-
-  if (appUser.is_active !== true) {
-    return r(url, "INACTIVE_APP_USER", { email: appUser.email, uid: user.id });
-  }
-
-  // OK → dashboard
-  return NextResponse.redirect(new URL("/admin", url.origin));
+  // 4) Ya está vinculado => redirigir donde corresponde
+  return NextResponse.redirect(new URL(next, origin));
 }

@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { supabaseServer } from "@/lib/supabase/server";
 import { destroySession, getSessionCookieName, clearSessionCookieHeader } from "@/lib/auth/internalAuth";
 
-export async function POST(req: Request) {
+export async function POST() {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get(getSessionCookieName())?.value ?? null;
 
@@ -11,8 +11,7 @@ export async function POST(req: Request) {
     await destroySession(sessionCookie, supabaseServer);
   }
 
-  const url = new URL(req.url);
-  const res = NextResponse.redirect(new URL("/login", url.origin));
+  const res = NextResponse.json({ ok: true }, { status: 200 });
   res.headers.set("Set-Cookie", clearSessionCookieHeader());
   return res;
 }

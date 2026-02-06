@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getInternalUserIdFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export async function POST(req: Request) {
+  const currentUserId = await getInternalUserIdFromRequest();
+  if (!currentUserId) {
+    return NextResponse.redirect(new URL("/login", req.url));
+  }
+
   const form = await req.formData();
   const user_id = String(form.get("user_id") ?? "");
 
@@ -9,11 +15,7 @@ export async function POST(req: Request) {
     return NextResponse.redirect(new URL("/admin/configuracion/usuarios", req.url));
   }
 
-  const maybeClient = await createServerSupabase();
-  const supabase: any = (maybeClient as any)?.supabase ?? maybeClient;
-
-  // OJO: esto elimina solo tu fila de app_users (no borra Supabase Auth)
-  await supabase.from("app_users").delete().eq("id", user_id);
+  await supabaseServer.from("app_users").delete().eq("id", user_id);
 
   return NextResponse.redirect(new URL("/admin/configuracion/usuarios", req.url));
 }

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getAppUserFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -12,17 +13,10 @@ type RoleRow = {
 };
 
 export default async function ConfigRolesPage() {
-  const maybeClient = await createServerSupabase();
-  const supabase: any = (maybeClient as any)?.supabase ?? maybeClient;
+  const appUser = await getAppUserFromRequest();
+  if (!appUser) redirect("/login?next=/admin/configuracion/roles");
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login?next=/admin/configuracion/roles");
-
-  // roles
-  const { data: rolesData, error: rolesErr } = await supabase
+  const { data: rolesData, error: rolesErr } = await supabaseServer
     .from("roles")
     .select("id,name")
     .order("name", { ascending: true });
@@ -41,12 +35,12 @@ export default async function ConfigRolesPage() {
   const roles = rolesData ?? [];
 
   // counts (usuarios por rol)
-  const { data: usersByRole } = await supabase
+  const { data: usersByRole } = await supabaseServer
     .from("app_users")
     .select("role_id", { count: "exact", head: false });
 
   // counts (permisos por rol)
-  const { data: rpData } = await supabase.from("role_permissions").select("role_id");
+  const { data: rpData } = await supabaseServer.from("role_permissions").select("role_id");
 
   const usersCountMap = new Map<string, number>();
   // Nota: PostgREST no devuelve agregaciones fácil sin RPC; hacemos fallback simple:

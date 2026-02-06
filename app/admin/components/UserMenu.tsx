@@ -140,7 +140,7 @@ export default function UserMenu() {
     try {
       // Si tenés endpoint propio de logout, usalo.
       // Si no existe, esto igual sirve si la app ya maneja borrar cookies en /auth/logout.
-      await fetch("/auth/logout", { method: "POST" }).catch(() => null);
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
     } finally {
       router.push("/login");
       router.refresh();

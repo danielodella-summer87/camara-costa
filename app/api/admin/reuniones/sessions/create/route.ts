@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getAppUserFromRequest } from "@/lib/auth/server";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -34,17 +34,11 @@ type CreateSessionPayload = {
 
 /**
  * POST /api/admin/reuniones/sessions/create
- * Crea una nueva sesión (cada "Guardar cierre" = una fila nueva).
- * Auth: sesión del navegador (createServerSupabase + getUser). 401 si no hay usuario.
- * Payload: lead_id, meeting_type, emotional_state?, conviction?, next_objective?, checklist_state?, log?
+ * Crea una nueva sesión. Auth: sesión interna. created_by = app_users.id.
  */
 export async function POST(req: NextRequest) {
-  const sb = await createServerSupabase();
-
-  const { data: authData, error: authErr } = await sb.auth.getUser();
-  const user = authData?.user ?? null;
-
-  if (authErr || !user) {
+  const appUser = await getAppUserFromRequest();
+  if (!appUser) {
     return NextResponse.json(
       { data: null, error: "No autorizado" } satisfies ApiResp<null>,
       { status: 401, headers: { "Cache-Control": "no-store" } }
@@ -74,14 +68,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Resolver app_users.id para created_by (la tabla referencia app_users, no auth.users)
-  const { data: appUser } = await supabaseServer
-    .from("app_users")
-    .select("id")
-    .eq("auth_user_id", user.id)
-    .eq("is_active", true)
-    .maybeSingle();
-  const createdBy = appUser?.id ?? null;
+  const createdBy = appUser.id;
 
   // Validar que existe el lead
   const { data: lead, error: leadErr } = await supabaseServer

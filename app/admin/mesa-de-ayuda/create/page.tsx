@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { PageContainer } from "@/components/layout/PageContainer";
 
 export default function MesaDeAyudaCreatePage() {
@@ -28,10 +27,6 @@ export default function MesaDeAyudaCreatePage() {
     setError(null);
 
     try {
-      const supabase = createClient();
-      const { data: authData } = await supabase.auth.getUser();
-      const user_email = authData?.user?.email ?? null;
-
       const res = await fetch("/api/admin/helpdesk/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -41,7 +36,6 @@ export default function MesaDeAyudaCreatePage() {
           description: d,
           type,
           priority,
-          user_email,
         }),
       });
 

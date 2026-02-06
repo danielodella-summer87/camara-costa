@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getAppUserFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -17,16 +18,10 @@ export default async function RoleDetailPage({
 }) {
   const roleId = params.id;
 
-  const maybeClient = await createServerSupabase();
-  const supabase: any = (maybeClient as any)?.supabase ?? maybeClient;
+  const appUser = await getAppUserFromRequest();
+  if (!appUser) redirect(`/login?next=/admin/configuracion/roles/${roleId}`);
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect(`/login?next=/admin/configuracion/roles/${roleId}`);
-
-  const { data: role, error: roleErr } = await supabase
+  const { data: role, error: roleErr } = await supabaseServer
     .from("roles")
     .select("id,name")
     .eq("id", roleId)
@@ -48,7 +43,7 @@ export default async function RoleDetailPage({
     );
   }
 
-  const { data: permsData, error: permsErr } = await supabase
+  const { data: permsData, error: permsErr } = await supabaseServer
     .from("permissions")
     .select("id,label,category")
     .order("id", { ascending: true });
@@ -66,7 +61,7 @@ export default async function RoleDetailPage({
 
   const permissions: PermissionRow[] = permsData ?? [];
 
-  const { data: rpData, error: rpErr } = await supabase
+  const { data: rpData, error: rpErr } = await supabaseServer
     .from("role_permissions")
     .select("permission_id")
     .eq("role_id", roleId);

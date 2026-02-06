@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getInternalUserIdFromRequest } from "@/lib/auth/server";
+import { supabaseServer } from "@/lib/supabase/server";
 
 const TABLE = "helpdesk_tickets";
 
@@ -11,12 +12,14 @@ async function getParamId(ctx: any) {
 }
 
 export async function GET(req: Request, ctx: any) {
-  const supabase = await createServerSupabase();
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
   const id = await getParamId(ctx);
 
   if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseServer
     .from(TABLE)
     .select("id, title, description, type, priority, status, created_at, updated_at, created_by")
     .eq("id", id)
@@ -31,7 +34,9 @@ export async function GET(req: Request, ctx: any) {
 }
 
 export async function PATCH(req: Request, ctx: any) {
-  const supabase = await createServerSupabase();
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
   const id = await getParamId(ctx);
 
   if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
@@ -39,7 +44,6 @@ export async function PATCH(req: Request, ctx: any) {
   try {
     const body = await req.json();
 
-    // ✅ aceptar ambos nombres (UI manda status/priority/type)
     const status = body?.status ?? body?.estado;
     const priority = body?.priority ?? body?.prioridad;
     const type = body?.type ?? body?.tipo;
@@ -53,7 +57,7 @@ export async function PATCH(req: Request, ctx: any) {
       return NextResponse.json({ error: "Nada que actualizar" }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseServer
       .from(TABLE)
       .update(payload)
       .eq("id", id)
@@ -71,12 +75,14 @@ export async function PATCH(req: Request, ctx: any) {
 }
 
 export async function DELETE(req: Request, ctx: any) {
-  const supabase = await createServerSupabase();
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
   const id = await getParamId(ctx);
 
   if (!id) return NextResponse.json({ error: "ID inválido" }, { status: 400 });
 
-  const { error } = await supabase.from(TABLE).delete().eq("id", id);
+  const { error } = await supabaseServer.from(TABLE).delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
   return NextResponse.json({ ok: true });

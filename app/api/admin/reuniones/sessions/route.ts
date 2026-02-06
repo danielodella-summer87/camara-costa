@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getInternalUserIdFromRequest } from "@/lib/auth/server";
 import { supabaseServer } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -19,16 +19,11 @@ type ApiResp<T> = { data?: T | null; error?: string | null };
 
 /**
  * GET /api/admin/reuniones/sessions?leadId=<uuid>&type=descubrimiento|propuesta|cierre&limit=50
- * Lista últimas N sesiones del lead (y opcionalmente por tipo).
- * Auth: sesión del navegador (createServerSupabase + getUser). 401 si no hay usuario.
+ * Lista últimas N sesiones del lead. Auth: sesión interna.
  */
 export async function GET(req: NextRequest) {
-  const sb = await createServerSupabase();
-
-  const { data: authData, error: authErr } = await sb.auth.getUser();
-  const user = authData?.user ?? null;
-
-  if (authErr || !user) {
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) {
     return NextResponse.json(
       { data: null, error: "No autorizado" } satisfies ApiResp<null>,
       { status: 401, headers: { "Cache-Control": "no-store" } }

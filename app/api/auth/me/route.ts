@@ -1,104 +1,66 @@
 import { NextResponse } from "next/server";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
+import { supabaseServer } from "@/lib/supabase/server";
+import { getSessionUser, getSessionCookieName } from "@/lib/auth/internalAuth";
 
 export async function GET() {
-  const supabase = await createServerSupabase();
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(getSessionCookieName())?.value ?? null;
 
-  // 1) Auth user (desde cookies)
-  const { data: authData, error: authErr } = await supabase.auth.getUser();
-  const user = authData?.user ?? null;
-
-  if (authErr || !user) {
+  const session = await getSessionUser(sessionCookie, supabaseServer);
+  if (!session) {
     return NextResponse.json(
-      { authed: false, user: null, app_user: null, session: null },
+      { authed: false, ok: false, userId: null, app_user: null },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   }
 
-  // 2) Session (opcional, para debug)
-  const { data: sessionData } = await supabase.auth.getSession();
-
-  // 3) Buscar perfil interno por auth_user_id
-  const baseSelect = `
-    id,
-    email,
-    nombre,
-    is_active,
-    role_id,
-    auth_user_id,
-    comercial_id,
-    roles:roles ( id, name )
-  `;
-
-  let appUser: any = null;
-
-  // a) por auth_user_id
-  const byAuth = await supabase
+  const { data: appUser, error } = await supabaseServer
     .from("app_users")
-    .select(baseSelect)
-    .eq("auth_user_id", user.id)
+    .select(`
+      id,
+      email,
+      nombre,
+      is_active,
+      role_id,
+      comercial_id,
+      roles:roles ( id, name )
+    `)
+    .eq("id", session.userId)
     .maybeSingle();
 
-  if (byAuth.error) {
+  if (error || !appUser) {
     return NextResponse.json(
-      {
-        authed: true,
-        user,
-        app_user: null,
-        session: sessionData?.session ?? null,
-        error: byAuth.error.message,
-      },
+      { authed: true, ok: true, userId: session.userId, app_user: null },
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   }
 
-  appUser = byAuth.data ?? null;
-
-  // b) si no existe por auth_user_id, intentar por email y vincular auth_user_id
-  if (!appUser && user.email) {
-    const email = String(user.email).toLowerCase().trim();
-
-    const byEmail = await supabase
-      .from("app_users")
-      .select(baseSelect)
-      .ilike("email", email)
-      .maybeSingle();
-
-    if (byEmail.data?.id) {
-      // vincular auth_user_id
-      const link = await supabase
-        .from("app_users")
-        .update({ auth_user_id: user.id })
-        .eq("id", byEmail.data.id)
-        .select(baseSelect)
-        .maybeSingle();
-
-      appUser = link.data ?? byEmail.data ?? null;
-    }
-  }
-
-  // 4) Normalizar rol
   const role =
-    appUser?.roles?.name ??
-    (typeof appUser?.roles?.[0]?.name === "string" ? appUser.roles[0].name : null);
+    (appUser as { roles?: { name?: string } | { name?: string }[] }).roles != null
+      ? Array.isArray((appUser as any).roles)
+        ? (appUser as any).roles[0]?.name ?? null
+        : (appUser as any).roles?.name ?? null
+      : null;
 
   return NextResponse.json(
     {
       authed: true,
-      user,
-      session: sessionData?.session ?? null,
-      app_user: appUser
-        ? {
-            id: appUser.id,
-            email: appUser.email,
-            nombre: appUser.nombre,
-            is_active: appUser.is_active,
-            role_id: appUser.role_id,
-            role,
-            auth_user_id: appUser.auth_user_id,
-            comercial_id: appUser.comercial_id ?? null,
-          }
-        : null,
+      ok: true,
+      userId: session.userId,
+      user: {
+        email: appUser.email ?? null,
+        user_metadata: { full_name: appUser.nombre ?? null, name: appUser.nombre ?? null },
+      },
+      app_user: {
+        id: appUser.id,
+        email: appUser.email,
+        nombre: appUser.nombre,
+        is_active: appUser.is_active,
+        role_id: appUser.role_id,
+        role,
+        comercial_id: appUser.comercial_id ?? null,
+      },
     },
     { status: 200, headers: { "Cache-Control": "no-store" } }
   );

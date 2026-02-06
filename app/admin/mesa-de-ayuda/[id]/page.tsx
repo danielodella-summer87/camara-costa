@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { PageContainer } from "@/components/layout/PageContainer";
-import { createClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/lib/rbac/usePermissions";
 
 type Ticket = {
@@ -36,8 +35,6 @@ type ApiResp<T> = { data?: T | null; error?: string | null };
 export default function TicketDetailPage() {
   const params = useParams<{ id: string }>();
   const id = (params?.id as string) || "";
-
-  const supabase = useMemo(() => createClient(), []);
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -142,13 +139,10 @@ export default function TicketDetailPage() {
     setError(null);
 
     try {
-      const { data: authData } = await supabase.auth.getUser();
-      const user_email = authData?.user?.email ?? null;
-
       const res = await fetch(`/api/admin/helpdesk/tickets/${id}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-        body: JSON.stringify({ body, is_internal: internal, user_email }),
+        body: JSON.stringify({ body, is_internal: internal }),
       });
 
       const json = await res.json();

@@ -1,6 +1,6 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
-import { createServerSupabase } from "@/lib/supabase/server";
+import { getInternalUserIdFromRequest } from "@/lib/auth/server";
 import { extractPermissionKeys } from "./extractPermissionKeys";
 
 function supabaseAdmin() {
@@ -11,22 +11,19 @@ function supabaseAdmin() {
 }
 
 /**
- * Obtiene el auth_user_id de la sesión actual (para usar en Server Components).
+ * Obtiene el app_users.id de la sesión interna actual.
  */
 export async function getActiveUserId(): Promise<string | null> {
-  const supabase = await createServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
-  return user?.id ?? null;
+  return getInternalUserIdFromRequest();
 }
 
 /**
- * Devuelve la lista de permission keys (strings) del usuario de la sesión.
- * Lookup por app_users.auth_user_id. Retorna [] si no hay sesión o no hay permisos.
+ * Devuelve la lista de permission keys del usuario de la sesión (auth interno).
+ * Lookup por app_users.id. Retorna [] si no hay sesión o no hay permisos.
  */
 export async function getActiveUserPermissions(): Promise<string[]> {
-  const supabase = await createServerSupabase();
-  const { data: { user: authUser } } = await supabase.auth.getUser();
-  if (!authUser) return [];
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) return [];
 
   const sb = supabaseAdmin();
   if (!sb) return [];
@@ -34,7 +31,7 @@ export async function getActiveUserPermissions(): Promise<string[]> {
   const { data: appUser, error: userErr } = await sb
     .from("app_users")
     .select("role_id, is_active")
-    .eq("auth_user_id", authUser.id)
+    .eq("id", userId)
     .maybeSingle();
 
   if (userErr || !appUser || appUser.is_active === false || !appUser.role_id) return [];
