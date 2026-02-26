@@ -78,10 +78,16 @@ const MODULE_LABELS: Record<string, string> = {
   vision_estrategica: "Visión Estratégica",
 };
 
-function applyDefaults(parsed: { base?: string; modules?: Record<string, string> }): PromptConfig {
+/**
+ * Carga desde backend o storage SIN reemplazar con defaults.
+ * El valor guardado en DB/storage es la única fuente de verdad.
+ */
+function parseStored(parsed: { base?: string; modules?: Record<string, string> }): PromptConfig {
   return {
-    base: parsed.base ?? DEFAULT_BASE,
-    modules: { ...DEFAULT_MODULES, ...(parsed.modules ?? {}) },
+    base: typeof parsed?.base === "string" ? parsed.base : "",
+    modules: parsed?.modules && typeof parsed.modules === "object" && !Array.isArray(parsed.modules)
+      ? parsed.modules
+      : {},
   };
 }
 
@@ -90,12 +96,12 @@ function loadFromStorage(): PromptConfig {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as PromptConfig;
-      return applyDefaults(parsed);
+      return parseStored(parsed);
     }
   } catch (e) {
     console.error("Error leyendo localStorage:", e);
   }
-  return { base: DEFAULT_BASE, modules: { ...DEFAULT_MODULES } };
+  return { base: "", modules: {} };
 }
 
 function saveToStorage(config: PromptConfig) {
@@ -135,12 +141,11 @@ export default function ConfigIAPage() {
 
       if (json.data && (json.data.basePrompt !== undefined || json.data.modulos !== undefined)) {
         const payload = json.data;
-        const next = applyDefaults({
+        const next = parseStored({
           base: payload.basePrompt,
           modules: payload.modulos,
         });
-        console.log("[IA CONFIG] setConfig desde backend (basePrompt)", next.base);
-        console.log("[IA CONFIG] setConfig desde backend (modulos)", next.modules);
+        console.log("[IA CONFIG] Loaded:", { prompt_base: next.base, modules: Object.keys(next.modules) });
         setConfig(next);
         saveToStorage(next);
       } else {
@@ -166,6 +171,7 @@ export default function ConfigIAPage() {
     setBackendWarning(null);
     setSaving(true);
 
+    console.log("[IA CONFIG] Saving:", { promptBase: config.base, modulesKeys: Object.keys(config.modules) });
     const payload = { basePrompt: config.base, modulos: config.modules };
 
     fetch(API_IA, {
@@ -177,6 +183,7 @@ export default function ConfigIAPage() {
       .then(async (res) => {
         const json = await res.json().catch(() => ({}));
         if (res.ok) {
+          console.log("[IA CONFIG] Loaded after save (server response):", json.data?.basePrompt != null ? "present" : "missing", json.data?.modulos ? Object.keys(json.data.modulos) : []);
           setSuccess(true);
           saveToStorage(config);
           setTimeout(() => setSuccess(false), 3000);
@@ -295,7 +302,7 @@ export default function ConfigIAPage() {
                       {label}
                     </label>
                     <textarea
-                      value={config.modules[moduleId] || DEFAULT_MODULES[moduleId] || ""}
+                      value={config.modules[moduleId] ?? ""}
                       onChange={(e) => {
                         setConfig((prev) => ({
                           ...prev,

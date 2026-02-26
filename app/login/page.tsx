@@ -48,7 +48,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6">
+      <img
+        src="/licencia.png"
+        alt="Licencia"
+        className="max-w-[260px] mb-6 opacity-90"
+      />
       <div className="w-full max-w-md rounded-2xl border bg-white p-6 shadow-sm">
         <h1 className="text-xl font-semibold text-slate-900">Ingresar</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -103,6 +108,13 @@ export default function LoginPage() {
             {loading ? "Entrando…" : "Entrar"}
           </button>
         </form>
+      </div>
+      <div className="mt-auto pb-6">
+        <img
+          src="/summer87.png"
+          alt="Summer87"
+          className="max-w-[140px] opacity-80"
+        />
       </div>
     </div>
   );
