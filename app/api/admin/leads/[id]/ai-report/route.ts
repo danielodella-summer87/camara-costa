@@ -1215,7 +1215,21 @@ ${!empresa ? "- No hay entidad vinculada" : ""}
 - Meet URL: ${resolvedCtx.meetUrl || "—"}
 - Notas: ${resolvedCtx.notas || "Sin notas"}
 
-${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map((c: any, i: number) => `${i + 1}) ${c.nombre}${c.cargo ? ` (${c.cargo})` : ""}${c.telefono ? ` Tel: ${c.telefono}` : ""}${c.email ? ` Email: ${c.email}` : ""}${c.is_primary ? " [Principal]" : ""}${c.notas ? ` Notas: ${c.notas}` : ""}`).join("\n")}` : ""}
+${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map(
+  (
+    c: {
+      nombre?: string | null
+      cargo?: string | null
+      celular?: string | null
+      telefono?: string | null
+      email?: string | null
+      principal?: boolean | null
+      es_principal?: boolean | null
+      is_primary?: boolean | null
+      notas?: string | null
+    },
+    i: number
+  ) => `${i + 1}) ${c.nombre}${c.cargo ? ` (${c.cargo})` : ""}${c.telefono ? ` Tel: ${c.telefono}` : ""}${c.email ? ` Email: ${c.email}` : ""}${(c.is_primary ?? c.es_principal ?? c.principal) ? " [Principal]" : ""}${c.notas ? ` Notas: ${c.notas}` : ""}`).join("\n")}` : ""}
 
 ${resolvedCtx.clienteHistorial ? `## CLIENTE (historial)\n${resolvedCtx.clienteHistorial}` : ""}
 
@@ -1975,14 +1989,26 @@ ENTREGABLES:
       (leadForAI as any)._ya_es_cliente_agencia = ya_es_cliente_agencia;
 
       const moduleIds = Object.keys(effectivePrompts?.modules ?? {});
+      const leadEmpresa = (leadRow as any)?.empresas as
+        | {
+            web?: string | null;
+            website?: string | null;
+            instagram?: string | null;
+            facebook?: string | null;
+            linkedin?: string | null;
+          }
+        | null
+        | undefined;
       const hasWeb = Boolean(
-        leadRow?.empresas?.web ||
-        (leadRow as any)?.empresas?.website ||
-        leadRow?.website ||
-        leadRow?.empresas?.instagram ||
-        leadRow?.empresas?.facebook ||
-        leadRow?.linkedin_empresa ||
-        leadRow?.linkedin_director
+        leadEmpresa?.web ||
+          leadEmpresa?.website ||
+          (leadRow as any)?.website ||
+          leadRow?.website ||
+          leadEmpresa?.instagram ||
+          leadEmpresa?.facebook ||
+          leadEmpresa?.linkedin ||
+          leadRow?.linkedin_empresa ||
+          leadRow?.linkedin_director
       );
       const adHint = `${leadRow?.ai_context ?? ""} ${leadRow?.notas ?? ""} ${leadRow?.objetivos ?? ""}`.toLowerCase();
       const hasPauta = Boolean(
