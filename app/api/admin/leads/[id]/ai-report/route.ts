@@ -1215,7 +1215,7 @@ ${!empresa ? "- No hay entidad vinculada" : ""}
 - Meet URL: ${resolvedCtx.meetUrl || "—"}
 - Notas: ${resolvedCtx.notas || "Sin notas"}
 
-${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map((c, i) => `${i + 1}) ${c.nombre}${c.cargo ? ` (${c.cargo})` : ""}${c.telefono ? ` Tel: ${c.telefono}` : ""}${c.email ? ` Email: ${c.email}` : ""}${c.is_primary ? " [Principal]" : ""}${c.notas ? ` Notas: ${c.notas}` : ""}`).join("\n")}` : ""}
+${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map((c: any, i: number) => `${i + 1}) ${c.nombre}${c.cargo ? ` (${c.cargo})` : ""}${c.telefono ? ` Tel: ${c.telefono}` : ""}${c.email ? ` Email: ${c.email}` : ""}${c.is_primary ? " [Principal]" : ""}${c.notas ? ` Notas: ${c.notas}` : ""}`).join("\n")}` : ""}
 
 ${resolvedCtx.clienteHistorial ? `## CLIENTE (historial)\n${resolvedCtx.clienteHistorial}` : ""}
 
