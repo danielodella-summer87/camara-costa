@@ -2218,7 +2218,7 @@ ENTREGABLES:
               ai_report: finalReport,
               ai_report_updated_at: nowIso(),
             },
-        generated: filteredModuleIds,
+        generated: moduleIds,
         error: null,
       } satisfies ApiResp<any> & { generated?: string[] },
       { status: 200 }
