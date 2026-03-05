@@ -1977,6 +1977,7 @@ ENTREGABLES:
     // Generar informe con IA, con fallback si falla
     let report: string;
     let aiContext: string;
+    let generatedModuleIds: string[] = [];
 
     try {
       const leadForAI = {
@@ -2023,6 +2024,7 @@ ENTREGABLES:
       const filteredModuleIds = moduleIds.filter(
         (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
       );
+      generatedModuleIds = filteredModuleIds;
       if (process.env.NODE_ENV !== "production") {
         console.log("[AI REPORT] modulesToRun", { shouldIncludeTech, hasWeb, hasPauta, count: filteredModuleIds.length, modulesToRun: filteredModuleIds });
       }
@@ -2218,7 +2220,7 @@ ENTREGABLES:
               ai_report: finalReport,
               ai_report_updated_at: nowIso(),
             },
-        generated: moduleIds,
+        generated: generatedModuleIds,
         error: null,
       } satisfies ApiResp<any> & { generated?: string[] },
       { status: 200 }
