@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
     if (!serviceKey || !url) {
       return NextResponse.json(
-        { user: null, data: [], error: "SUPABASE_SERVICE_ROLE_KEY o NEXT_PUBLIC_SUPABASE_URL no configurados" } satisfies ApiResp<never>,
+        { user: null, data: null, error: "SUPABASE_SERVICE_ROLE_KEY o NEXT_PUBLIC_SUPABASE_URL no configurados" } satisfies ApiResp<never>,
         { status: 500 }
       );
     }
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     const admin = supabaseAdmin();
     if (!admin) {
       return NextResponse.json(
-        { user: null, data: [], error: "Error inicializando cliente Supabase" } satisfies ApiResp<never>,
+        { user: null, data: null, error: "Error inicializando cliente Supabase" } satisfies ApiResp<never>,
         { status: 500 }
       );
     }
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
         console.warn("[permissions/me] No se encontró app_user (auth_user_id o email o sesión interna)");
       }
       return NextResponse.json(
-        { user: null, data: [], error: null } satisfies ApiResp<never>,
+        { user: null, data: null, error: null } satisfies ApiResp<never>,
         { status: 200 }
       );
     }
@@ -133,7 +133,7 @@ export async function GET(req: NextRequest) {
         .eq("role_id", appUser.role_id);
 
       if (permsErr) throw permsErr;
-      keys = extractPermissionKeys(perms as unknown[]).filter(Boolean);
+      keys = extractPermissionKeys((perms ?? null) as Parameters<typeof extractPermissionKeys>[0]).filter(Boolean);
     }
 
     const userPayload = {
