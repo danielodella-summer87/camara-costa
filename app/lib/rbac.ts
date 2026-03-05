@@ -5,14 +5,35 @@
 
 export type RoleKey = "admin" | "operador" | "comercial" | "viewer";
 
-/** Usuario con rol (ej. respuesta de /api/admin/permissions/me → user) */
-export type UserWithRole = { role?: string | null };
+/** Usuario con rol (ej. respuesta de /api/admin/permissions/me → user). Acepta varias formas de envío del rol. */
+export type UserWithRole = {
+  role?: string | null;
+  rol?: string | null;
+  roles?: { name?: string | null } | { name?: string | null }[] | null;
+};
 
-/** Extrae y normaliza el rol del usuario. */
+/** Extrae y normaliza el rol del usuario. Contempla role, rol, roles?.name (objeto o array). */
 export function getRole(user: UserWithRole | string | null | undefined): RoleKey | null {
   if (user == null) return null;
-  const role = typeof user === "string" ? user : (user as UserWithRole).role;
-  return normalizeRole(role);
+
+  let raw: string | null | undefined;
+
+  if (typeof user === "string") {
+    raw = user;
+  } else {
+    const u = user as UserWithRole;
+    raw = u.role ?? u.rol ?? null;
+    if (raw == null && u.roles != null) {
+      const r = u.roles;
+      raw = Array.isArray(r) ? r[0]?.name ?? null : (r as { name?: string | null }).name ?? null;
+    }
+  }
+
+  const resolved = normalizeRole(raw);
+  if (resolved == null && typeof raw === "string" && raw.trim() !== "" && process.env.NODE_ENV !== "production") {
+    console.warn("[rbac] Rol no resuelto:", raw);
+  }
+  return resolved;
 }
 
 /**
@@ -38,8 +59,9 @@ export function hasAnyRole(
   return roles.some((role) => normalizeRole(role) === r);
 }
 
-/** Permisos por rol. admin tiene todos implícitamente. */
-const PERMISSIONS_BY_ROLE: Record<Exclude<RoleKey, "admin">, string[]> = {
+/** Permisos por rol. admin tiene ["*"] (todos). */
+const PERMISSIONS_BY_ROLE: Record<RoleKey, string[]> = {
+  admin: ["*"],
   operador: ["leads.read", "leads.write", "helpdesk.read", "helpdesk.write"],
   comercial: ["leads.read", "leads.write"],
   viewer: ["leads.read"],
@@ -122,19 +144,23 @@ const PERMISSION_ALIASES: Record<string, string> = {
 
 /**
  * Devuelve true si el usuario tiene el permiso indicado.
- * Todas las validaciones de permiso pasan por aquí.
- * - admin: tiene todos los permisos.
- * - Otros roles: se consulta PERMISSIONS_BY_ROLE.
+ * - admin: siempre true (early return).
+ * - Rol con lista que incluye "*": true.
+ * - Resto: se consulta PERMISSIONS_BY_ROLE y alias.
  */
 export function hasPermission(
   user: UserWithRole | string | null | undefined,
   permission: string
 ): boolean {
-  const key = PERMISSION_ALIASES[permission] ?? permission;
   const r = getRole(user);
   if (!r) return false;
+
   if (r === "admin") return true;
-  const list = PERMISSIONS_BY_ROLE[r as Exclude<RoleKey, "admin">];
+
+  const list = PERMISSIONS_BY_ROLE[r];
   if (!list) return false;
+  if (list.includes("*")) return true;
+
+  const key = PERMISSION_ALIASES[permission] ?? permission;
   return list.includes(key);
 }

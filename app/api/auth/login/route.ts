@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { supabaseServer } from "@/lib/supabase/server";
 import {
   verifyPassword,
   createSession,
   sessionCookieOptions,
-  getSessionCookieName,
 } from "@/lib/auth/internalAuth";
 
 export async function POST(req: Request) {
@@ -48,12 +48,22 @@ export async function POST(req: Request) {
       );
     }
 
-    const { token, expiresAt } = await createSession(cred.user_id, supabaseServer);
-    const cookie = sessionCookieOptions(token, expiresAt);
+    const userId = cred.user_id;
+    const { token, expiresAt } = await createSession(userId, supabaseServer);
+    const { name, value, options } = sessionCookieOptions(token, expiresAt);
 
-    const res = NextResponse.json({ ok: true }, { status: 200 });
-    res.cookies.set(cookie.name, cookie.value, cookie.options as any);
-    return res;
+    const cookieStore = await cookies();
+    cookieStore.set(name, value, options);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[LOGIN]", {
+        cookieName: name,
+        tokenPreview: token.slice(0, 8),
+        userId,
+      });
+    }
+
+    return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Error inesperado";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });

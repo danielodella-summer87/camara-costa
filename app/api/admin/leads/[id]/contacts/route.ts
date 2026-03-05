@@ -14,7 +14,7 @@ function supabaseAdmin() {
 
 type ContactCreateInput = {
   nombre: string;
-  cargo: string;
+  cargo?: string | null;
   telefono?: string | null;
   email?: string | null;
   is_primary?: boolean;
@@ -88,13 +88,6 @@ export async function POST(
       );
     }
 
-    if (!body.cargo || !body.cargo.trim()) {
-      return NextResponse.json(
-        { data: null, error: "El cargo es obligatorio" },
-        { status: 400 }
-      );
-    }
-
     const supabase = supabaseAdmin();
 
     // Si is_primary=true, primero desmarcar otros contactos principales
@@ -112,7 +105,7 @@ export async function POST(
       .insert({
         lead_id: leadId,
         nombre: body.nombre.trim(),
-        cargo: body.cargo.trim(),
+        cargo: body.cargo?.trim() || null,
         telefono: body.telefono?.trim() || null,
         email: body.email?.trim() || null,
         is_primary: body.is_primary || false,

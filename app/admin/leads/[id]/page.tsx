@@ -1,5 +1,14 @@
 "use client";
 
+/*
+  SMOKE TESTS (checklist):
+  - [ ] Editar Facebook en Datos de Entidad → Guardar → Refresh → Facebook persiste.
+  - [ ] Editar 3 campos distintos de entidad → Guardar → Refresh → persisten.
+  - [ ] Informe IA con "¿Ya es cliente de la Agencia?" = Sí/cliente → NO critica destructivamente; sugiere optimizaciones.
+  - [ ] Informe IA con "¿Ya es cliente de la Agencia?" = No/vacío → puede marcar oportunidades/gaps.
+  - [ ] Informe IA menciona redes cargadas (FB/IG/LinkedIn/Web) y usa contactos si existen.
+*/
+
 import { AiLeadReport } from "@/components/leads/AiLeadReport";
 import { LeadDocsModal } from "@/components/leads/LeadDocsModal";
 import { PageContainer } from "@/components/layout/PageContainer";
@@ -23,6 +32,7 @@ type Empresa = {
   pais?: string | null;
   web?: string | null;
   instagram?: string | null;
+  facebook?: string | null;
   contacto_nombre?: string | null;
   contacto_celular?: string | null;
   contacto_email?: string | null;
@@ -325,6 +335,23 @@ export default function LeadDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<PatchPayload>({});
+  const [entityForm, setEntityForm] = useState({
+    nombre: "",
+    telefono: "",
+    email: "",
+    direccion: "",
+    website: "",
+    instagram: "",
+    facebook: "",
+    rubro: "",
+    celular: "",
+    rut: "",
+    ciudad: "",
+    pais: "",
+    contacto_celular: "",
+    contacto_email: "",
+    etiquetas: "",
+  });
   const [empresaIdInput, setEmpresaIdInput] = useState("");
   const [comerciales, setComerciales] = useState<Array<{ id: string; nombre: string }>>([]);
   const [loadingComerciales, setLoadingComerciales] = useState(false);
@@ -411,6 +438,28 @@ export default function LeadDetailPage() {
     is_primary: false,
     notas: "",
   });
+
+  useEffect(() => {
+    if (!lead?.empresas) return;
+    const e = lead.empresas;
+    setEntityForm({
+      nombre: e.nombre ?? "",
+      telefono: e.telefono ?? "",
+      email: e.email ?? "",
+      direccion: e.direccion ?? "",
+      website: e.web ?? "",
+      instagram: e.instagram ?? "",
+      facebook: (e as { facebook?: string | null }).facebook ?? "",
+      rubro: e.rubros?.nombre ?? "",
+      celular: e.celular ?? "",
+      rut: e.rut ?? "",
+      ciudad: e.ciudad ?? "",
+      pais: e.pais ?? "",
+      contacto_celular: e.contacto_celular ?? "",
+      contacto_email: e.contacto_email ?? "",
+      etiquetas: e.etiquetas ?? "",
+    });
+  }, [lead]);
 
   // Función reutilizable para abrir Meet en ventana popup controlada
   function openMeetWindow(meetUrl: string) {
@@ -1062,23 +1111,27 @@ export default function LeadDetailPage() {
   }
 
   async function saveContact() {
-    if (!id) return;
-    if (!contactForm.nombre.trim() || !contactForm.cargo.trim()) {
-      setContactsError("Nombre y cargo son obligatorios");
+    if (!id || !lead) return;
+    if (!contactForm.nombre.trim()) {
+      setContactsError("El nombre es obligatorio");
       return;
     }
 
     setContactsError(null);
-    try {
-      const payload = {
-        nombre: contactForm.nombre.trim(),
-        cargo: contactForm.cargo.trim(),
-        telefono: contactForm.telefono.trim() || null,
-        email: contactForm.email.trim() || null,
-        is_primary: contactForm.is_primary,
-        notas: contactForm.notas.trim() || null,
-      };
+    const payload = {
+      nombre: contactForm.nombre.trim(),
+      cargo: contactForm.cargo.trim() || null,
+      telefono: contactForm.telefono.trim() || null,
+      email: contactForm.email.trim() || null,
+      is_primary: contactForm.is_primary,
+      notas: contactForm.notas.trim() || null,
+      lead_id: lead.id,
+      empresa_id: lead?.empresas?.id ?? null,
+    };
 
+    console.log("[CONTACT] payload", payload);
+
+    try {
       const url = editingContact
         ? `/api/admin/leads/${id}/contacts/${editingContact.id}`
         : `/api/admin/leads/${id}/contacts`;
@@ -1090,14 +1143,16 @@ export default function LeadDetailPage() {
         body: JSON.stringify(payload),
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error ?? "Error guardando contacto");
+      const json = await res.json().catch(() => null);
+      console.log("[CONTACT] response", { status: res.status, json });
+      if (!res.ok) throw new Error(json?.error ?? json?.message ?? "Error guardando contacto");
 
       closeContactModal();
       await fetchContacts();
       flash(editingContact ? "Contacto actualizado." : "Contacto creado.");
-    } catch (e: any) {
-      setContactsError(e?.message ?? "Error guardando contacto");
+    } catch (err) {
+      console.error("[CONTACT] ERROR", err);
+      setContactsError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -1154,6 +1209,26 @@ export default function LeadDetailPage() {
     setEditing(false);
     setDraft({});
     setError(null);
+    if (lead?.empresas) {
+      const e = lead.empresas;
+      setEntityForm({
+        nombre: e.nombre ?? "",
+        telefono: e.telefono ?? "",
+        email: e.email ?? "",
+        direccion: e.direccion ?? "",
+        website: e.web ?? "",
+        instagram: e.instagram ?? "",
+        facebook: (e as { facebook?: string | null }).facebook ?? "",
+        rubro: e.rubros?.nombre ?? "",
+        celular: e.celular ?? "",
+        rut: e.rut ?? "",
+        ciudad: e.ciudad ?? "",
+        pais: e.pais ?? "",
+        contacto_celular: e.contacto_celular ?? "",
+        contacto_email: e.contacto_email ?? "",
+        etiquetas: e.etiquetas ?? "",
+      });
+    }
   }
 
   async function saveEdit() {
@@ -1162,7 +1237,7 @@ export default function LeadDetailPage() {
       const currentPipeline = norm(lead.pipeline);
       const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : "";
       const isClosed = normalizedCurrent === "ganado" || normalizedCurrent === "perdido";
-      
+
       if (isClosed) {
         const newPipeline = norm(draft.pipeline as string);
         const normalizedNew = newPipeline ? newPipeline.trim().toLowerCase() : "";
@@ -1172,9 +1247,44 @@ export default function LeadDetailPage() {
         }
       }
     }
-    
+
     await saveDraft();
+
+    if (lead?.empresas?.id) {
+      try {
+        const empresaPayload = {
+          nombre: entityForm.nombre.trim() || null,
+          telefono: entityForm.telefono.trim() || null,
+          email: entityForm.email.trim() || null,
+          direccion: entityForm.direccion.trim() || null,
+          web: entityForm.website.trim() || null,
+          instagram: entityForm.instagram.trim() || null,
+          facebook: entityForm.facebook.trim() || null,
+          celular: entityForm.celular.trim() || null,
+          rut: entityForm.rut.trim() || null,
+          ciudad: entityForm.ciudad.trim() || null,
+          pais: entityForm.pais.trim() || null,
+          contacto_celular: entityForm.contacto_celular.trim() || null,
+          contacto_email: entityForm.contacto_email.trim() || null,
+          etiquetas: entityForm.etiquetas.trim() || null,
+        };
+        const res = await fetch(`/api/admin/empresas/${lead.empresas.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(empresaPayload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error((j as { error?: string }).error ?? "Error actualizando entidad");
+        }
+      } catch (e: any) {
+        setError(e?.message ?? "Error guardando datos de entidad");
+        return;
+      }
+    }
+
     setEditing(false);
+    await fetchLead();
   }
 
   const pipelineValue = useMemo(() => {
@@ -1505,100 +1615,106 @@ export default function LeadDetailPage() {
                 <div className="mt-3 space-y-3">
                   <Field
                     label="Nombre"
-                    editing={false}
-                    value={lead?.empresas?.nombre ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.nombre : (lead?.empresas?.nombre ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, nombre: v }))}
                   />
                   <Field
                     label="Teléfono"
-                    editing={false}
-                    value={lead?.empresas?.telefono ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.telefono : (lead?.empresas?.telefono ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, telefono: v }))}
                   />
                   <Field
                     label="Email"
-                    editing={false}
-                    value={lead?.empresas?.email ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.email : (lead?.empresas?.email ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, email: v }))}
                   />
                   <Field
                     label="Rubro"
-                    editing={false}
-                    value={lead?.empresas?.rubros?.nombre ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.rubro : (lead?.empresas?.rubros?.nombre ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, rubro: v }))}
                   />
                   <Field
                     label="Dirección"
-                    editing={false}
-                    value={lead?.empresas?.direccion ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.direccion : (lead?.empresas?.direccion ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, direccion: v }))}
                   />
                   <Field
                     label="Website"
-                    editing={false}
-                    value={lead?.empresas?.web ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.website : (lead?.empresas?.web ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, website: v }))}
                   />
                   <Field
                     label="Instagram"
-                    editing={false}
-                    value={lead?.empresas?.instagram ?? ""}
-                    onChange={() => {}}
+                    editing={editing}
+                    value={editing ? entityForm.instagram : (lead?.empresas?.instagram ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, instagram: v }))}
                   />
-                  {lead?.empresas?.celular && (
+                  <Field
+                    label="Facebook"
+                    editing={editing}
+                    value={editing ? entityForm.facebook : ((lead?.empresas as { facebook?: string | null })?.facebook ?? "")}
+                    onChange={(v) => setEntityForm((p) => ({ ...p, facebook: v }))}
+                  />
+                  {(editing || lead?.empresas?.celular) && (
                     <Field
                       label="Celular"
-                      editing={false}
-                      value={lead.empresas.celular ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.celular : (lead?.empresas?.celular ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, celular: v }))}
                     />
                   )}
-                  {lead?.empresas?.rut && (
+                  {(editing || lead?.empresas?.rut) && (
                     <Field
                       label="RUT"
-                      editing={false}
-                      value={lead.empresas.rut ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.rut : (lead?.empresas?.rut ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, rut: v }))}
                     />
                   )}
-                  {lead?.empresas?.ciudad && (
+                  {(editing || lead?.empresas?.ciudad) && (
                     <Field
                       label="Ciudad"
-                      editing={false}
-                      value={lead.empresas.ciudad ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.ciudad : (lead?.empresas?.ciudad ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, ciudad: v }))}
                     />
                   )}
-                  {lead?.empresas?.pais && (
+                  {(editing || lead?.empresas?.pais) && (
                     <Field
                       label="País"
-                      editing={false}
-                      value={lead.empresas.pais ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.pais : (lead?.empresas?.pais ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, pais: v }))}
                     />
                   )}
-                  {lead?.empresas?.contacto_celular && (
+                  {(editing || lead?.empresas?.contacto_celular) && (
                     <Field
                       label="Contacto (celular)"
-                      editing={false}
-                      value={lead.empresas.contacto_celular ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.contacto_celular : (lead?.empresas?.contacto_celular ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, contacto_celular: v }))}
                     />
                   )}
-                  {lead?.empresas?.contacto_email && (
+                  {(editing || lead?.empresas?.contacto_email) && (
                     <Field
                       label="Contacto (email)"
-                      editing={false}
-                      value={lead.empresas.contacto_email ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.contacto_email : (lead?.empresas?.contacto_email ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, contacto_email: v }))}
                     />
                   )}
-                  {lead?.empresas?.etiquetas && (
+                  {(editing || lead?.empresas?.etiquetas) && (
                     <Field
                       label="Etiquetas"
-                      editing={false}
-                      value={lead.empresas.etiquetas ?? ""}
-                      onChange={() => {}}
+                      editing={editing}
+                      value={editing ? entityForm.etiquetas : (lead?.empresas?.etiquetas ?? "")}
+                      onChange={(v) => setEntityForm((p) => ({ ...p, etiquetas: v }))}
                     />
                   )}
                 </div>
@@ -1839,24 +1955,24 @@ export default function LeadDetailPage() {
                       />
                     ) : (
                       <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                        {lead?.objetivos ?? "—"}
+                        {(lead?.objetivos ?? "").trim() || "—"}
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <div className="text-xs text-slate-500">A quién le vende</div>
+                    <div className="text-xs text-slate-500">¿Ya es cliente de la Agencia?</div>
                     {editing ? (
                       <textarea
                         value={(draft.audiencia as any) ?? ""}
                         onChange={(e) => setDraft((p) => ({ ...p, audiencia: e.target.value }))}
                         className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
                         rows={3}
-                        placeholder="Ej: Retailers/cadenas, importadores USA, empresas LATAM, B2B servicios profesionales..."
+                        placeholder="Sí / No / En proceso..."
                       />
                     ) : (
                       <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                        {lead?.audiencia ?? "—"}
+                        {(lead?.audiencia ?? "").trim() || "—"}
                       </div>
                     )}
                   </div>
@@ -1889,14 +2005,14 @@ export default function LeadDetailPage() {
                       </div>
                     ) : (
                       <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                        {lead?.tamano ?? "—"}
+                        {(lead?.tamano ?? "").trim() || "—"}
                       </div>
                     )}
                   </div>
 
                   <div>
                     <div className="text-xs text-slate-500">
-                      Qué ofrece a la Cámara / comunidad
+                      Notas de prensa e info adicional.
                     </div>
                     {editing ? (
                       <textarea
@@ -1908,7 +2024,7 @@ export default function LeadDetailPage() {
                       />
                     ) : (
                       <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                        {lead?.oferta ?? "—"}
+                        {(lead?.oferta ?? "").trim() || "—"}
                       </div>
                     )}
                   </div>
@@ -1925,7 +2041,7 @@ export default function LeadDetailPage() {
                       />
                     ) : (
                       <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700 whitespace-pre-wrap">
-                        {lead?.notas ?? "—"}
+                        {(lead?.notas ?? "").trim() || "—"}
                       </div>
                     )}
                   </div>
@@ -2202,7 +2318,7 @@ export default function LeadDetailPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-2">
-                  Cargo *
+                  Cargo
                 </label>
                 <input
                   type="text"
@@ -2260,6 +2376,11 @@ export default function LeadDetailPage() {
                   Contacto principal
                 </label>
               </div>
+              {contactsError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {contactsError}
+                </div>
+              )}
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"

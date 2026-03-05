@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth/session";
 import { getActiveUserPermissions } from "@/lib/rbac/server";
 
 /**
@@ -11,6 +12,11 @@ export default async function ConfiguracionLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const crm = await getSession();
+  if (crm && (crm.role === "admin" || crm.role === "superadmin")) {
+    return <>{children}</>;
+  }
+
   const permissions = await getActiveUserPermissions();
 
   if (!permissions.includes("config.admin")) {

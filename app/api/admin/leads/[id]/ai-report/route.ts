@@ -61,6 +61,7 @@ type ResolvedContext = {
   // Datos con resolución Lead > Entidad > Cliente
   website: string;
   instagram: string;
+  facebook: string;
   linkedinEmpresa: string;
   linkedinDirector: string;
   meetUrl: string;
@@ -164,13 +165,23 @@ function buildPersonalizacionIABlock(customPrompt: string | null | undefined, mo
 function resolveLeadContext(
   lead: LeadRow & { 
     empresas?: { 
+      nombre?: string | null;
       web?: string | null; 
       instagram?: string | null;
+      facebook?: string | null;
       rubro_id?: string | null;
       rubros?: { nombre?: string | null } | null;
       direccion?: string | null;
       ciudad?: string | null;
       pais?: string | null;
+      telefono?: string | null;
+      email?: string | null;
+      celular?: string | null;
+      rut?: string | null;
+      contacto_nombre?: string | null;
+      contacto_celular?: string | null;
+      contacto_email?: string | null;
+      etiquetas?: string | null;
     } | null;
   },
   cliente?: {
@@ -206,7 +217,9 @@ function resolveLeadContext(
     instagramFromEmpresa ? "Entidad" : 
     instagramFromCliente ? "Cliente" : 
     "N/A";
-  
+
+  const resolvedFacebook = (empresa?.facebook ?? "").trim() || "";
+
   // Resolver linkedin: Lead > Entidad > Cliente
   const linkedinEmpresaFromLead = (lead.linkedin_empresa ?? "").trim();
   const linkedinEmpresaFromEmpresa = ""; // Entidad no tiene linkedin
@@ -258,6 +271,7 @@ function resolveLeadContext(
     
     website: resolvedWebsite,
     instagram: resolvedInstagram,
+    facebook: resolvedFacebook,
     linkedinEmpresa: resolvedLinkedinEmpresa,
     linkedinDirector: resolvedLinkedinDirector,
     meetUrl: resolvedMeetUrl,
@@ -407,8 +421,16 @@ ${website ? `## Hipótesis por website
 /**
  * Genera un informe técnico usando OpenAI
  */
+const CONFIG_IA_KEY = "ai_prompts_v1";
+
+const TECH_MODULE_IDS = [
+  "north_star_metric",
+  "producto_servicio_estrella",
+  "auditoria_tecnica_basica",
+] as const;
+
 /**
- * Lee el prompt base desde la tabla config
+ * Lee prompt base desde config (leads_ai_prompt_base o ai_prompts_v1)
  */
 async function getPromptBase(): Promise<string> {
   try {
@@ -420,15 +442,47 @@ async function getPromptBase(): Promise<string> {
       .maybeSingle();
 
     if (error && error.code !== "PGRST116") {
-      // PGRST116 = no rows returned (ok si no existe)
       console.error("Error leyendo prompt base desde config:", error);
       return "";
     }
 
-    return (data?.value ?? "").trim();
+    const base = (data?.value ?? "").trim();
+    if (base) return base;
+
+    const { data: dataV1 } = await sb
+      .from("config")
+      .select("value")
+      .eq("key", CONFIG_IA_KEY)
+      .maybeSingle();
+    const parsed = dataV1?.value ? JSON.parse(String(dataV1.value)) : null;
+    return (parsed?.basePrompt ?? "").trim();
   } catch (e: any) {
     console.error("Error inesperado leyendo prompt base:", e);
     return "";
+  }
+}
+
+/**
+ * Carga configuración IA (Prompt base + módulos) desde DB para usar cuando el body no envía prompts.
+ */
+async function getIAConfigFromDB(): Promise<{ base?: string; modules?: Record<string, string> }> {
+  try {
+    const sb = supabaseAdmin();
+    const { data, error } = await sb
+      .from("config")
+      .select("value")
+      .eq("key", CONFIG_IA_KEY)
+      .maybeSingle();
+
+    if (error || !data?.value) return {};
+    const parsed = JSON.parse(String(data.value)) as { basePrompt?: string; modulos?: Record<string, string> };
+    return {
+      base: typeof parsed.basePrompt === "string" ? parsed.basePrompt : "",
+      modules: parsed.modulos && typeof parsed.modulos === "object" ? parsed.modulos : {},
+    };
+  } catch (e: any) {
+    if (process.env.NODE_ENV !== "production") console.warn("[AI] getIAConfigFromDB:", e?.message);
+    return {};
   }
 }
 
@@ -526,7 +580,6 @@ function buildVisionEstrategicaContext(
   // Parsear todos los tabs del informe
   const reportTabs = parseAllReportTabs(aiReport);
   
-  // Orden estable de tabs
   const tabOrder = [
     "INVESTIGACION_DIGITAL",
     "REDES_SOCIALES",
@@ -539,6 +592,13 @@ function buildVisionEstrategicaContext(
     "ACCIONES",
     "MATERIALES_LISTOS",
     "CIERRE_VENTA",
+    "linkedin_decision_makers",
+    "north_star_metric",
+    "producto_servicio_estrella",
+    "auditoria_tecnica_basica",
+    "plan_crecimiento",
+    "propuesta_easy",
+    "oportunidades_negocio_easy",
   ];
   
   // Construir sección de informe completo
@@ -926,14 +986,25 @@ Fecha: ${fecha}`);
     { id: "ACCIONES", label: "Acciones", prompt: "Genera un plan de acciones con subsecciones: Acciones 72 hs, Plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "MATERIALES_LISTOS", label: "Materiales Listos", prompt: "Genera una lista de materiales listos para usar: Copys, Scripts, PDFs, Recursos accionables. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "CIERRE_VENTA", label: "Cierre de Venta", prompt: "Genera estrategias de cierre de venta: argumentos, objeciones, CTAs, próximos pasos. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "linkedin_decision_makers", label: "LinkedIn – Tomadores de decisión", prompt: "Análisis de perfiles clave en LinkedIn y su impacto estratégico. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "north_star_metric", label: "North Star y métricas clave", prompt: "Identificación de la métrica principal que impulsa el crecimiento del negocio. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "producto_servicio_estrella", label: "Producto / Servicio estrella", prompt: "Identificación del producto o servicio con mayor potencial de crecimiento. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "auditoria_tecnica_basica", label: "Auditoría técnica básica", prompt: "Revisión de tracking, analítica y herramientas técnicas. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "plan_crecimiento", label: "Plan de crecimiento", prompt: "Acciones 72h + plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "propuesta_easy", label: "Propuesta de crecimiento EASY", prompt: "Traducción del diagnóstico en oportunidades de servicio. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "oportunidades_negocio_easy", label: "Oportunidades de negocio EASY", prompt: "Detectá oportunidades comerciales para EASY basadas en el diagnóstico del lead y su entidad. Entregá: 1) Qué servicio vender (3 opciones) 2) Para qué problema 3) Argumento de venta 4) Paquetización 5) Quick wins 72h 6) Objeciones y respuestas. Si ya es cliente: tono optimización, no crítica destructiva. Cerrar con La jugada más rentable. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
   ];
 
-  const module = defaultModules.find(m => m.id === moduleId);
+  const fallbackGeneric = "Genera análisis para este módulo. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.";
+  let module = defaultModules.find((m) => m.id === moduleId);
   if (!module) {
-    throw new Error(`Módulo ${moduleId} no encontrado`);
+    module = {
+      id: moduleId,
+      label: moduleId,
+      prompt: customPrompts?.modules?.[moduleId] ?? fallbackGeneric,
+    };
   }
 
-  // Para cada módulo: promptModulo = prompts?.[moduleId] ?? fallbackModulo
   const modulePromptOriginal = customPrompts?.modules?.[moduleId] || module.prompt;
   
   // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
@@ -1034,9 +1105,15 @@ function updateReportTab(existingReport: string, newTabContent: string, moduleId
 }
 
 async function generateAiReportAI(
-  lead: LeadRow & { custom_prompt?: string | null; empresas?: { web?: string | null; instagram?: string | null } | null },
+  lead: LeadRow & {
+    custom_prompt?: string | null;
+    empresas?: { web?: string | null; instagram?: string | null; facebook?: string | null; nombre?: string | null; [k: string]: unknown } | null;
+    _contacts?: Array<{ nombre: string; cargo: string | null; telefono: string | null; email: string | null; is_primary: boolean; notas: string | null }>;
+    _ya_es_cliente_agencia?: boolean;
+  },
   customPrompts?: { base?: string; modules?: Record<string, string> },
-  ctx?: ResolvedContext
+  ctx?: ResolvedContext,
+  moduleIdsToRun?: string[]
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   console.log("OPENAI_API_KEY presente:", Boolean(process.env.OPENAI_API_KEY));
@@ -1044,28 +1121,40 @@ async function generateAiReportAI(
     throw new Error("OPENAI_API_KEY no configurada");
   }
 
+  const ya_es_cliente_agencia = !!(lead as any)._ya_es_cliente_agencia;
+  const contacts = (lead as any)._contacts ?? [];
+
   // PRIORIDAD 1: Leer prompt base (customPrompts > DB > fallback)
   let promptBase = "";
-  if (customPrompts?.base) {
-    promptBase = customPrompts.base;
+  if (customPrompts?.base?.trim()) {
+    promptBase = customPrompts.base.trim();
   } else {
-    promptBase = await getPromptBase();
+    promptBase = (await getPromptBase()).trim();
   }
 
-  // FALLBACK: Prompt neutro (solo si promptBase está vacío)
   const fallbackNeutro = `Eres un consultor senior experto en identificar oportunidades estratégicas. Generas informes técnicos con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.
 
 REGLAS ESTRICTAS:
 - No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.
 - No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
 
-  // PRIORIDAD 1: Usar promptBase si existe, sino fallbackNeutro
-  // Agregar regla sobre Cámara al prompt base si existe
-  let systemPrompt = promptBase.trim() || fallbackNeutro;
-  
-  // Si hay prompt base, agregar la regla sobre Cámara si no está ya incluida
-  if (promptBase.trim() && !promptBase.toLowerCase().includes("no mencionar cámara")) {
+  let systemPrompt = promptBase || fallbackNeutro;
+  if (promptBase && !promptBase.toLowerCase().includes("no mencionar cámara")) {
     systemPrompt = `${systemPrompt}\n\nREGLAS ESTRICTAS:\n- No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.\n- No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
+  }
+
+  if (ya_es_cliente_agencia) {
+    systemPrompt += `
+
+REGLAS DE TONO (YA ES CLIENTE DE LA AGENCIA):
+- Este lead ya es cliente. Usá tono de optimización y mejora continua, NO crítica destructiva.
+- No uses lenguaje destructivo (ej. "espantoso", "pésimo", "desastroso"). Enfocate en mejoras, próximos pasos, quick wins y experimentos.
+- Proponé optimizaciones y oportunidades de crecimiento con tacto.`;
+  } else {
+    systemPrompt += `
+
+REGLAS DE TONO (PROSPECCIÓN):
+- Podés detectar gaps y oportunidades con tacto. Mantené tono consultivo y constructivo.`;
   }
 
   // Detectar tipo de organización del vendedor desde systemPrompt para el frame de CIERRE_VENTA
@@ -1093,31 +1182,42 @@ REGLAS ESTRICTAS:
   // Determinar origen del website para mostrar en el prompt
   const websiteDisplay = resolvedCtx.website ? `${resolvedCtx.website} (${resolvedCtx.websiteSource})` : "No proporcionado";
   
-  userPromptParts.push(`## DATOS DE ENTIDAD (si existe)
+  const empresa = lead.empresas;
+  userPromptParts.push(`## DATOS DE ENTIDAD (empresa vinculada)
+${empresa?.nombre ? `- Nombre: ${empresa.nombre}` : ""}
 ${resolvedCtx.rubro ? `- Rubro: ${resolvedCtx.rubro}` : ""}
 ${resolvedCtx.direccion ? `- Dirección: ${resolvedCtx.direccion}` : ""}
 ${resolvedCtx.ciudad ? `- Ciudad: ${resolvedCtx.ciudad}` : ""}
 ${resolvedCtx.pais ? `- País: ${resolvedCtx.pais}` : ""}
-${!resolvedCtx.rubro && !resolvedCtx.direccion && !resolvedCtx.ciudad && !resolvedCtx.pais ? "- No hay datos de entidad vinculada" : ""}
+- Website: ${resolvedCtx.website || "—"}
+- Instagram: ${resolvedCtx.instagram || "—"}
+- Facebook: ${resolvedCtx.facebook || "—"}
+${(empresa as any)?.telefono ? `- Teléfono: ${(empresa as any).telefono}` : ""}
+${(empresa as any)?.email ? `- Email: ${(empresa as any).email}` : ""}
+${(empresa as any)?.celular ? `- Celular: ${(empresa as any).celular}` : ""}
+${(empresa as any)?.rut ? `- RUT: ${(empresa as any).rut}` : ""}
+${!empresa ? "- No hay entidad vinculada" : ""}
 
-## DATOS DEL LEAD (override)
-- Empresa: ${resolvedCtx.nombre}
+## DATOS DEL LEAD (nuevos)
+- Empresa/Nombre: ${resolvedCtx.nombre}
 - Lead ID: ${lead.id}
 - Origen: ${resolvedCtx.origen}
 - Pipeline: ${resolvedCtx.pipeline}
-- Website: ${websiteDisplay}
-- Instagram: ${resolvedCtx.instagram ? `${resolvedCtx.instagram} (${resolvedCtx.instagramSource})` : "No proporcionado"}
-- Tamaño de empresa: ${resolvedCtx.tamano || "No especificado"}
-- Objetivos declarados: ${resolvedCtx.objetivos || "No especificados"}
-- A quién le vende: ${resolvedCtx.audiencia || "No especificado"}
-- Qué ofrece: ${resolvedCtx.oferta || "No especificado"}
-- Perfil LinkedIn Empresa: ${resolvedCtx.linkedinEmpresa || "No proporcionado"}
-- Perfil LinkedIn Director / Decisor: ${resolvedCtx.linkedinDirector || "No proporcionado"}
-- Meet URL: ${resolvedCtx.meetUrl || "No proporcionado"}
-- Notas internas: ${resolvedCtx.notas || "Sin notas"}
+- Website (efectivo): ${websiteDisplay}
+- Instagram (efectivo): ${resolvedCtx.instagram ? `${resolvedCtx.instagram} (${resolvedCtx.instagramSource})` : "No proporcionado"}
+- Facebook (entidad): ${resolvedCtx.facebook || "—"}
+- Tamaño: ${resolvedCtx.tamano || "No especificado"}
+- Objetivos: ${resolvedCtx.objetivos || "No especificados"}
+- ¿Ya es cliente de la Agencia?: ${resolvedCtx.audiencia || "No especificado"}
+- Notas de prensa e info adicional.: ${resolvedCtx.oferta || "No especificado"}
+- LinkedIn Empresa: ${resolvedCtx.linkedinEmpresa || "—"}
+- LinkedIn Director: ${resolvedCtx.linkedinDirector || "—"}
+- Meet URL: ${resolvedCtx.meetUrl || "—"}
+- Notas: ${resolvedCtx.notas || "Sin notas"}
 
-${resolvedCtx.clienteHistorial ? `## DATOS DE CLIENTE (historial/relación comercial)
-${resolvedCtx.clienteHistorial}` : ""}
+${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map((c, i) => `${i + 1}) ${c.nombre}${c.cargo ? ` (${c.cargo})` : ""}${c.telefono ? ` Tel: ${c.telefono}` : ""}${c.email ? ` Email: ${c.email}` : ""}${c.is_primary ? " [Principal]" : ""}${c.notas ? ` Notas: ${c.notas}` : ""}`).join("\n")}` : ""}
+
+${resolvedCtx.clienteHistorial ? `## CLIENTE (historial)\n${resolvedCtx.clienteHistorial}` : ""}
 
 Fecha: ${fecha}`);
   
@@ -1172,12 +1272,12 @@ Esta sección debe aparecer al final del informe, después de todos los módulos
   // Log temporal antes de llamar a OpenAI (para validar que arranca con texto de MODO EASY)
   console.log("SYSTEM_PROMPT_HEAD:", systemPrompt.slice(0, 120));
 
-  // Construir contexto de redes sociales y website para incluir en prompts
   const websiteTxt = resolvedCtx.website ? `Website detectado: ${resolvedCtx.website}` : "Website: no disponible";
   const instagramTxt = resolvedCtx.instagram ? `Instagram detectado: ${resolvedCtx.instagram}` : "Instagram: no disponible";
+  const facebookTxt = resolvedCtx.facebook ? `Facebook detectado: ${resolvedCtx.facebook}` : "Facebook: no disponible";
   const linkedinEmpresaTxt = resolvedCtx.linkedinEmpresa ? `LinkedIn Empresa: ${resolvedCtx.linkedinEmpresa}` : "LinkedIn Empresa: no disponible";
   const linkedinDirectorTxt = resolvedCtx.linkedinDirector ? `LinkedIn Director: ${resolvedCtx.linkedinDirector}` : "LinkedIn Director: no disponible";
-  const redesTxt = `${websiteTxt}\n${instagramTxt}\n${linkedinEmpresaTxt}\n${linkedinDirectorTxt}`;
+  const redesTxt = `${websiteTxt}\n${instagramTxt}\n${facebookTxt}\n${linkedinEmpresaTxt}\n${linkedinDirectorTxt}`;
   
   // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
   const cierreFrameExtra = `
@@ -1199,9 +1299,9 @@ ENTREGABLES:
 `;
   
   // Definir módulos/tabs a generar (11 módulos)
-  // Construir prompt de REDES_SOCIALES con instagram explícito si existe
-  const redesSocialesPrompt = resolvedCtx.instagram
-    ? `Instagram detectado: ${resolvedCtx.instagram}. Analizá su presencia y contenido basado en ese perfil real. Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.`
+  const redesContext = [resolvedCtx.instagram && `Instagram: ${resolvedCtx.instagram}`, resolvedCtx.facebook && `Facebook: ${resolvedCtx.facebook}`].filter(Boolean).join("; ");
+  const redesSocialesPrompt = redesContext
+    ? `Redes detectadas: ${redesContext}. Analizá presencia y contenido basado en esos perfiles. Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.`
     : "Genera un análisis de redes sociales: presencia, engagement, estrategia de contenido, audiencia. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.";
   
   // Prompt de INVESTIGACION_DIGITAL con contexto de website e instagram explícitos
@@ -1219,6 +1319,30 @@ ENTREGABLES:
     { id: "ACCIONES", label: "Acciones", prompt: "Genera un plan de acciones con subsecciones: Acciones 72 hs, Plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "MATERIALES_LISTOS", label: "Materiales Listos", prompt: "Genera una lista de materiales listos para usar: Copys, Scripts, PDFs, Recursos accionables. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
     { id: "CIERRE_VENTA", label: "Cierre de Venta", prompt: "Genera estrategias de cierre de venta: argumentos, objeciones, CTAs, próximos pasos. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "linkedin_decision_makers", label: "LinkedIn – Tomadores de decisión", prompt: "Análisis de perfiles clave en LinkedIn y su impacto estratégico. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "north_star_metric", label: "North Star y métricas clave", prompt: "Identificación de la métrica principal que impulsa el crecimiento del negocio. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "producto_servicio_estrella", label: "Producto / Servicio estrella", prompt: "Identificación del producto o servicio con mayor potencial de crecimiento. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "auditoria_tecnica_basica", label: "Auditoría técnica básica", prompt: "Revisión de tracking, analítica y herramientas técnicas. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "plan_crecimiento", label: "Plan de crecimiento", prompt: "Acciones 72h + plan 30–90 días. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "propuesta_easy", label: "Propuesta de crecimiento EASY", prompt: "Traducción del diagnóstico en oportunidades de servicio. Responde SOLO con el contenido, sin introducciones ni títulos adicionales." },
+    { id: "oportunidades_negocio_easy", label: "Oportunidades de negocio EASY", prompt: `Detectá oportunidades comerciales para EASY basadas en el diagnóstico del lead y su entidad.
+
+Entregá:
+1) Qué servicio vender (3 opciones en orden de prioridad)
+2) Para qué problema (dolor explícito/implícito)
+3) Argumento de venta (beneficio + prueba + riesgo de no actuar)
+4) Paquetización (Starter / Growth / Scale) con alcance resumido
+5) Quick wins (72h) que podamos prometer como "primeros avances"
+6) Objeciones probables y cómo responderlas
+
+REGLA:
+Si "¿Ya es cliente de la Agencia?" es SI, NO criticar destructivamente.
+Hablar en tono de optimización: mejoras, experimentos, expansión, eficiencia.
+
+Cerrar con:
+"La jugada más rentable" (1–2 recomendaciones de alto impacto).
+
+Responde SOLO con el contenido, sin introducciones ni títulos adicionales.` },
     { id: "vision_estrategica", label: "Visión Estratégica", prompt: `Actúa como Director de Growth Marketing Senior y socio estratégico.
 
 Tu tarea NO es analizar módulos por separado ni repetir diagnósticos.
@@ -1250,11 +1374,18 @@ Reglas finales:
 - No cierres con frases abiertas.` },
   ];
 
-  // Usar prompts personalizados si vienen en customPrompts, sino usar defaults
-  const modules = defaultModules.map((mod) => ({
-    ...mod,
-    prompt: customPrompts?.modules?.[mod.id] || mod.prompt,
-  }));
+  const configModuleKeys = Object.keys(customPrompts?.modules ?? {});
+  const defaultIds = defaultModules.map((m) => m.id);
+  const allModuleIds = moduleIdsToRun?.length
+    ? moduleIdsToRun
+    : [...new Set([...defaultIds, ...configModuleKeys])];
+
+  const fallbackPrompt = "Genera análisis para este módulo. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.";
+  const modules = allModuleIds.map((moduleId) => {
+    const def = defaultModules.find((m) => m.id === moduleId);
+    const prompt = customPrompts?.modules?.[moduleId] ?? def?.prompt ?? fallbackPrompt;
+    return { id: moduleId, label: def?.label ?? moduleId, prompt };
+  });
 
   try {
     const moduleResults: string[] = [];
@@ -1450,13 +1581,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       | null;
 
     const shouldRegenerate = body?.force_regenerate === true;
-    // Normalizar only_module: mantener vision_estrategica en lowercase, otros módulos en uppercase
+    // Normalizar only_module a snake_case minúscula para validación (tolerante a PROPUESTA_EASY, etc.)
     const rawModule = (body?.only_module || body?.module_id)?.trim() || null;
-    const only_module = rawModule === "vision_estrategica" 
-      ? "vision_estrategica" 
-      : rawModule?.toUpperCase() || null;
-    
-    // Validar only_module si está presente
+    const onlyModuleNormalized = rawModule
+      ? String(rawModule).trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_")
+      : null;
+
     const validModuleIds = [
       "INVESTIGACION_DIGITAL",
       "REDES_SOCIALES",
@@ -1470,15 +1600,28 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       "MATERIALES_LISTOS",
       "CIERRE_VENTA",
       "vision_estrategica",
+      "linkedin_decision_makers",
+      "north_star_metric",
+      "producto_servicio_estrella",
+      "auditoria_tecnica_basica",
+      "plan_crecimiento",
+      "propuesta_easy",
+      "oportunidades_negocio_easy",
     ];
-    
-    if (only_module && !validModuleIds.includes(only_module)) {
-      console.log(`[AI] regen tab ${only_module} status 400`);
+    const validSet = new Set(validModuleIds.map((id) => id.toLowerCase()));
+
+    if (onlyModuleNormalized && !validSet.has(onlyModuleNormalized)) {
+      console.log(`[AI] regen tab ${onlyModuleNormalized} status 400`);
       return NextResponse.json(
-        { data: null, error: `only_module inválido: ${only_module}. Debe ser uno de: ${validModuleIds.join(", ")}` } satisfies ApiResp<null>,
+        { data: null, error: `only_module inválido: ${rawModule}. Debe ser uno de: ${validModuleIds.join(", ")}` } satisfies ApiResp<null>,
         { status: 400 }
       );
     }
+
+    // Id canónico para report/compare: mismo caso que en validModuleIds (report usa [TAB:...])
+    const only_module = onlyModuleNormalized
+      ? (validModuleIds.find((id) => id.toLowerCase() === onlyModuleNormalized) ?? onlyModuleNormalized)
+      : null;
     
     // Fuente de verdad: prioridad 1) body.personalization, 2) body.custom_prompt, 3) lead.ai_custom_prompt, 4) null
     const bodyCustomPrompt = (typeof body?.personalization === "string" ? body.personalization.trim() : null) ||
@@ -1487,11 +1630,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Log para debugging (antes de leer el lead)
     console.log("[AI] only_module:", only_module, "force:", shouldRegenerate);
 
+    const leadSelect = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,empresa_id,linkedin_empresa,linkedin_director,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(nombre))";
     const { data: lead, error: leadErr } = await sb
       .from("leads")
-      .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,empresa_id,linkedin_empresa,linkedin_director,meet_url,empresas:empresa_id(id,web,instagram,direccion,ciudad,pais,rubro_id,rubros:rubro_id(nombre))"
-      )
+      .select(leadSelect)
       .eq("id", id)
       .maybeSingle();
 
@@ -1501,6 +1643,20 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     }
 
     const leadRow = lead as LeadRow;
+
+    // Contactos del lead (para contexto IA)
+    let contacts: Array<{ nombre: string; cargo: string | null; telefono: string | null; email: string | null; is_primary: boolean; notas: string | null }> = [];
+    try {
+      const { data: contactsData } = await sb
+        .from("lead_contacts")
+        .select("nombre,cargo,telefono,email,is_primary,notas")
+        .eq("lead_id", id)
+        .order("is_primary", { ascending: false })
+        .order("created_at", { ascending: true });
+      if (contactsData?.length) contacts = contactsData as typeof contacts;
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") console.warn("[AI] Error fetching contacts:", e);
+    }
     
     // Consultar socio/cliente si existe (por lead_id o empresa_id)
     let cliente: { nombre?: string | null; email?: string | null; telefono?: string | null; plan?: string | null; estado?: string | null; fecha_alta?: string | null; proxima_accion?: string | null } | null = null;
@@ -1534,6 +1690,42 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     
     // Resolver contexto unificado
     const ctx = resolveLeadContext(leadRow, cliente);
+
+    // Cargar config IA desde DB si el body no trae prompts (siempre usar módulo IA cuando falte)
+    let effectivePrompts = body?.prompts;
+    if (!effectivePrompts?.base?.trim()) {
+      const dbConfig = await getIAConfigFromDB();
+      if (dbConfig.base || (dbConfig.modules && Object.keys(dbConfig.modules).length > 0)) {
+        effectivePrompts = {
+          base: effectivePrompts?.base?.trim() || dbConfig.base || "",
+          modules: { ...dbConfig.modules, ...effectivePrompts?.modules },
+        };
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[AI] config from DB:", { hasBase: !!dbConfig.base, moduleKeys: dbConfig.modules ? Object.keys(dbConfig.modules) : [] });
+        }
+      }
+    }
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[AI] effectivePrompts:", {
+        hasBase: !!effectivePrompts?.base,
+        moduleKeys: effectivePrompts?.modules ? Object.keys(effectivePrompts.modules) : [],
+        hasEmpresa: !!(lead as any)?.empresas,
+        hasContacts: contacts.length > 0,
+        redes: {
+          website: !!ctx.website,
+          instagram: !!ctx.instagram,
+          facebook: !!ctx.facebook,
+          linkedin: !!(leadRow.linkedin_empresa || leadRow.linkedin_director),
+        },
+      });
+    }
+
+    // Heurística: ¿Ya es cliente de la Agencia? (desde audiencia / "¿Ya es cliente de la Agencia?")
+    const audienciaLower = (ctx.audiencia ?? "").toLowerCase().trim();
+    const ya_es_cliente_agencia = /s[ií]|cliente|ya\s+es\s+cliente|afirmativo|yes/i.test(audienciaLower) && audienciaLower.length < 200;
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[AI] ya_es_cliente_agencia:", ya_es_cliente_agencia, "audienciaPreview:", audienciaLower.slice(0, 80));
+    }
     
     // Log de debug temporal
     console.log("[AI DEBUG] resolved:", {
@@ -1600,8 +1792,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Si hay only_module, generar solo ese módulo usando prompt recibido directamente
     if (only_module) {
       try {
-        // Usar directamente el prompt recibido (no re-leer del server)
-        let modulePrompt = body?.prompts?.modules?.[only_module] || "";
+        // Lookup case-insensitive: el front puede enviar PROPUESTA_EASY y el backend usa propuesta_easy
+        const mods = body?.prompts?.modules ?? {};
+        const moduleKey = Object.keys(mods).find(
+          (k) => k.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_") === only_module
+        ) ?? only_module;
+        let modulePrompt = mods[moduleKey] || mods[only_module] || "";
         
         // Fallback para vision_estrategica: usar prompt default si no está en localStorage
         if (!modulePrompt && only_module === "vision_estrategica") {
@@ -1769,16 +1965,47 @@ ENTREGABLES:
     let aiContext: string;
 
     try {
-      // Pasar custom_prompt final (prioridad: body > DB > null) y prompts personalizados a generateAiReportAI
+      const leadForAI = {
+        ...leadRow,
+        ai_context: leadRow.ai_context || null,
+        custom_prompt: finalCustomPrompt,
+        empresas: (lead as any)?.empresas || null,
+      } as LeadRow & { _contacts?: typeof contacts; _ya_es_cliente_agencia?: boolean };
+      (leadForAI as any)._contacts = contacts;
+      (leadForAI as any)._ya_es_cliente_agencia = ya_es_cliente_agencia;
+
+      const moduleIds = Object.keys(effectivePrompts?.modules ?? {});
+      const hasWeb = Boolean(
+        leadRow?.empresas?.web ||
+        (leadRow as any)?.empresas?.website ||
+        leadRow?.website ||
+        leadRow?.empresas?.instagram ||
+        leadRow?.empresas?.facebook ||
+        leadRow?.linkedin_empresa ||
+        leadRow?.linkedin_director
+      );
+      const adHint = `${leadRow?.ai_context ?? ""} ${leadRow?.notas ?? ""} ${leadRow?.objetivos ?? ""}`.toLowerCase();
+      const hasPauta = Boolean(
+        (leadRow as any)?.pauta_publicitaria ||
+        (leadRow as any)?.ads ||
+        adHint.includes("ads") ||
+        adHint.includes("pauta") ||
+        adHint.includes("pixel") ||
+        adHint.includes("capi")
+      );
+      const shouldIncludeTech = hasWeb || hasPauta;
+      const filteredModuleIds = moduleIds.filter(
+        (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
+      );
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[AI REPORT] modulesToRun", { shouldIncludeTech, hasWeb, hasPauta, count: filteredModuleIds.length, modulesToRun: filteredModuleIds });
+      }
+
       report = await generateAiReportAI(
-        {
-          ...leadRow,
-          ai_context: leadRow.ai_context || null,
-          custom_prompt: finalCustomPrompt, // Personalización: body > DB > null
-          empresas: (lead as any)?.empresas || null,
-        },
-        body?.prompts, // Prompts personalizados desde localStorage (opcional)
-        ctx // Pasar contexto resuelto completo
+        leadForAI,
+        effectivePrompts ?? undefined,
+        ctx,
+        filteredModuleIds
       );
       // Construir contexto para guardar (usar contexto resuelto)
       aiContext = [
@@ -1965,8 +2192,9 @@ ENTREGABLES:
               ai_report: finalReport,
               ai_report_updated_at: nowIso(),
             },
+        generated: filteredModuleIds,
         error: null,
-      } satisfies ApiResp<any>,
+      } satisfies ApiResp<any> & { generated?: string[] },
       { status: 200 }
     );
   } catch (e: any) {

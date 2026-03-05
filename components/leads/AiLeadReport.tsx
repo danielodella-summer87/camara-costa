@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef } from "react";
+import { pdf } from "@react-pdf/renderer";
+import LeadReportPdf from "@/components/pdf/LeadReportPdf";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,8 +43,30 @@ const TABS_CONFIG = [
   { id: "acciones", label: "Acciones", tabId: "ACCIONES" },
   { id: "materiales", label: "Materiales listos", tabId: "MATERIALES_LISTOS" },
   { id: "cierre", label: "Cierre de la venta", tabId: "CIERRE_VENTA" },
+  { id: "linkedin_decision_makers", label: "LinkedIn – Tomadores de decisión", tabId: "linkedin_decision_makers" },
+  { id: "north_star_metric", label: "North Star y métricas clave", tabId: "north_star_metric" },
+  { id: "producto_servicio_estrella", label: "Producto / Servicio estrella", tabId: "producto_servicio_estrella" },
+  { id: "auditoria_tecnica_basica", label: "Auditoría técnica básica", tabId: "auditoria_tecnica_basica" },
+  { id: "plan_crecimiento", label: "Plan de crecimiento", tabId: "plan_crecimiento" },
+  { id: "propuesta_easy", label: "Propuesta de crecimiento EASY", tabId: "propuesta_easy" },
+  { id: "oportunidades_negocio_easy", label: "Oportunidades de negocio EASY", tabId: "oportunidades_negocio_easy" },
   { id: "vision_estrategica", label: "Visión Estratégica", tabId: "vision_estrategica" },
 ] as const;
+
+const TECH_MODULE_IDS = ["north_star_metric", "producto_servicio_estrella", "auditoria_tecnica_basica"] as const;
+
+const formatAiText = (text: string) => {
+  if (!text) return "";
+  return text
+    .replace(/\*\*/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+const formatLevels = (text: string) =>
+  text.replace(/^(\d+\.\s)([^\n:]+):/gm, (_, num, title) => `**${num}${title}:**`);
+
+const formatBullets = (text: string) => text.replace(/^- /gm, "• ");
 
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -336,6 +360,18 @@ export function AiLeadReport({
   const [missingAnswersText, setMissingAnswersText] = useState<string>("");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const [moduleStatus, setModuleStatus] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
+  const [aiDoneMsg, setAiDoneMsg] = useState<string>("");
+  const moduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
+  const modulePanelRef = useRef<HTMLDivElement | null>(null);
+
+  const VISION_TAB_ID = "vision_estrategica";
+
+  const keepTabsInView = () => {
+    tabsBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const canRun = !!(leadId && leadId.trim());
 
   // Inicializar report desde el lead cuando se carga o cambia
@@ -535,73 +571,143 @@ export function AiLeadReport({
     setTimeout(() => setToastMessage(null), 2000);
   };
 
-  // Función para regenerar un tab específico
+  // Regenera un solo módulo; retorna { ok, report, error } para uso en loop o manual
+  const regenerateSingleModule = async (tabId: string): Promise<{ ok: boolean; report?: string; error?: string }> => {
+    if (!leadId?.trim()) return { ok: false, error: "Sin leadId" };
+    const promptsData = getAiPromptsFromLocalStorage();
+    if (!promptsData) return { ok: false, error: "No se encontraron prompts en localStorage" };
+
+    const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+    const onlyModule = (tabId ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+    const body = {
+      custom_prompt: customPromptValue,
+      personalization: customPromptValue,
+      force_regenerate: true,
+      only_module: onlyModule,
+      prompts: {
+        base: promptsData.prompts.base || "",
+        modules: { [tabId]: promptsData.prompts.modules?.[tabId] || "" },
+      },
+      prompts_meta: promptsData.meta,
+    };
+
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        return { ok: false, error: text || "Error regenerando módulo" };
+      }
+      const data = await res.json();
+      const updatedReport = data.data?.report ?? data.report ?? "";
+      return { ok: true, report: updatedReport };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? "Error regenerando módulo" };
+    }
+  };
+
   const regenerateTab = async (tabId: string) => {
-    if (!leadId?.trim()) return;
-    
     setRegeneratingTab(tabId);
     setError(null);
     setToastMessage("Regenerando…");
-    
     try {
-      // Leer prompts desde localStorage con metadata
-      const promptsData = getAiPromptsFromLocalStorage();
-      
-      if (!promptsData) {
-        throw new Error("No se encontraron prompts en localStorage");
-      }
-
-      // Incluir personalización IA en el body (siempre)
-      const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
-      
-      // Construir body con estructura requerida
-      const body: {
-        custom_prompt: string | null;
-        personalization?: string | null;
-        force_regenerate: boolean;
-        only_module: string;
-        prompts: { base: string; modules: Record<string, string> };
-        prompts_meta: { updated_at: { base?: number; modules?: Record<string, number> } };
-      } = {
-        custom_prompt: customPromptValue, // Personalización IA siempre incluida (backward compatibility)
-        personalization: customPromptValue, // Nuevo campo explícito
-        force_regenerate: true,
-        only_module: tabId,
-        prompts: {
-          base: promptsData.prompts.base || "",
-          modules: { [tabId]: promptsData.prompts.modules?.[tabId] || "" },
-        },
-        prompts_meta: promptsData.meta,
-      };
-
-      const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Error regenerando módulo");
-      }
-
-      const data = await res.json();
-      const updatedReport = data.data?.report ?? data.report ?? "";
-      
-      if (updatedReport) {
-        setReport(updatedReport);
+      const result = await regenerateSingleModule(tabId);
+      if (result.ok && result.report) {
+        setReport(result.report);
         setToastMessage("Actualizado ✅");
         setTimeout(() => setToastMessage(null), 3000);
+        setModuleStatus((s) => ({ ...s, [tabId]: "done" }));
+      } else {
+        setError(result.error ?? "Error regenerando módulo");
+        setToastMessage(null);
+        setModuleStatus((s) => ({ ...s, [tabId]: "error" }));
       }
     } catch (err: any) {
-      console.error("[AI] ERROR regenerando módulo", err);
-      setError(err?.message ?? "Error regenerando módulo. Ver consola.");
+      setError(err?.message ?? "Error regenerando módulo");
       setToastMessage(null);
+      setModuleStatus((s) => ({ ...s, [tabId]: "error" }));
     } finally {
       setRegeneratingTab(null);
     }
+  };
+
+  const runFullAiGeneration = async () => {
+    if (!leadId?.trim()) return;
+    try {
+      await onBeforeGenerate?.();
+    } catch (e) {
+      setError("Error guardando draft antes de generar.");
+      return;
+    }
+
+    setAiLoading(true);
+    setError(null);
+    setAiDoneMsg("");
+    setReportExpanded(true);
+
+    const promptsData = getAiPromptsFromLocalStorage();
+    if (!promptsData?.prompts?.modules) {
+      setError("No hay módulos en la config IA. Configurá en Admin → Configuración → IA.");
+      setAiLoading(false);
+      return;
+    }
+
+    const moduleIds = Object.keys(promptsData.prompts.modules);
+    const emp = (lead as any)?.empresas;
+    const hasWeb = Boolean(
+      lead?.website || emp?.web || emp?.website || emp?.instagram || emp?.facebook ||
+      (lead as any)?.linkedin_empresa || (lead as any)?.linkedin_director
+    );
+    const adHint = `${lead?.objetivos ?? ""} ${lead?.notas ?? ""} ${(lead as any)?.ai_context ?? ""}`.toLowerCase();
+    const hasPauta = adHint.includes("ads") || adHint.includes("pauta") || adHint.includes("pixel") || adHint.includes("capi");
+    const shouldIncludeTech = hasWeb || hasPauta;
+    const filteredIds = moduleIds.filter((id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any));
+
+    const uiModuleOrder = TABS_CONFIG.filter((t) => filteredIds.includes(t.tabId));
+    if (uiModuleOrder.length === 0) {
+      setError("Ningún módulo para generar. Revisá la config IA.");
+      setAiLoading(false);
+      return;
+    }
+
+    setModuleStatus(() => {
+      const next: Record<string, "idle" | "running" | "done" | "error"> = {};
+      filteredIds.forEach((id) => (next[id] = "idle"));
+      return next;
+    });
+
+    keepTabsInView();
+
+    const firstTab = uiModuleOrder[0];
+    setActiveReportTab(firstTab.id);
+
+    let currentReport = report;
+    for (const tab of uiModuleOrder) {
+      setModuleStatus((s) => ({ ...s, [tab.tabId]: "running" }));
+      setActiveReportTab(tab.id);
+      keepTabsInView();
+      const result = await regenerateSingleModule(tab.tabId);
+      if (result.ok && result.report) {
+        currentReport = result.report;
+        setReport(currentReport);
+        setModuleStatus((s) => ({ ...s, [tab.tabId]: "done" }));
+        keepTabsInView();
+      } else {
+        setModuleStatus((s) => ({ ...s, [tab.tabId]: "error" }));
+        if (result.error) setError(result.error);
+      }
+    }
+
+    setActiveReportTab(VISION_TAB_ID);
+    keepTabsInView();
+    modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    setAiDoneMsg("✅ Informe IA completo.");
+    setStatus("done");
+    setAiLoading(false);
   };
 
   const generateAI = async () => {
@@ -683,56 +789,45 @@ export function AiLeadReport({
     }
   };
 
-  async function downloadPdf() {
+  const handleExportPdf = async () => {
     try {
       setError(null);
-
-      if (!leadId) {
-        setError("No hay leadId para generar el PDF.");
+      if (!report?.trim()) {
+        setError("No hay informe para exportar. Generá el informe IA primero.");
         return;
       }
-
       setToastMessage("Generando PDF…");
 
-      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}/ai-report/pdf`, {
-        method: "GET",
-        cache: "no-store",
-        headers: { "Cache-Control": "no-store" },
-      });
+      const sections = TABS_CONFIG.map((t) => ({
+        name: t.label,
+        content: reportTabs[t.tabId] ?? "",
+      }));
 
-      if (!res.ok) {
-        let msg = "No se pudo generar el PDF.";
-        try {
-          const j = await res.json();
-          if (j?.error) msg = j.error;
-        } catch {}
-        throw new Error(msg);
-      }
+      const doc = (
+        <LeadReportPdf
+          title="Informe Estratégico del Lead"
+          subtitle="Diagnóstico + oportunidades (MODO EASY)"
+          leadName={(lead as any)?.empresas?.nombre ?? (lead?.nombre ?? "")}
+          generatedAt={new Date().toLocaleString()}
+          sections={sections}
+          footerLeft="Cámara Costa"
+          footerRight="Generado por EASY CRM"
+        />
+      );
 
-      const blob = await res.blob();
-
-      if (!blob || blob.size < 200) {
-        throw new Error("El PDF generado está vacío o inválido.");
-      }
-
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-
-      const safeId = String(leadId).slice(0, 8);
-      a.download = `informe-ia-${safeId}.pdf`;
-
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      const blob = await pdf(doc).toBlob();
+      const filename = `informe-${((lead as any)?.empresas?.nombre ?? lead?.nombre ?? "lead")
+        .toString()
+        .replace(/\s+/g, "-")
+        .toLowerCase()}.pdf`;
+      await downloadBlob(blob, filename);
 
       setToastMessage("✅ PDF descargado.");
     } catch (e: any) {
-      setError(e?.message ?? "Error descargando PDF");
+      setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
     }
-  }
+  };
 
   async function copy() {
     if (!report.trim()) return;
@@ -741,7 +836,12 @@ export function AiLeadReport({
 
   return (
     <div className="rounded-2xl border bg-white p-4">
-      {status !== "idle" && (
+      {aiDoneMsg && (
+        <div className="mb-3 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800 font-medium">
+          {aiDoneMsg}
+        </div>
+      )}
+      {status !== "idle" && !aiDoneMsg && (
         <div className="mb-3 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
           {status === "saving" && "Guardando datos del lead…"}
           {status === "generating" && "Generando informe con IA…"}
@@ -759,7 +859,7 @@ export function AiLeadReport({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => generateAI()}
+            onClick={() => runFullAiGeneration()}
             disabled={aiLoading}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
               aiLoading
@@ -779,7 +879,7 @@ export function AiLeadReport({
 
           <button
             type="button"
-            onClick={() => handleGenerate(true)}
+            onClick={() => runFullAiGeneration()}
             disabled={aiLoading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
           >
@@ -812,7 +912,7 @@ export function AiLeadReport({
 
           <button
             type="button"
-            onClick={downloadPdf}
+            onClick={handleExportPdf}
             disabled={!leadId || aiLoading}
             className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
             title="Descargar PDF"
@@ -901,40 +1001,48 @@ export function AiLeadReport({
 
             {reportExpanded ? (
               <div className="mt-4">
-                {/* Tabs del informe (11 módulos) - iterar sobre TABS_CONFIG */}
-                <div className="mb-4 flex flex-wrap gap-2">
+                {/* Tabs del informe - barra de módulos (anchor para scroll) */}
+                <div ref={tabsBarRef} className="mb-4 flex flex-wrap gap-2">
                   {TABS_CONFIG.map((tab) => {
                     const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
+                    const st = moduleStatus[tab.tabId] ?? "idle";
+                    const chipClass =
+                      st === "done"
+                        ? "bg-green-100 text-green-800 border-green-300"
+                        : st === "running"
+                          ? "bg-yellow-100 text-yellow-800 border-yellow-300"
+                          : st === "error"
+                            ? "bg-red-100 text-red-800 border-red-300"
+                            : activeReportTab === tab.id
+                              ? "bg-slate-900 text-white border-slate-900"
+                              : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50";
                     return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setActiveReportTab(tab.id)}
-                        className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition flex items-center gap-1.5 ${
-                          activeReportTab === tab.id
-                            ? "bg-slate-900 text-white border-slate-900"
-                            : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-                        }`}
-                      >
-                        {tab.label}
-                        {hasMissingData && (
-                          <span className="text-amber-500" title="Faltan datos para mejorar precisión">
-                            ⚠️
-                          </span>
-                        )}
-                      </button>
+                      <div key={tab.id} ref={(el) => { moduleRefs.current[tab.id] = el; }}>
+                        <button
+                          type="button"
+                          onClick={() => setActiveReportTab(tab.id)}
+                          className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition flex items-center gap-1.5 ${chipClass}`}
+                        >
+                          {tab.label}
+                          {hasMissingData && (
+                            <span className="text-amber-500" title="Faltan datos para mejorar precisión">
+                              ⚠️
+                            </span>
+                          )}
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
 
                 {/* Contenido del tab activo */}
-                <div className="rounded-xl border bg-white p-6">
-                  {/* Header con botón regenerar y prompt preview */}
+                <div ref={modulePanelRef} className="rounded-xl border bg-white p-6">
+                  {/* Título del módulo: barra negra estilo consultoría premium */}
+                  <div className="bg-black text-white font-semibold text-[15px] px-3 py-2 rounded-md mb-3">
+                    {TABS_CONFIG.find(t => t.id === activeReportTab)?.label || "Tab"}
+                  </div>
                   <div className="mb-4 space-y-3 border-b border-slate-200 pb-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-slate-900">
-                        {TABS_CONFIG.find(t => t.id === activeReportTab)?.label || "Tab"}
-                      </h3>
+                    <div className="flex items-center justify-end">
                       <button
                         type="button"
                         onClick={() => {
@@ -1016,6 +1124,7 @@ export function AiLeadReport({
                     
                     // Remover secciones de datos faltantes del contenido para no duplicarlas
                     const sectionContent = removeMissingDataSections(rawSectionContent);
+                    const formatted = formatBullets(formatLevels(formatAiText(sectionContent)));
                     const hasContent = sectionContent.trim() && 
                       !sectionContent.includes("Error generando") && 
                       !sectionContent.includes("Sin contenido generado");
@@ -1123,6 +1232,7 @@ export function AiLeadReport({
                         )}
                         
                         {hasContent && (
+                          <div className="text-[14px] leading-relaxed text-gray-800 whitespace-pre-line">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
@@ -1202,8 +1312,9 @@ export function AiLeadReport({
                             em: ({ children }) => <em className="italic">{children}</em>,
                             }}
                           >
-                            {sectionContent}
+                            {formatted}
                           </ReactMarkdown>
+                          </div>
                         )}
                       </div>
                     );

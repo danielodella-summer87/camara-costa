@@ -20,6 +20,35 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Invitaciones (Google-only)
+
+El sistema de invitación no usa Supabase Auth; crea/actualiza usuarios en `app_users` (allowlist + rol) y envía un email informativo con Resend. El usuario ingresa con "Continuar con Google".
+
+### Migración de base de datos (ejecutar en Supabase, no en el repo)
+
+```sql
+ALTER TABLE public.app_users
+ADD COLUMN IF NOT EXISTS invite_status text NOT NULL DEFAULT 'none',
+ADD COLUMN IF NOT EXISTS invited_at timestamptz,
+ADD COLUMN IF NOT EXISTS accepted_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS app_users_email_idx ON public.app_users (email);
+```
+
+### Variables de entorno
+
+Configurar en Vercel y en `.env.local`:
+
+- `RESEND_API_KEY` — API key de Resend
+- `MAIL_FROM` — Remitente del correo (ej: `"Cámara Costa <no-reply@tudominio.com>"`)
+- `APP_URL` — URL base de la app (ej: `https://camara-costa.vercel.app`)
+- `SUPABASE_SERVICE_ROLE_KEY` — Service role de Supabase (ya usado en el proyecto)
+
+### Endpoints
+
+- `POST /api/admin/users/invite` — Crea/actualiza usuario en `app_users` y envía email de invitación. Body: `{ email, nombre?, role_id, role_name? }`
+- `POST /api/admin/users/resend-invite` — Reenvía el email de invitación. Body: `{ email, role_name? }`
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

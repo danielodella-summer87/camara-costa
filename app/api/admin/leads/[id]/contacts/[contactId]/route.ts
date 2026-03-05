@@ -58,13 +58,6 @@ export async function PATCH(
       );
     }
 
-    if (body.cargo !== undefined && !body.cargo?.trim()) {
-      return NextResponse.json(
-        { data: null, error: "El cargo es obligatorio" },
-        { status: 400 }
-      );
-    }
-
     const supabase = supabaseAdmin();
 
     // Si se está marcando como principal, desmarcar otros
@@ -83,7 +76,7 @@ export async function PATCH(
     // Preparar update
     const update: any = {};
     if (body.nombre !== undefined) update.nombre = body.nombre.trim();
-    if (body.cargo !== undefined) update.cargo = body.cargo.trim();
+    if (body.cargo !== undefined) update.cargo = body.cargo?.trim() || null;
     if (body.telefono !== undefined) update.telefono = body.telefono?.trim() || null;
     if (body.email !== undefined) update.email = body.email?.trim() || null;
     if (body.is_primary !== undefined) update.is_primary = body.is_primary;

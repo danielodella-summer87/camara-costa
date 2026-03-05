@@ -87,10 +87,14 @@ function getDisplayName(me: MeResponse | null): string {
   return "Usuario";
 }
 
+/** Sesión CRM (prototipo cédula+PIN). Fallback cuando app_user es null. */
+type CrmSession = { id: string; role: string } | null;
+
 export default function UserMenu() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [crm, setCrm] = useState<CrmSession>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -99,13 +103,23 @@ export default function UserMenu() {
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
-        const json = (await res.json()) as MeResponse;
+        const [meRes, protoRes] = await Promise.all([
+          fetch("/api/auth/me", { cache: "no-store" }),
+          fetch("/api/proto/me", { cache: "no-store" }),
+        ]);
+        const meJson = (await meRes.json()) as MeResponse;
+        const protoJson = await protoRes.json().catch(() => ({}));
         if (!alive) return;
-        setMe(json);
+        setMe(meJson);
+        setCrm(
+          protoJson?.authed === true && protoJson?.session?.id && protoJson?.session?.role
+            ? { id: protoJson.session.id, role: protoJson.session.role }
+            : null
+        );
       } catch {
         if (!alive) return;
         setMe(null);
+        setCrm(null);
       } finally {
         if (!alive) return;
         setLoading(false);
@@ -118,11 +132,18 @@ export default function UserMenu() {
     };
   }, []);
 
-  const displayName = useMemo(() => getDisplayName(me), [me]);
+  const displayName = useMemo(() => {
+    const fromMe = getDisplayName(me);
+    if (fromMe !== "Usuario") return fromMe;
+    if (crm) return "Prototipo";
+    return fromMe;
+  }, [me, crm]);
 
   const roleLabel = useMemo(() => {
-    return roleToLabel(me?.app_user?.role ?? null);
-  }, [me]);
+    if (me?.app_user?.role != null && me.app_user.role !== "") return roleToLabel(me.app_user.role);
+    if (crm?.role) return roleToLabel(crm.role);
+    return "Sin rol";
+  }, [me?.app_user?.role, crm]);
 
   const initial = useMemo(() => {
     const first = displayName.trim().charAt(0);
@@ -130,11 +151,11 @@ export default function UserMenu() {
   }, [displayName]);
 
   const roleColor = useMemo(() => {
-    const role = me?.app_user?.role?.trim()?.toLowerCase();
+    const role = (me?.app_user?.role ?? crm?.role)?.trim()?.toLowerCase();
     if (!role) return defaultRoleColor;
     const key = role.normalize("NFD").replace(/\u0300/g, "");
     return roleColorMap[key] ?? defaultRoleColor;
-  }, [me?.app_user?.role]);
+  }, [me?.app_user?.role, crm?.role]);
 
   async function handleLogout() {
     try {

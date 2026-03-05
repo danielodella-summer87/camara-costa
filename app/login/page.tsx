@@ -1,15 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/admin";
-
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [cedula, setCedula] = useState("");
+  const [pin, setPin] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -18,103 +15,89 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
+    console.log("[LOGIN] click");
+
     try {
-      const res = await fetch("/api/auth/login", {
+      console.log("[LOGIN] before fetch", { cedula, pin });
+      const res = await fetch("/api/proto/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ cedula: cedula.trim(), pin }),
       });
-
-      const json = await res.json().catch(() => ({}));
+      console.log("[LOGIN] after fetch", res.status);
+      const json = await res.json().catch(() => null);
+      console.log("[LOGIN] json", json);
 
       if (!res.ok) {
-        setError(json?.error ?? "Usuario o contraseña incorrectos");
-        setLoading(false);
+        setError(json?.error ?? "No se pudo ingresar.");
         return;
       }
 
-      if (json.ok) {
-        router.push(next);
+      if (json?.ok && json?.redirectTo) {
+        router.replace(json.redirectTo);
         router.refresh();
         return;
       }
 
-      setError("Error inesperado");
-    } catch {
-      setError("Error de red");
+      setError("Error inesperado.");
+    } catch (e) {
+      console.error("[LOGIN] fetch error", e);
+      setError("Error de red.");
     } finally {
+      console.log("[LOGIN] finally");
       setLoading(false);
     }
   }
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6">
-      <img
-        src="/licencia.png"
-        alt="Licencia"
-        className="max-w-[260px] mb-6 opacity-90"
-      />
-      <div className="w-full max-w-md rounded-2xl border bg-white p-6 shadow-sm">
-        <h1 className="text-xl font-semibold text-slate-900">Ingresar</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Usuario y contraseña para acceder al panel.
-        </p>
+      <div className="w-full max-w-sm rounded-2xl border bg-white p-6 shadow-sm">
+        <h1 className="text-xl font-semibold">Ingresar</h1>
+        <p className="text-sm text-neutral-500 mt-1">Nombre de usuario + PIN</p>
 
-        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          <div>
-            <label htmlFor="username" className="block text-sm font-medium text-slate-700 mb-1">
-              Usuario
-            </label>
+        <form onSubmit={handleSubmit} className="mt-6 space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Nombre de usuario</label>
             <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              value={cedula}
+              onChange={(e) => setCedula(e.target.value)}
+              className="w-full rounded-xl border px-3 py-2"
+              placeholder="Tu nombre de usuario"
               autoComplete="username"
-              required
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-              placeholder="usuario"
-              disabled={loading}
-            />
-          </div>
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1">
-              Contraseña
-            </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-              placeholder="••••••••"
-              disabled={loading}
             />
           </div>
 
-          {error ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">PIN (4 dígitos)</label>
+            <input
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              type="password"
+              inputMode="numeric"
+              className="w-full rounded-xl border px-3 py-2"
+              placeholder="••••"
+              autoComplete="current-password"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </div>
-          ) : null}
+          )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-xl border border-slate-200 bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+            className="w-full rounded-xl bg-black text-white py-2 font-medium disabled:opacity-60"
           >
-            {loading ? "Entrando…" : "Entrar"}
+            {loading ? "Ingresando..." : "Entrar"}
           </button>
         </form>
-      </div>
-      <div className="mt-auto pb-6">
-        <img
-          src="/summer87.png"
-          alt="Summer87"
-          className="max-w-[140px] opacity-80"
-        />
+
+        <div className="mt-4 text-xs text-neutral-500">
+          Si necesitás el acceso admin viejo: <span className="font-medium">/admin</span>
+        </div>
       </div>
     </div>
   );

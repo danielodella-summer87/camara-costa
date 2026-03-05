@@ -55,6 +55,29 @@ Reglas finales:
 - Evita lenguaje genérico o académico.
 - No vendas servicios.
 - No cierres con frases abiertas.`,
+  linkedin_decision_makers: "",
+  north_star_metric: "",
+  producto_servicio_estrella: "",
+  auditoria_tecnica_basica: "",
+  plan_crecimiento: "",
+  propuesta_easy: "",
+  oportunidades_negocio_easy: `OPORTUNIDADES DE NEGOCIO EASY — PROMPT
+Detectá oportunidades comerciales para EASY basadas en el diagnóstico del lead y su entidad.
+
+Entregá:
+1) Qué servicio vender (3 opciones en orden de prioridad)
+2) Para qué problema (dolor explícito/implícito)
+3) Argumento de venta (beneficio + prueba + riesgo de no actuar)
+4) Paquetización (Starter / Growth / Scale) con alcance resumido
+5) Quick wins (72h) que podamos prometer como "primeros avances"
+6) Objeciones probables y cómo responderlas
+
+REGLA:
+Si "¿Ya es cliente de la Agencia?" es SI, NO criticar destructivamente.
+Hablar en tono de optimización: mejoras, experimentos, expansión, eficiencia.
+
+Cerrar con:
+"La jugada más rentable" (1–2 recomendaciones de alto impacto).`,
 };
 
 const DEFAULT_BASE = `Eres un consultor senior experto en identificar oportunidades estratégicas. Generas informes técnicos con enfoque en decisiones, hipótesis accionables, señales y riesgos. Tono directo, sin relleno, consultivo senior.
@@ -76,6 +99,13 @@ const MODULE_LABELS: Record<string, string> = {
   MATERIALES_LISTOS: "Materiales Listos",
   CIERRE_VENTA: "Cierre de Venta",
   vision_estrategica: "Visión Estratégica",
+  linkedin_decision_makers: "LinkedIn – Tomadores de decisión",
+  north_star_metric: "North Star y métricas clave",
+  producto_servicio_estrella: "Producto / Servicio estrella",
+  auditoria_tecnica_basica: "Auditoría técnica básica",
+  plan_crecimiento: "Plan de crecimiento",
+  propuesta_easy: "Propuesta de crecimiento EASY",
+  oportunidades_negocio_easy: "Oportunidades de negocio EASY",
 };
 
 /**

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-const SESSION_COOKIE_NAME = "cc_session";
+const SESSION_COOKIE_NAME = "crm_session";
 const SESSION_DAYS = 7;
 
 /** Hash de contraseña (solo usar en server/Node, no en Edge). */

@@ -12,6 +12,8 @@ function supabaseAdmin() {
 
 export const dynamic = "force-dynamic";
 
+// Si falta la columna facebook en empresas: ALTER TABLE empresas ADD COLUMN IF NOT EXISTS facebook text;
+
 type Ctx = {
   params?: { id?: string } | Promise<{ id?: string }>;
 };
@@ -123,7 +125,16 @@ type EmpresaPatchInput = {
   email?: string | null;
   web?: string | null;
   instagram?: string | null;
+  facebook?: string | null;
   direccion?: string | null;
+  celular?: string | null;
+  rut?: string | null;
+  ciudad?: string | null;
+  pais?: string | null;
+  contacto_nombre?: string | null;
+  contacto_celular?: string | null;
+  contacto_email?: string | null;
+  etiquetas?: string | null;
   descripcion?: string | null;
   aprobada?: boolean | null;
   estado?: string | null;
@@ -158,7 +169,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const email = body.email === undefined ? undefined : cleanStr(body.email);
     const web = body.web === undefined ? undefined : cleanStr(body.web);
     const instagram = body.instagram === undefined ? undefined : cleanStr(body.instagram);
+    const facebook = body.facebook === undefined ? undefined : cleanStr(body.facebook);
     const direccion = body.direccion === undefined ? undefined : cleanStr(body.direccion);
+    const celular = body.celular === undefined ? undefined : cleanStr(body.celular);
+    const rut = body.rut === undefined ? undefined : cleanStr(body.rut);
+    const ciudad = body.ciudad === undefined ? undefined : cleanStr(body.ciudad);
+    const pais = body.pais === undefined ? undefined : cleanStr(body.pais);
+    const contacto_nombre = body.contacto_nombre === undefined ? undefined : cleanStr(body.contacto_nombre);
+    const contacto_celular = body.contacto_celular === undefined ? undefined : cleanStr(body.contacto_celular);
+    const contacto_email = body.contacto_email === undefined ? undefined : cleanStr(body.contacto_email);
+    const etiquetas = body.etiquetas === undefined ? undefined : cleanStr(body.etiquetas);
     const descripcion = body.descripcion === undefined ? undefined : cleanStr(body.descripcion);
     const estado = body.estado === undefined ? undefined : cleanStr(body.estado);
 
@@ -170,7 +190,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (email !== undefined) update.email = email;
     if (web !== undefined) update.web = web;
     if (instagram !== undefined) update.instagram = instagram;
+    if (facebook !== undefined) update.facebook = facebook;
     if (direccion !== undefined) update.direccion = direccion;
+    if (celular !== undefined) update.celular = celular;
+    if (rut !== undefined) update.rut = rut;
+    if (ciudad !== undefined) update.ciudad = ciudad;
+    if (pais !== undefined) update.pais = pais;
+    if (contacto_nombre !== undefined) update.contacto_nombre = contacto_nombre;
+    if (contacto_celular !== undefined) update.contacto_celular = contacto_celular;
+    if (contacto_email !== undefined) update.contacto_email = contacto_email;
+    if (etiquetas !== undefined) update.etiquetas = etiquetas;
     if (descripcion !== undefined) update.descripcion = descripcion;
     if (estado !== undefined) update.estado = estado;
     if (body.aprobada !== undefined) update.aprobada = body.aprobada;
