@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { pdf } from "@react-pdf/renderer";
 import LeadReportPdf from "@/components/pdf/LeadReportPdf";
+import { getReportProfile } from "@/lib/ai/reportProfiles";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -362,11 +363,27 @@ export function AiLeadReport({
 
   const [moduleStatus, setModuleStatus] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
   const [aiDoneMsg, setAiDoneMsg] = useState<string>("");
+  const [reportProfile, setReportProfile] = useState<"comercial" | "tecnico">("comercial");
   const moduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const modulePanelRef = useRef<HTMLDivElement | null>(null);
 
   const VISION_TAB_ID = "vision_estrategica";
+
+  const visibleTabs = useMemo(
+    () =>
+      TABS_CONFIG.filter((tab) =>
+        getReportProfile(reportProfile).moduleIds.includes(tab.tabId)
+      ),
+    [reportProfile]
+  );
+
+  useEffect(() => {
+    const isActiveInVisible = visibleTabs.some((t) => t.id === activeReportTab);
+    if (!isActiveInVisible && visibleTabs.length > 0) {
+      setActiveReportTab(visibleTabs[0].id);
+    }
+  }, [reportProfile, visibleTabs]);
 
   const keepTabsInView = () => {
     tabsBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -584,6 +601,7 @@ export function AiLeadReport({
       personalization: customPromptValue,
       force_regenerate: true,
       only_module: onlyModule,
+      profile: reportProfile,
       prompts: {
         base: promptsData.prompts.base || "",
         modules: { [tabId]: promptsData.prompts.modules?.[tabId] || "" },
@@ -655,7 +673,13 @@ export function AiLeadReport({
       return;
     }
 
-    const moduleIds = Object.keys(promptsData.prompts.modules);
+    const profile = getReportProfile(reportProfile);
+    const availableByLower = new Map(
+      Object.keys(promptsData.prompts.modules).map((k) => [k.toLowerCase(), k])
+    );
+    let moduleIdsToRun = profile.moduleIds
+      .map((id) => availableByLower.get(id.toLowerCase()))
+      .filter(Boolean) as string[];
     const emp = (lead as any)?.empresas;
     const hasWeb = Boolean(
       lead?.website || emp?.web || emp?.website || emp?.instagram || emp?.facebook ||
@@ -664,9 +688,13 @@ export function AiLeadReport({
     const adHint = `${lead?.objetivos ?? ""} ${lead?.notas ?? ""} ${(lead as any)?.ai_context ?? ""}`.toLowerCase();
     const hasPauta = adHint.includes("ads") || adHint.includes("pauta") || adHint.includes("pixel") || adHint.includes("capi");
     const shouldIncludeTech = hasWeb || hasPauta;
-    const filteredIds = moduleIds.filter((id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any));
+    const filteredIds = moduleIdsToRun.filter(
+      (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
+    );
 
-    const uiModuleOrder = TABS_CONFIG.filter((t) => filteredIds.includes(t.tabId));
+    const uiModuleOrder = filteredIds
+      .map((id) => visibleTabs.find((t) => t.tabId === id))
+      .filter(Boolean) as typeof visibleTabs;
     if (uiModuleOrder.length === 0) {
       setError("Ningún módulo para generar. Revisá la config IA.");
       setAiLoading(false);
@@ -701,7 +729,14 @@ export function AiLeadReport({
       }
     }
 
-    setActiveReportTab(VISION_TAB_ID);
+    const visionInProfile = profile.moduleIds.some(
+      (id) => id.toLowerCase() === VISION_TAB_ID.toLowerCase()
+    );
+    if (visionInProfile) {
+      setActiveReportTab(VISION_TAB_ID);
+    } else if (uiModuleOrder.length > 0) {
+      setActiveReportTab(uiModuleOrder[uiModuleOrder.length - 1].id);
+    }
     keepTabsInView();
     modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
@@ -789,37 +824,28 @@ export function AiLeadReport({
     }
   };
 
-  const handleExportPdf = async () => {
+  const handleExportPdf = async (profile: "comercial" | "tecnico") => {
     try {
       setError(null);
-      if (!report?.trim()) {
-        setError("No hay informe para exportar. Generá el informe IA primero.");
+      if (!leadId?.trim()) {
+        setError("Falta el lead.");
         return;
       }
       setToastMessage("Generando PDF…");
 
-      const sections = TABS_CONFIG.map((t) => ({
-        name: t.label,
-        content: reportTabs[t.tabId] ?? "",
-      }));
-
-      const doc = (
-        <LeadReportPdf
-          title="Informe Estratégico del Lead"
-          subtitle="Diagnóstico + oportunidades (MODO EASY)"
-          leadName={(lead as any)?.empresas?.nombre ?? (lead?.nombre ?? "")}
-          generatedAt={new Date().toLocaleString()}
-          sections={sections}
-          footerLeft="Cámara Costa"
-          footerRight="Generado por EASY CRM"
-        />
+      const res = await fetch(
+        `/api/admin/leads/${leadId}/ai-report/pdf?profile=${profile}`
       );
-
-      const blob = await pdf(doc).toBlob();
-      const filename = `informe-${((lead as any)?.empresas?.nombre ?? lead?.nombre ?? "lead")
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any)?.error ?? res.statusText ?? "Error generando PDF");
+      }
+      const blob = await res.blob();
+      const baseName = ((lead as any)?.empresas?.nombre ?? lead?.nombre ?? "lead")
         .toString()
         .replace(/\s+/g, "-")
-        .toLowerCase()}.pdf`;
+        .toLowerCase();
+      const filename = `informe-${profile}-${baseName}.pdf`;
       await downloadBlob(blob, filename);
 
       setToastMessage("✅ PDF descargado.");
@@ -859,12 +885,15 @@ export function AiLeadReport({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => runFullAiGeneration()}
+            onClick={() => {
+              setReportProfile("comercial");
+              runFullAiGeneration();
+            }}
             disabled={aiLoading}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
               aiLoading
                 ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
-                : "bg-slate-900 text-white hover:bg-slate-800"
+                : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
           >
             {aiLoading ? (
@@ -873,17 +902,20 @@ export function AiLeadReport({
                 Generando...
               </span>
             ) : (
-              "Generar IA"
+              "Generar Comercial"
             )}
           </button>
 
           <button
             type="button"
-            onClick={() => runFullAiGeneration()}
+            onClick={() => {
+              setReportProfile("tecnico");
+              runFullAiGeneration();
+            }}
             disabled={aiLoading}
-            className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+            className="rounded-xl px-4 py-2 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
           >
-            Regenerar IA
+            Generar Técnico
           </button>
 
           {report.trim() && (
@@ -904,21 +936,32 @@ export function AiLeadReport({
                 </>
               ) : (
                 <>
-                  🧠 Visión Estratégica
+                  Visión Estratégica
                 </>
               )}
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={handleExportPdf}
-            disabled={!leadId || aiLoading}
-            className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-            title="Descargar PDF"
-          >
-            PDF
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => handleExportPdf("comercial")}
+              disabled={!leadId || aiLoading}
+              className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              title="Descargar Informe Comercial"
+            >
+              Informe Comercial
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportPdf("tecnico")}
+              disabled={!leadId || aiLoading}
+              className="rounded-xl px-4 py-2 text-sm font-medium bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+              title="Descargar Informe Técnico"
+            >
+              Informe Técnico
+            </button>
+          </div>
 
           <button
             type="button"
@@ -1003,7 +1046,7 @@ export function AiLeadReport({
               <div className="mt-4">
                 {/* Tabs del informe - barra de módulos (anchor para scroll) */}
                 <div ref={tabsBarRef} className="mb-4 flex flex-wrap gap-2">
-                  {TABS_CONFIG.map((tab) => {
+                  {visibleTabs.map((tab) => {
                     const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
                     const st = moduleStatus[tab.tabId] ?? "idle";
                     const chipClass =
@@ -1039,22 +1082,22 @@ export function AiLeadReport({
                 <div ref={modulePanelRef} className="rounded-xl border bg-white p-6">
                   {/* Título del módulo: barra negra estilo consultoría premium */}
                   <div className="bg-black text-white font-semibold text-[15px] px-3 py-2 rounded-md mb-3">
-                    {TABS_CONFIG.find(t => t.id === activeReportTab)?.label || "Tab"}
+                    {visibleTabs.find(t => t.id === activeReportTab)?.label ?? TABS_CONFIG.find(t => t.id === activeReportTab)?.label ?? "Tab"}
                   </div>
                   <div className="mb-4 space-y-3 border-b border-slate-200 pb-3">
                     <div className="flex items-center justify-end">
                       <button
                         type="button"
                         onClick={() => {
-                          const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                          const activeTabConfig = visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab);
                           if (activeTabConfig) {
                             regenerateTab(activeTabConfig.tabId);
                           }
                         }}
-                        disabled={regeneratingTab === TABS_CONFIG.find(t => t.id === activeReportTab)?.tabId}
+                        disabled={regeneratingTab === (visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab))?.tabId}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {regeneratingTab === TABS_CONFIG.find(t => t.id === activeReportTab)?.tabId ? (
+                        {regeneratingTab === (visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab))?.tabId ? (
                           <span className="flex items-center gap-1.5">
                             <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent"></span>
                             Regenerando...
@@ -1067,7 +1110,7 @@ export function AiLeadReport({
                     
                     {/* Prompt en uso */}
                     {(() => {
-                      const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                      const activeTabConfig = visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab);
                       if (!activeTabConfig) return null;
                       
                       const promptsData = getAiPromptsFromLocalStorage();
@@ -1108,7 +1151,7 @@ export function AiLeadReport({
                   </div>
                   {(() => {
                     // Buscar el tab activo en TABS_CONFIG
-                    const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                    const activeTabConfig = visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab);
                     if (!activeTabConfig) {
                       return (
                         <div className="text-slate-500 italic">Tab no encontrado.</div>
@@ -1216,7 +1259,7 @@ export function AiLeadReport({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const activeTabConfig = TABS_CONFIG.find(t => t.id === activeReportTab);
+                                    const activeTabConfig = visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab);
                                     if (activeTabConfig) {
                                       addMissingAnswersToPersonalization(activeTabConfig.tabId, activeTabConfig.label);
                                     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
+import { getReportProfile } from "@/lib/ai/reportProfiles";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -1581,6 +1582,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           force_regenerate?: boolean;
           only_module?: string | null;
           module_id?: string | null; // backward compatibility
+          profile?: string | null; // "comercial" | "tecnico"
           prompts?: {
             base?: string;
             modules?: Record<string, string>;
@@ -1640,6 +1642,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Fuente de verdad: prioridad 1) body.personalization, 2) body.custom_prompt, 3) lead.ai_custom_prompt, 4) null
     const bodyCustomPrompt = (typeof body?.personalization === "string" ? body.personalization.trim() : null) ||
                              (typeof body?.custom_prompt === "string" ? body.custom_prompt.trim() : null);
+
+    const profileId = String(body?.profile ?? "comercial").trim().toLowerCase();
+    const reportProfile = getReportProfile(profileId);
     
     // Log para debugging (antes de leer el lead)
     console.log("[AI] only_module:", only_module, "force:", shouldRegenerate);
@@ -1989,7 +1994,11 @@ ENTREGABLES:
       (leadForAI as any)._contacts = contacts;
       (leadForAI as any)._ya_es_cliente_agencia = ya_es_cliente_agencia;
 
-      const moduleIds = Object.keys(effectivePrompts?.modules ?? {});
+      const availableModuleIds = Object.keys(effectivePrompts?.modules ?? {});
+      const availableByLower = new Map(availableModuleIds.map((k) => [k.toLowerCase(), k]));
+      let moduleIdsToGenerate = reportProfile.moduleIds
+        .map((id) => availableByLower.get(id.toLowerCase()))
+        .filter(Boolean) as string[];
       const leadEmpresa = (leadRow as any)?.empresas as
         | {
             web?: string | null;
@@ -2021,7 +2030,7 @@ ENTREGABLES:
         adHint.includes("capi")
       );
       const shouldIncludeTech = hasWeb || hasPauta;
-      const filteredModuleIds = moduleIds.filter(
+      const filteredModuleIds = moduleIdsToGenerate.filter(
         (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
       );
       generatedModuleIds = filteredModuleIds;
@@ -2221,8 +2230,9 @@ ENTREGABLES:
               ai_report_updated_at: nowIso(),
             },
         generated: generatedModuleIds,
+        profile: reportProfile.id,
         error: null,
-      } satisfies ApiResp<any> & { generated?: string[] },
+      } satisfies ApiResp<any> & { generated?: string[]; profile?: string },
       { status: 200 }
     );
   } catch (e: any) {

@@ -1,27 +1,35 @@
 import React from "react";
-import { Document, Page, Text, View, StyleSheet, Font } from "@react-pdf/renderer";
+import { Document, Page, Text, View, Image, StyleSheet, Font } from "@react-pdf/renderer";
+
+const fontDir =
+  typeof window !== "undefined" ? "/fonts" : `${process.cwd()}/public/fonts`;
 
 Font.register({
   family: "NotoSans",
   fonts: [
-    { src: "/fonts/NotoSans-Regular.ttf", fontWeight: "normal", fontStyle: "normal" },
-    { src: "/fonts/NotoSans-Bold.ttf", fontWeight: "bold", fontStyle: "normal" },
-    { src: "/fonts/NotoSans-Italic.ttf", fontWeight: "normal", fontStyle: "italic" },
-    { src: "/fonts/NotoSans-BoldItalic.ttf", fontWeight: "bold", fontStyle: "italic" },
+    { src: `${fontDir}/NotoSans-Regular.ttf`, fontWeight: "normal", fontStyle: "normal" },
+    { src: `${fontDir}/NotoSans-Bold.ttf`, fontWeight: "bold", fontStyle: "normal" },
+    { src: `${fontDir}/NotoSans-Italic.ttf`, fontWeight: "normal", fontStyle: "italic" },
+    { src: `${fontDir}/NotoSans-BoldItalic.ttf`, fontWeight: "bold", fontStyle: "italic" },
   ],
 });
 
 /**
- * Elimina emojis y símbolos que WinAnsi no puede codificar.
- * Aplicar a TODO texto que venga de IA antes de pintarlo en el PDF.
+ * Elimina emojis y símbolos que no se pueden codificar en PDF.
+ * Aplicar a TODO texto que se pinte en el PDF (title, subtitle, leadName, sections, footer).
  */
-const sanitizePdfText = (s: string): string =>
-  (s ?? "")
+const sanitizePdfText = (input?: string): string => {
+  if (!input) return "";
+  return String(input)
     .replace(/\u0000/g, "")
-    .replace(/[\u{1F300}-\u{1FAFF}]/gu, "")
-    .replace(/[•◦▪►✅🟢🟡🔴🧠📌📈]/g, "")
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, "") // emojis
+    .replace(/[\u{2600}-\u{26FF}]/gu, "")   // símbolos varios
+    .replace(/[\u{2700}-\u{27BF}]/gu, "")   // dingbats
+    .replace(/[🧠🚀🔥📊✅🟢🟡🔴⭐🌟•►▪◦▬]/g, "")
+    .replace(/\*\*/g, "")
     .replace(/\s{3,}/g, " ")
     .trim();
+};
 
 type Section = {
   name: string;
@@ -36,6 +44,7 @@ type Props = {
   sections: Section[];
   footerLeft?: string;
   footerRight?: string;
+  logoUrl?: string;
 };
 
 const styles = StyleSheet.create({
@@ -83,31 +92,52 @@ const styles = StyleSheet.create({
   },
 
   cover: {
-    padding: 24,
-    borderRadius: 10,
-    backgroundColor: "#0B1220",
+    padding: 28,
+    borderRadius: 12,
+    backgroundColor: "#0b1628",
     marginBottom: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  coverLeft: {
+    flex: 1,
   },
 
   coverTitle: {
     fontFamily: "NotoSans",
-    fontSize: 22,
+    fontSize: 26,
     fontWeight: "bold",
     color: "#FFFFFF",
   },
 
   coverSub: {
-    marginTop: 8,
+    marginTop: 6,
     fontFamily: "NotoSans",
     fontSize: 11,
-    color: "#D1D5DB",
+    color: "#FFFFFF",
+    opacity: 0.9,
   },
 
   coverBrand: {
-    marginTop: 10,
+    marginTop: 4,
     fontFamily: "NotoSans",
-    fontSize: 9.5,
-    color: "#9CA3AF",
+    fontSize: 12,
+    color: "#FFFFFF",
+    opacity: 0.7,
+  },
+
+  coverLogo: {
+    height: 60,
+    objectFit: "contain",
+    marginLeft: 16,
+  },
+
+  logo: {
+    width: 70,
+    height: 70,
+    objectFit: "contain",
   },
 
   section: {
@@ -175,19 +205,30 @@ export default function LeadReportPdf({
   sections,
   footerLeft,
   footerRight,
+  logoUrl: logoUrlProp,
 }: Props) {
   const coverSubtitle = [leadName, generatedAt].filter(Boolean).join(" • ") || subtitle;
+  const logoSrc =
+    logoUrlProp ??
+    (typeof window !== "undefined"
+      ? `${window.location.origin}/licencia.png`
+      : `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/licencia.png`);
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {/* Portada (Page 1) */}
+        {/* Portada (Page 1) — header horizontal con logo */}
         <View style={styles.cover}>
-          <Text style={styles.coverTitle}>{sanitizePdfText(title)}</Text>
-          {coverSubtitle ? (
-            <Text style={styles.coverSub}>{sanitizePdfText(coverSubtitle)}</Text>
+          <View style={styles.coverLeft}>
+            <Text style={styles.coverTitle}>{sanitizePdfText(title)}</Text>
+            {leadName ? (
+              <Text style={styles.coverSub}>{sanitizePdfText(leadName)}</Text>
+            ) : null}
+            <Text style={styles.coverBrand}>{sanitizePdfText("Generado por Agente IA · EASY")}</Text>
+          </View>
+          {logoSrc ? (
+            <Image src={logoSrc} style={styles.logo} />
           ) : null}
-          <Text style={styles.coverBrand}>Generado por Agente IA • EASY</Text>
         </View>
 
         {/* Módulos del informe */}

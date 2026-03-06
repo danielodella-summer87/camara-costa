@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { PDFDocument, StandardFonts } from "pdf-lib";
-import { Buffer } from "node:buffer";
+import React from "react";
+import { renderToBuffer } from "@react-pdf/renderer";
+import { getReportProfile } from "@/lib/ai/reportProfiles";
+import LeadReportPdf from "@/components/pdf/LeadReportPdf";
+
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -9,52 +12,61 @@ function supabaseAdmin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-export function sanitizeForPdf(input: string) {
-  if (!input) return input;
-
-  return input
-    .replaceAll('\u2192', '->')   // →
-    .replaceAll('\u2022', '-')    // •
-    .replaceAll('\u2013', '-')    // –
-    .replaceAll('\u2014', '-')    // —
-    .replaceAll('\u201C', '"')    // “
-    .replaceAll('\u201D', '"')    // ”
-    .replaceAll('\u2018', "'")    // ‘
-    .replaceAll('\u2019', "'")    // ’
-    .replaceAll('\u2026', '...')  // …
-    .replaceAll('\u00A0', ' ');   // nbsp
-}
-
-function wrapText(text: string, maxChars = 90) {
-  const lines: string[] = [];
-  const paragraphs = String(text ?? "").replace(/\r\n/g, "\n").split("\n");
-
-  for (const p of paragraphs) {
-    const words = p.split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      lines.push("");
-      continue;
-    }
-    let line = words[0];
-    for (let i = 1; i < words.length; i++) {
-      const next = `${line} ${words[i]}`;
-      if (next.length > maxChars) {
-        lines.push(line);
-        line = words[i];
-      } else {
-        line = next;
-      }
-    }
-    lines.push(line);
+/** Parsea el informe y extrae secciones por ### TAB: ID */
+function parseReportTabs(aiReport: string): Record<string, string> {
+  const tabs: Record<string, string> = {};
+  if (!aiReport?.trim()) return tabs;
+  const tabPattern = /###\s+TAB:\s*(\w+)\s*\n/gi;
+  const matches: Array<{ tabId: string; startIndex: number }> = [];
+  let match;
+  while ((match = tabPattern.exec(aiReport)) !== null) {
+    matches.push({ tabId: match[1], startIndex: match.index + match[0].length });
   }
-  return lines;
+  for (let i = 0; i < matches.length; i++) {
+    const startIndex = matches[i].startIndex;
+    const remaining = aiReport.slice(startIndex);
+    const nextTabMatch = remaining.match(/###\s+TAB:\s*\w+\s*\n/i);
+    const endIndex = nextTabMatch && typeof nextTabMatch.index === "number"
+      ? startIndex + nextTabMatch.index
+      : aiReport.length;
+    const content = aiReport.slice(startIndex, endIndex).trim();
+    if (content) tabs[matches[i].tabId] = content;
+  }
+  return tabs;
 }
+
+/** Labels sin emoji para secciones del PDF */
+const MODULE_LABELS: Record<string, string> = {
+  INVESTIGACION_DIGITAL: "Investigación Digital",
+  REDES_SOCIALES: "Redes Sociales",
+  PAUTA_PUBLICITARIA: "Pauta Publicitaria",
+  PRESTIGIO_IA: "Prestigio en IA",
+  POSICIONAMIENTO: "Posicionamiento en el mercado",
+  COMPETENCIA: "Competencia",
+  FODA: "FODA",
+  OPORTUNIDADES: "Oportunidades",
+  ACCIONES: "Acciones",
+  MATERIALES_LISTOS: "Materiales listos",
+  CIERRE_VENTA: "Cierre de la venta",
+  vision_estrategica: "Visión Estratégica",
+  linkedin_decision_makers: "LinkedIn – Tomadores de decisión",
+  north_star_metric: "North Star y métricas clave",
+  producto_servicio_estrella: "Producto / Servicio estrella",
+  auditoria_tecnica_basica: "Auditoría técnica básica",
+  plan_crecimiento: "Plan de crecimiento",
+  propuesta_easy: "Propuesta de crecimiento EASY",
+  oportunidades_negocio_easy: "Oportunidades de negocio EASY",
+};
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { searchParams } = new URL(req.url);
+    const profileId = String(searchParams.get("profile") ?? "comercial").trim().toLowerCase();
+    const reportProfile = getReportProfile(profileId);
+
     const sb = supabaseAdmin();
     const { id } = await params;
 
@@ -73,54 +85,44 @@ export async function GET(
 
     if (error) throw error;
 
-    const title = (lead?.nombre && String(lead.nombre)) || `Lead ${id}`;
+    const leadName = (lead?.nombre && String(lead.nombre)) || `Lead ${id}`;
     const report = (lead?.ai_report && String(lead.ai_report)) || "Sin informe IA todavía.";
     const updatedAt = lead?.ai_report_updated_at ? String(lead.ai_report_updated_at) : null;
+    const generatedAt = updatedAt ? new Date(updatedAt).toLocaleString() : new Date().toLocaleString();
 
-    // Sanitizar textos antes de procesar
-    const sanitizedTitle = sanitizeForPdf(title);
-    const sanitizedReport = sanitizeForPdf(report);
-    const sanitizedUpdatedAt = updatedAt ? sanitizeForPdf(updatedAt) : null;
-
-    const pdf = await PDFDocument.create();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
-
-    let page = pdf.addPage([595.28, 841.89]); // A4
-    const margin = 48;
-    let y = 841.89 - margin;
-
-    const drawLine = (txt: string, size = 11, bold = false) => {
-      const f = bold ? fontBold : font;
-      page.drawText(sanitizeForPdf(txt), { x: margin, y, size, font: f });
-      y -= size + 6;
-    };
-
-    drawLine("AI Lead Report", 18, true);
-    drawLine(sanitizedTitle, 12, true);
-    if (sanitizedUpdatedAt) drawLine(`Actualizado: ${sanitizedUpdatedAt}`, 10, false);
-    y -= 6;
-
-    const lines = wrapText(sanitizedReport, 95);
-    for (const ln of lines) {
-      // salto de página si falta espacio
-      if (y < margin + 24) {
-        page = pdf.addPage([595.28, 841.89]);
-        y = 841.89 - margin;
+    const parsedTabs = parseReportTabs(report);
+    const tabKeyByLower = new Map(Object.keys(parsedTabs).map((k) => [k.toLowerCase(), k]));
+    const sections: Array<{ name: string; content: string }> = [];
+    for (const profileModuleId of reportProfile.moduleIds) {
+      const key = tabKeyByLower.get(profileModuleId.toLowerCase()) ?? profileModuleId;
+      const content = parsedTabs[key] ?? parsedTabs[profileModuleId];
+      if (content?.trim()) {
+        const label = MODULE_LABELS[profileModuleId] ?? profileModuleId;
+        sections.push({ name: label, content });
       }
-      drawLine(ln, 11, false);
     }
 
-    const bytes = await pdf.save();
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
+    const logoUrl = `${baseUrl}/licencia.png`;
 
-    // ✅ convertir a Buffer para que TS lo acepte como BodyInit en runtime node
-    const body = Buffer.from(bytes);
-    
+    const doc = React.createElement(LeadReportPdf, {
+      title: reportProfile.title,
+      subtitle: reportProfile.subtitle,
+      leadName,
+      generatedAt,
+      sections: sections.length > 0 ? sections : [{ name: "Informe", content: report }],
+      footerLeft: "Cámara Costa",
+      footerRight: "Generado por EASY CRM",
+      logoUrl,
+    });
+
+    const buffer = await renderToBuffer(doc);
+    const body = new Uint8Array(buffer);
+
     return new Response(body, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        // dejá el resto de headers tal cual los tenías
       },
     });
   } catch (e: any) {
