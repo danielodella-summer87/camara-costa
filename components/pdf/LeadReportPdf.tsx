@@ -1,16 +1,32 @@
 import React from "react";
+import path from "path";
 import { Document, Page, Text, View, Image, StyleSheet, Font } from "@react-pdf/renderer";
 
-const fontDir =
-  typeof window !== "undefined" ? "/fonts" : `${process.cwd()}/public/fonts`;
+const fontDir = path.join(process.cwd(), "public", "fonts");
 
 Font.register({
   family: "NotoSans",
   fonts: [
-    { src: `${fontDir}/NotoSans-Regular.ttf`, fontWeight: "normal", fontStyle: "normal" },
-    { src: `${fontDir}/NotoSans-Bold.ttf`, fontWeight: "bold", fontStyle: "normal" },
-    { src: `${fontDir}/NotoSans-Italic.ttf`, fontWeight: "normal", fontStyle: "italic" },
-    { src: `${fontDir}/NotoSans-BoldItalic.ttf`, fontWeight: "bold", fontStyle: "italic" },
+    {
+      src: path.join(fontDir, "NotoSans-Regular.ttf"),
+      fontWeight: "normal",
+      fontStyle: "normal",
+    },
+    {
+      src: path.join(fontDir, "NotoSans-Bold.ttf"),
+      fontWeight: "bold",
+      fontStyle: "normal",
+    },
+    {
+      src: path.join(fontDir, "NotoSans-Italic.ttf"),
+      fontWeight: "normal",
+      fontStyle: "italic",
+    },
+    {
+      src: path.join(fontDir, "NotoSans-BoldItalic.ttf"),
+      fontWeight: "bold",
+      fontStyle: "italic",
+    },
   ],
 });
 
