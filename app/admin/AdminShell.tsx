@@ -19,7 +19,7 @@ type MeResponse = {
 
 const NAV: NavItem[] = [
   { label: "Dashboard", href: "/admin" },
-  { label: "Entidades", href: "/admin/empresas" },
+  { label: "Iniciativas", href: "/admin/empresas" },
   { label: "Leads", href: "/admin/leads" },
   { label: "socios", href: "/admin/socios" },
   { label: "Agenda", href: "/admin/agenda" },
@@ -28,6 +28,7 @@ const NAV: NavItem[] = [
   { label: "Reportes", href: "/admin/reportes" },
   { label: "Eventos", href: "/admin/eventos" },
   { label: "Mesa de ayuda", href: "/admin/mesa-de-ayuda" },
+  { label: "Manual de neuroventas", href: "/admin/neuroventas" },
   { label: "IA", href: "/admin/configuracion/ia" },
   { label: "Personalización", href: "/admin/personalizacion" },
   { label: "Configuración", href: "/admin/configuracion" },
@@ -56,9 +57,9 @@ function normalizeRole(role: string | null | undefined): RoleKey | null {
  * Filtra items del NAV según rol (app_user.role desde /api/auth/me).
  * Mesa de ayuda se muestra para TODOS los roles.
  * - admin: ve todo
- * - comercial: Dashboard, Entidades, Leads, Socios, Agenda, Reportes, Eventos, Mesa de ayuda. NO: Operaciones, IA, Personalización, Configuración
- * - operador: Dashboard, Leads, Operaciones, Mesa de ayuda, Agenda, Reportes (+ Entidades, Socios, Eventos). NO: IA, Personalización, Configuración
- * - viewer: Dashboard, Entidades, Leads, Reportes, Mesa de ayuda (lectura). NO: Operaciones, IA, Personalización, Configuración, Socios, Agenda, Eventos
+ * - comercial: Dashboard, Iniciativas, Leads, Socios, Agenda, Reportes, Eventos, Mesa de ayuda. NO: Operaciones, IA, Personalización, Configuración
+ * - operador: Dashboard, Leads, Operaciones, Mesa de ayuda, Agenda, Reportes (+ Iniciativas, Socios, Eventos). NO: IA, Personalización, Configuración
+ * - viewer: Dashboard, Iniciativas, Leads, Reportes, Mesa de ayuda (lectura). NO: Operaciones, IA, Personalización, Configuración, Socios, Agenda, Eventos
  */
 function filterNavByRole(role: RoleKey | null, nav: NavItem[]): NavItem[] {
   if (!role) return nav; // mientras carga: NAV completo para evitar flicker

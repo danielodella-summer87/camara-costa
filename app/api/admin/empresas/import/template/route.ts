@@ -51,7 +51,7 @@ export async function GET() {
 
   // Crear workbook
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Entidades");
+  XLSX.utils.book_append_sheet(wb, ws, "Iniciativas");
   XLSX.utils.book_append_sheet(wb, wsAyuda, "Ayuda");
 
   // Generar buffer

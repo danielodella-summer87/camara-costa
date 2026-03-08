@@ -7,10 +7,11 @@ import { useEffect, useState } from "react";
 const LABELS: Record<string, string> = {
   "/admin": "Dashboard",
   "/admin/socios": "Socios",
-  "/admin/empresas": "Entidades",
+  "/admin/empresas": "Iniciativas",
   "/admin/eventos": "Eventos",
   "/admin/leads": "Leads",
   "/admin/reportes": "Reportes",
+  "/admin/neuroventas": "Manual de neuroventas",
   "/admin/configuracion": "Configuración",
 };
 

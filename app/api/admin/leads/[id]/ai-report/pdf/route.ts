@@ -4,6 +4,8 @@ import React from "react";
 import { renderToBuffer } from "@react-pdf/renderer";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
 import LeadReportPdf from "@/components/pdf/LeadReportPdf";
+import { requirePermission } from "@/lib/rbac/requirePermission";
+import { getAllowedLeadProfilesByRole, getRoleNameByRoleId } from "@/lib/rbac/leadProfiles";
 
 function supabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -63,11 +65,32 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = await requirePermission(req, "leads.read");
+    if (!user) {
+      return new Response(JSON.stringify({ data: null, error: "No autorizado" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const sb = supabaseAdmin();
     const { searchParams } = new URL(req.url);
     const profileId = String(searchParams.get("profile") ?? "comercial").trim().toLowerCase();
     const reportProfile = getReportProfile(profileId);
+    const requestedProfile = reportProfile.id as "comercial" | "tecnico";
 
-    const sb = supabaseAdmin();
+    const roleName = await getRoleNameByRoleId(sb, user.role_id);
+    const allowedProfiles = getAllowedLeadProfilesByRole(roleName);
+    if (!allowedProfiles.includes(requestedProfile)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[PROFILE FORBIDDEN]", { role: roleName, requestedProfile, allowedProfiles });
+      }
+      return new Response(
+        JSON.stringify({ data: null, error: `No autorizado para usar el perfil ${requestedProfile === "tecnico" ? "tecnico" : "comercial"}.` }),
+        { status: 403, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     const { id } = await params;
 
     if (!id) {

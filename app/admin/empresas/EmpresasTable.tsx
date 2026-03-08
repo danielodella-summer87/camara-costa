@@ -310,7 +310,7 @@ export default function EmpresasTable() {
       {/* tabla */}
       <div className="mt-5 overflow-hidden rounded-2xl border">
         <div className="grid grid-cols-[1.2fr_1.1fr_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
-          <div>Entidad</div>
+          <div>Iniciativa</div>
           <div>Rubro</div>
           <div className="text-right">Acción</div>
         </div>

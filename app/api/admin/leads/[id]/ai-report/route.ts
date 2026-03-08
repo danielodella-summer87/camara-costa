@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
+import { requirePermission } from "@/lib/rbac/requirePermission";
+import { getAllowedLeadProfilesByRole, getRoleNameByRoleId } from "@/lib/rbac/leadProfiles";
+import { parseLeadCustomPrompt, getModuleCustomPrompt } from "@/lib/leads/customPrompt";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -1566,6 +1569,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   console.log("[BOOT] OPENAI_API_KEY length:", process.env.OPENAI_API_KEY?.length);
   
   try {
+    const user = await requirePermission(req, "leads.read");
+    if (!user) {
+      return NextResponse.json({ data: null, error: "No autorizado" } satisfies ApiResp<null>, { status: 403 });
+    }
+
     const sb = supabaseAdmin();
     const { id: rawId } = await context.params;
     const id = safeId(rawId);
@@ -1645,7 +1653,20 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const profileId = String(body?.profile ?? "comercial").trim().toLowerCase();
     const reportProfile = getReportProfile(profileId);
-    
+    const requestedProfile = reportProfile.id as "comercial" | "tecnico";
+
+    const roleName = await getRoleNameByRoleId(sb, user.role_id);
+    const allowedProfiles = getAllowedLeadProfilesByRole(roleName);
+    if (!allowedProfiles.includes(requestedProfile)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[PROFILE FORBIDDEN]", { role: roleName, requestedProfile, allowedProfiles });
+      }
+      return NextResponse.json(
+        { data: null, error: `No autorizado para usar el perfil ${requestedProfile === "tecnico" ? "tecnico" : "comercial"}.` } satisfies ApiResp<null>,
+        { status: 403 }
+      );
+    }
+
     // Log para debugging (antes de leer el lead)
     console.log("[AI] only_module:", only_module, "force:", shouldRegenerate);
 
@@ -1761,8 +1782,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       clienteHistorial: ctx.clienteHistorial,
     });
 
-    // Determinar custom_prompt final: prioridad 1) body, 2) lead.ai_custom_prompt, 3) null
-    const finalCustomPrompt = bodyCustomPrompt || (leadRow.ai_custom_prompt?.trim() || null);
+    // Determinar custom_prompt final para informe completo: body o legacy (si ai_custom_prompt es JSON por módulo, no usamos el string crudo)
+    const parsedLeadCustom = parseLeadCustomPrompt(leadRow.ai_custom_prompt);
+    const finalCustomPrompt = bodyCustomPrompt || (parsedLeadCustom.legacyText?.trim() || null);
     
     // Log solo valores primitivos (no objetos complejos para evitar circular JSON)
     console.log("📥 POST /ai-report recibido:", {
@@ -1811,12 +1833,35 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Si hay only_module, generar solo ese módulo usando prompt recibido directamente
     if (only_module) {
       try {
+        const parsedCustomPrompt = parseLeadCustomPrompt(leadRow.ai_custom_prompt);
+        const requestedModuleKey = only_module;
+        const moduleCustomPrompt = getModuleCustomPrompt(parsedCustomPrompt, only_module);
+        const finalCustomPromptForModule = (typeof bodyCustomPrompt === "string" && bodyCustomPrompt.trim())
+          ? bodyCustomPrompt.trim()
+          : (moduleCustomPrompt?.trim() || parsedCustomPrompt.legacyText?.trim() || null);
+        if (process.env.NODE_ENV !== "production") {
+          const profile = reportProfile?.id ?? body?.profile;
+          console.log("[CUSTOM PROMPT DEBUG] raw ai_custom_prompt from lead", leadRow.ai_custom_prompt);
+          console.log("[CUSTOM PROMPT DEBUG] parsed custom prompt", parsedCustomPrompt);
+          console.log("[CUSTOM PROMPT DEBUG] requested module", requestedModuleKey);
+          console.log("[CUSTOM PROMPT DEBUG] resolved module custom prompt", moduleCustomPrompt);
+          console.log("[CUSTOM PROMPT DEBUG] final custom prompt used", finalCustomPromptForModule?.slice(0, 200));
+          console.log("[MODULE REGEN DEBUG] body", body ? { only_module: body.only_module, custom_prompt: body.custom_prompt ? "(present)" : null, moduleKeys: body.prompts?.modules ? Object.keys(body.prompts.modules) : [] } : null);
+          console.log("[MODULE REGEN DEBUG] requested module/tab", requestedModuleKey);
+          console.log("[MODULE REGEN DEBUG] profile", profile);
+          console.log("[MODULE REGEN DEBUG] final custom prompt", finalCustomPromptForModule ? `${finalCustomPromptForModule.slice(0, 200)}...` : null);
+        }
         // Lookup case-insensitive: el front puede enviar PROPUESTA_EASY y el backend usa propuesta_easy
         const mods = body?.prompts?.modules ?? {};
+        const onlyNorm = only_module.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
         const moduleKey = Object.keys(mods).find(
-          (k) => k.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_") === only_module
+          (k) => k.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_") === onlyNorm
         ) ?? only_module;
-        let modulePrompt = mods[moduleKey] || mods[only_module] || "";
+        const fromBody = mods[moduleKey] || mods[only_module] || "";
+        // Prioridad: 1) body custom, 2) custom del lead para este módulo, 3) legacy, 4) prompt global del módulo
+        let modulePrompt = (typeof bodyCustomPrompt === "string" && bodyCustomPrompt.trim())
+          ? bodyCustomPrompt.trim()
+          : (moduleCustomPrompt?.trim() || parsedCustomPrompt.legacyText?.trim() || "") || fromBody;
         
         // Fallback para vision_estrategica: usar prompt default si no está en localStorage
         if (!modulePrompt && only_module === "vision_estrategica") {
@@ -1856,7 +1901,9 @@ Reglas finales:
         const promptUpdatedAt = body?.prompts_meta?.updated_at?.modules?.[only_module] || body?.prompts_meta?.updated_at?.base || null;
         const promptHead = (modulePrompt || "").slice(0, 80);
         
-        // Logs específicos requeridos
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[MODULE REGEN DEBUG] final custom prompt (task) preview", (modulePrompt || "").slice(0, 300));
+        }
         console.log("[AI] leadId:", id, "only_module:", only_module, "promptUpdatedAt:", promptUpdatedAt, "promptHead:", promptHead, "status: 200");
         
         if (!modulePrompt) {
@@ -1903,7 +1950,7 @@ ENTREGABLES:
             {
               ...leadRow,
               ai_context: leadRow.ai_context || null,
-              custom_prompt: finalCustomPrompt,
+              custom_prompt: finalCustomPromptForModule,
               empresas: (lead as any)?.empresas || null,
             },
             body?.prompts?.base || "",
@@ -1924,7 +1971,7 @@ ENTREGABLES:
               ...leadRow,
               website: ctx.website || null,
               ai_context: leadRow.ai_context || null,
-              custom_prompt: finalCustomPrompt,
+              custom_prompt: finalCustomPromptForModule,
               empresas: (lead as any)?.empresas || null,
             },
             only_module,
@@ -1935,7 +1982,20 @@ ENTREGABLES:
 
         // Obtener informe existente o crear uno nuevo
         const existingReport = leadRow.ai_report?.trim() || "";
+        const targetTabId = only_module;
+        const generatedText = newTabContent;
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[MODULE REGEN DEBUG] target tab to replace", targetTabId);
+          console.log("[MODULE REGEN DEBUG] generated content preview", generatedText?.slice(0, 300));
+        }
         const updatedReport = updateReportTab(existingReport, newTabContent, only_module);
+        if (process.env.NODE_ENV !== "production") {
+          const parsedOrUpdatedTabs = parseAllReportTabs(updatedReport);
+          const tabKey = Object.keys(parsedOrUpdatedTabs).find((k) => k.toLowerCase() === only_module.toLowerCase()) ?? only_module;
+          const savedTabContent = parsedOrUpdatedTabs[tabKey] ?? "";
+          console.log("[MODULE REGEN DEBUG] updated report tabs", Object.keys(parsedOrUpdatedTabs));
+          console.log("[MODULE REGEN DEBUG] saved tab content preview", savedTabContent?.slice(0, 300));
+        }
 
         // Guardar el informe actualizado usando helper seguro que preserva empresa_id
         // NOTA: No incluimos empresa_id en el payload, se preserva automáticamente

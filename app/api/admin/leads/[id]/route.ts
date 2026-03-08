@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
+import { serializeLeadCustomPrompt } from "@/lib/leads/customPrompt";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,7 +41,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q1 = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -66,7 +67,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     const q2 = await sb
       .from("lead")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -148,12 +149,25 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return NextResponse.json({ data: null, error: "Body inválido" } satisfies ApiResp<null>, { status: 400 });
     }
 
-    // Normalizar ai_custom_prompt: trim, si queda vacío -> null
+    // Normalizar ai_custom_prompt: acepta string (JSON o legacy) u objeto por módulo; guardamos TEXT en DB
     const normalizeCustomPrompt = (value: unknown): string | null => {
       if (value === null || value === undefined) return null;
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        const serialized = serializeLeadCustomPrompt(value as Record<string, string>);
+        return serialized;
+      }
       if (typeof value !== "string") return null;
       const trimmed = value.trim();
-      return trimmed.length > 0 ? trimmed : null;
+      if (!trimmed.length) return null;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return serializeLeadCustomPrompt(parsed as Record<string, string>) ?? trimmed;
+        }
+      } catch {
+        // String plano legacy: guardar tal cual
+      }
+      return trimmed;
     };
 
     // Validar meet_url si viene
@@ -210,12 +224,24 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const incomingDirector = typeof body.linkedin_director === "string" ? body.linkedin_director.trim() : null;
     const allowClear = body.allow_clear_linkedin === true;
 
-    // Construir updateData: preservar linkedin si vienen vacíos y el lead actual tiene valores
-    const updateData: any = {
-      ai_custom_prompt: normalizeCustomPrompt(body.ai_custom_prompt), // Normalizar: trim, si queda vacío -> null
-      score: body.score === null || body.score === undefined ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null),
-      score_categoria: body.score_categoria === null || body.score_categoria === undefined ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null),
-    };
+    // Construir updateData: solo incluir campos presentes en body (evitar sobrescribir con null al hacer PATCH parcial)
+    const updateData: any = {};
+    if (body.ai_custom_prompt !== undefined) {
+      updateData.ai_custom_prompt = normalizeCustomPrompt(body.ai_custom_prompt);
+    }
+    if (body.proposal_draft_json !== undefined) {
+      const v = body.proposal_draft_json;
+      updateData.proposal_draft_json = v === null || v === "" ? null : (typeof v === "string" ? v : JSON.stringify(v));
+    }
+    if (body.proposal_confirmed_at !== undefined) {
+      updateData.proposal_confirmed_at = body.proposal_confirmed_at === null || body.proposal_confirmed_at === "" ? null : body.proposal_confirmed_at;
+    }
+    if (body.score !== undefined) {
+      updateData.score = body.score === null ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null);
+    }
+    if (body.score_categoria !== undefined) {
+      updateData.score_categoria = body.score_categoria === null ? null : (typeof body.score_categoria === "string" ? body.score_categoria.trim() || null : null);
+    }
 
     // LinkedIn Empresa: solo incluir si cambió explícitamente o si se permite borrar
     if (body.linkedin_empresa !== undefined) {
@@ -251,9 +277,9 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       }
     }
 
-    // Incluir otros campos del body (excepto force_unlink_entity que es solo para validación, e instagram que no existe en leads)
+    // Incluir otros campos del body (excepto force_unlink_entity, ai_custom_prompt ya normalizado, e instagram que no existe en leads)
     for (const [key, value] of Object.entries(body)) {
-      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram") {
+      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram" && key !== "ai_custom_prompt" && key !== "proposal_draft_json" && key !== "proposal_confirmed_at") {
         updateData[key] = value;
       }
     }
@@ -485,7 +511,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     
     if (!updateResult.error && updateResult.data) {
       // Re-hidratar el lead completo con el mismo select que el GET (incluyendo empresas)
-      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
       
       // Intento principal: tabla "leads"
       const refreshed = await sb

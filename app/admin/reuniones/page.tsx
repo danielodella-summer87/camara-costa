@@ -1358,7 +1358,7 @@ export default function ReunionesPage() {
           <div className="text-sm font-semibold text-slate-900">Contexto</div>
           <div className="mt-3 space-y-2 text-sm">
             <Row label="Lead" value={ctx.leadNombre} />
-            <Row label="Entidad" value={ctx.entidad} />
+            <Row label="Iniciativa" value={ctx.entidad} />
             <Row label="Pipeline / Etapa" value={ctx.pipeline} />
             <Row label="Comercial" value={ctx.comercial} />
             <Row label="Última reunión" value={ctx.ultimaReunion} />

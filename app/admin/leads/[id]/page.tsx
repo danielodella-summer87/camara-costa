@@ -14,7 +14,7 @@ import { LeadDocsModal } from "@/components/leads/LeadDocsModal";
 import { PageContainer } from "@/components/layout/PageContainer";
 import Acciones from "@/components/acciones/Acciones";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
@@ -78,6 +78,8 @@ type Lead = {
   comercial_id?: string | null;
   score?: number | null;
   score_categoria?: string | null;
+  proposal_draft_json?: string | null;
+  proposal_confirmed_at?: string | null;
 };
 
 type LeadApiResponse = {
@@ -153,6 +155,82 @@ type LeadOptionsResponse = {
   } | null;
   error?: string | null;
 };
+
+type EasyService = {
+  id: string;
+  codigo: string;
+  nombre: string;
+  categoria: string | null;
+  descripcion_corta: string | null;
+  alcance_base: string | null;
+  billing_type: string | null;
+  precio_base: number | null;
+  moneda: string | null;
+  orden: number | null;
+};
+
+type LeadServiceProposal = {
+  id: string;
+  lead_id: string;
+  service_id: string;
+  mes: number;
+  precio: number | null;
+  moneda: string | null;
+  alcance_editado: string | null;
+  observaciones: string | null;
+  origen: string | null;
+  orden: number | null;
+  codigo?: string | null;
+  nombre?: string | null;
+  billing_type?: string | null;
+};
+
+type SuggestedService = {
+  reason: string;
+  priority: "alta" | "media" | "baja";
+  service: EasyService;
+};
+
+type ServiceSalesCopy = {
+  why: string;
+  outcome: string;
+  howToSell: string;
+};
+
+/** Columnas mensuales para la tabla de propuesta (nombres reales de meses). */
+type ProposalMonthColumn = { key: string; label: string };
+
+/** Fila de la grilla de propuesta por servicio (valores por mes para la tabla). */
+type ProposalGridRow = {
+  proposalId: string;
+  serviceId: string;
+  codigo: string | null;
+  nombre: string | null;
+  billingType: string | null;
+  valuesByMonth: Record<string, number | "">;
+};
+
+const MONTH_NAMES_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+function getProposalMonthColumns(count: number, baseDate?: Date): ProposalMonthColumn[] {
+  const base = baseDate ?? new Date();
+  const startMonth = base.getMonth();
+  const out: ProposalMonthColumn[] = [];
+  for (let i = 0; i < count; i++) {
+    const monthIndex = (startMonth + i) % 12;
+    out.push({ key: `m${i + 1}`, label: MONTH_NAMES_ES[monthIndex] });
+  }
+  return out;
+}
+
+function getColumnTotal(rows: ProposalGridRow[], monthKey: string): number {
+  return rows.reduce((sum, r) => {
+    const v = r.valuesByMonth[monthKey];
+    if (v === "" || v == null) return sum;
+    const n = Number(v);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
 
 function norm(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -319,6 +397,141 @@ function PillMulti({
   );
 }
 
+// Tabs por rol (Opción A)
+const LEAD_TABS = [
+  { id: "datos", label: "Datos" },
+  { id: "comercial", label: "Comercial" },
+  { id: "tecnico", label: "Técnico" },
+  { id: "consultor", label: "Consultor" },
+  { id: "contactos", label: "Contactos" },
+  { id: "acciones", label: "Acciones" },
+] as const;
+
+type LeadTabId = (typeof LEAD_TABS)[number]["id"];
+
+/** Configuración central de pasos con CTA y microchecklist: tab, section, texto y checklist opcional. */
+const NEXT_STEP_CONFIG: Record<string, { label: string; tab: LeadTabId; section: string; description: string; cta: string; checklist?: string[] }> = {
+  lead: {
+    label: "Completar datos del lead",
+    tab: "datos",
+    section: "lead-data-base",
+    description: `El lead ya fue creado. Revisá y completá la información mínima necesaria para avanzar con el análisis comercial.`,
+    cta: "Ir a completar datos",
+    checklist: [
+      "Verificar nombre, contacto y teléfono",
+      "Completar web, objetivos y audiencia",
+      "Confirmar vínculo con iniciativa si corresponde",
+    ],
+  },
+  datos: {
+    label: "Completar datos",
+    tab: "datos",
+    section: "lead-data-base",
+    description: `El lead ya fue creado, pero todavía falta completar o validar la información mínima necesaria para avanzar con seguridad en el análisis comercial.
+En este paso debes revisar datos clave como contacto, web, objetivos, audiencia y vínculo con iniciativa si corresponde.`,
+    cta: "Ir a completar datos",
+    checklist: [
+      "Verificar nombre, contacto y teléfono",
+      "Completar web, objetivos y audiencia",
+      "Confirmar vínculo con iniciativa si corresponde",
+    ],
+  },
+  investigacion: {
+    label: "Iniciar investigación",
+    tab: "comercial",
+    section: "ia-report-block",
+    description: `Ya existe información base suficiente.
+Ahora el objetivo es iniciar la investigación digital y contextual del lead para construir una base sólida de análisis.`,
+    cta: "Ir a investigación",
+    checklist: [
+      "Revisar presencia digital base",
+      "Analizar web y redes disponibles",
+      "Generar base de contexto para diagnóstico",
+    ],
+  },
+  diagnostico: {
+    label: "Generar diagnóstico IA",
+    tab: "comercial",
+    section: "ia-report-block",
+    description: `La investigación inicial ya está disponible.
+Ahora debes generar el diagnóstico estratégico para detectar oportunidades, riesgos y focos de mejora.`,
+    cta: "Ir a diagnóstico IA",
+    checklist: [
+      "Generar módulos clave del informe IA",
+      "Revisar oportunidades y riesgos detectados",
+      "Validar que el diagnóstico sea coherente con el lead",
+    ],
+  },
+  acciones: {
+    label: "Definir acciones",
+    tab: "comercial",
+    section: "ia-report-block",
+    description: `El diagnóstico ya fue generado.
+Ahora debes revisar y consolidar las acciones recomendadas para 72 horas y para el plan de 30–90 días.`,
+    cta: "Ir a acciones definidas",
+    checklist: [
+      "Revisar acciones de 72 horas",
+      "Revisar plan de 30–90 días",
+      "Confirmar prioridades antes de pasar a servicios",
+    ],
+  },
+  servicios: {
+    label: "Servicios propuestos",
+    tab: "consultor",
+    section: "services-proposal",
+    description: `El diagnóstico y las acciones ya fueron generadas.
+Ahora debes revisar los servicios EASY sugeridos por el sistema y confirmar cuáles formarán parte de la propuesta comercial.`,
+    cta: "Ir a servicios propuestos",
+    checklist: [
+      "Revisar sugerencias de servicios EASY",
+      "Agregar o quitar servicios relevantes",
+      "Ajustar propuesta mensual por columnas",
+    ],
+  },
+  propuesta: {
+    label: "Propuesta preparada",
+    tab: "consultor",
+    section: "proposal-builder",
+    description: `Ya existen servicios definidos.
+En este paso debes estructurar la propuesta comercial que será presentada al cliente.`,
+    cta: "Ir a preparar propuesta",
+    checklist: [
+      "Ordenar la propuesta por fases o meses",
+      "Validar narrativa comercial y argumentos",
+      "Confirmar estructura antes de presentar",
+    ],
+  },
+  presentacion: {
+    label: "Generar propuesta para el cliente",
+    tab: "consultor",
+    section: "proposal-export",
+    description: `La estructura económica de la propuesta ya fue confirmada.
+
+Ahora el siguiente paso es generar el material final para presentar o compartir con el cliente,
+idealmente como presentación en Gamma o como documento exportable.`,
+    cta: "Ir a generar propuesta para el cliente",
+    checklist: [
+      "Revisar la estructura económica confirmada",
+      "Generar la presentación final en Gamma o PDF",
+      "Dejar el material listo para compartir con el cliente",
+    ],
+  },
+};
+
+import { getLeadFlowSteps, getCurrentFlowStep, type LeadFlowStep } from "@/lib/leads/leadFlow";
+
+function getVisibleLeadTabs(role: string | null): ReadonlyArray<(typeof LEAD_TABS)[number]> {
+  const r = role?.trim().toLowerCase() ?? null;
+  if (!r) return LEAD_TABS.filter((t) => t.id === "datos" || t.id === "contactos");
+  if (r === "admin") return [...LEAD_TABS];
+  if (r === "consultor") return [...LEAD_TABS];
+  if (r === "comercial") return LEAD_TABS.filter((t) => ["datos", "comercial", "contactos", "acciones"].includes(t.id));
+  if (r === "tecnico") return LEAD_TABS.filter((t) => ["datos", "tecnico", "contactos", "acciones"].includes(t.id));
+  if (r === "operador") return LEAD_TABS.filter((t) => ["datos", "comercial", "tecnico", "contactos", "acciones"].includes(t.id));
+  if (r === "viewer") return LEAD_TABS.filter((t) => t.id === "datos" || t.id === "contactos");
+  return LEAD_TABS.filter((t) => t.id === "datos" || t.id === "contactos");
+}
+
 export default function LeadDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -366,9 +579,6 @@ export default function LeadDetailPage() {
   const [loadingSession, setLoadingSession] = useState(false);
   const meetWinRef = useRef<Window | null>(null);
 
-  // ✅ Tabs
-  const [activeTab, setActiveTab] = useState<"entidad" | "lead" | "ia" | "meet" | "contactos" | "acciones">("entidad");
-
   // ✅ Contactos del lead
   const [contacts, setContacts] = useState<Array<{
     id: string;
@@ -389,8 +599,86 @@ export default function LeadDetailPage() {
   // ✅ Labels personalizados
   const [labels, setLabels] = useState<Labels>(DEFAULT_LABELS);
 
+  // ✅ Propuesta Comercial Inteligente (tab Consultor)
+  const [servicesCatalog, setServicesCatalog] = useState<EasyService[]>([]);
+  const [leadServices, setLeadServices] = useState<LeadServiceProposal[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  const [servicesSaving, setServicesSaving] = useState(false);
+  const [servicesError, setServicesError] = useState("");
+  const [selectedServiceId, setSelectedServiceId] = useState("");
+  const [selectedMes, setSelectedMes] = useState(1);
+  const [selectedPrecio, setSelectedPrecio] = useState("");
+  const [selectedAlcance, setSelectedAlcance] = useState("");
+  const [selectedObservaciones, setSelectedObservaciones] = useState("");
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [editingValues, setEditingValues] = useState<{
+    mes: number;
+    precio: string;
+    alcance_editado: string;
+    observaciones: string;
+  }>({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+
+  /** Número de columnas mensuales en la tabla de propuesta (mín 1). */
+  const [proposalMonthCount, setProposalMonthCount] = useState(6);
+  /** Overrides por celda: proposalId -> monthKey -> value. Si no hay override, se usa row.mes/row.precio para la columna que coincida. */
+  const [proposalGridOverrides, setProposalGridOverrides] = useState<Record<string, Record<string, number | "">>>({});
+  const proposalDraftSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const proposalRestoredFromLeadRef = useRef(false);
+  const proposalSkipNextSaveRef = useRef(false);
+  const [proposalConfirming, setProposalConfirming] = useState(false);
+
+  const [estadoComercialOpen, setEstadoComercialOpen] = useState(false);
+  const [datosLeadOpen, setDatosLeadOpen] = useState(false);
+  const [investigacionOpen, setInvestigacionOpen] = useState(false);
+
   // ✅ Permisos RBAC
   const { hasPermission, role, loading: permissionsLoading } = usePermissions();
+
+  // ✅ Tabs (por rol)
+  const [activeTab, setActiveTab] = useState<LeadTabId>("datos");
+  const visibleTabs = useMemo(() => getVisibleLeadTabs(role), [role]);
+  const visibleTabIds = useMemo(() => visibleTabs.map((t) => t.id), [visibleTabs]);
+  useEffect(() => {
+    if (!visibleTabIds.includes(activeTab)) setActiveTab("datos");
+  }, [visibleTabIds, activeTab]);
+
+  // Sincronizar tab/section desde URL (?tab=consultor&section=services-proposal)
+  const searchParams = useSearchParams();
+  const tabFromUrl = searchParams.get("tab") as LeadTabId | null;
+  const sectionFromUrl = searchParams.get("section");
+  useEffect(() => {
+    if (tabFromUrl && visibleTabIds.includes(tabFromUrl)) setActiveTab(tabFromUrl);
+  }, [tabFromUrl, visibleTabIds]);
+  useEffect(() => {
+    if (!sectionFromUrl) return;
+    const el = document.getElementById(sectionFromUrl);
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  }, [sectionFromUrl, activeTab]);
+
+  // Perfiles de IA permitidos por rol (solo frontend; backend no tocado)
+  const allowedProfiles = useMemo((): Array<"comercial" | "tecnico"> => {
+    const r = role?.trim().toLowerCase() ?? null;
+    if (r === "admin" || r === "consultor" || r === "operador") return ["comercial", "tecnico"];
+    if (r === "comercial") return ["comercial"];
+    if (r === "tecnico") return ["tecnico"];
+    return [];
+  }, [role]);
+
+  /** Señales de presentación lista (Gamma/PDF). Se puede conectar luego desde AiLeadReport con callback. */
+  const [presentationSignals, setPresentationSignals] = useState<{
+    gammaUrl?: string | null;
+    pdfUrl?: string | null;
+    lastGeneratedPdf?: boolean;
+    exportReady?: boolean;
+  }>({});
+
+  /** Pasos del flujo y paso actual (recalculan con lead, leadServices, proposal_confirmed_at, presentationSignals). */
+  const flowSteps = useMemo(
+    () => getLeadFlowSteps(lead ?? null, leadServices, presentationSignals),
+    [lead, leadServices, presentationSignals]
+  );
+  const currentFlowStep = useMemo(() => getCurrentFlowStep(flowSteps), [flowSteps]);
 
   // ✅ Usuario actual (app_user.id, comercial_id cuando la API lo exponga)
   const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
@@ -407,6 +695,715 @@ export default function LeadDetailPage() {
         setCurrentComercialId(null);
       });
   }, []);
+
+  async function loadLeadServices() {
+    if (!id) return;
+    const res = await fetch(`/api/admin/leads/${id}/services`);
+    const json = await res.json();
+    if (json?.ok && Array.isArray(json.services)) setLeadServices(json.services);
+  }
+
+  // Cargar catálogo y servicios del lead cuando se abre el tab Consultor
+  useEffect(() => {
+    if (activeTab !== "consultor" || !id) return;
+    let cancelled = false;
+    setServicesLoading(true);
+    setServicesError("");
+    (async () => {
+      try {
+        const catRes = await fetch("/api/admin/services");
+        const catJson = await catRes.json();
+        if (cancelled) return;
+        if (!catRes.ok || !catJson?.ok) {
+          setServicesError(catJson?.error ?? "Error al cargar catálogo");
+          return;
+        }
+        setServicesCatalog(catJson.services ?? []);
+        await loadLeadServices();
+      } catch (e) {
+        if (!cancelled) setServicesError(e instanceof Error ? e.message : "Error al cargar datos");
+      } finally {
+        if (!cancelled) setServicesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, id]);
+
+  /** Al cambiar de lead, permitir restaurar draft de nuevo. */
+  useEffect(() => {
+    proposalRestoredFromLeadRef.current = false;
+  }, [id]);
+
+  /** Restaurar draft desde lead al cargar (una vez por lead + leadServices). */
+  useEffect(() => {
+    const raw = (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json;
+    if (!raw?.trim() || !leadServices.length) return;
+    if (proposalRestoredFromLeadRef.current) return;
+    try {
+      const draft = JSON.parse(raw) as { months?: { key: string; label?: string }[]; rows?: { proposalId: string; valuesByMonth: Record<string, number | ""> }[] };
+      const months = Array.isArray(draft.months) ? draft.months : [];
+      const rows = Array.isArray(draft.rows) ? draft.rows : [];
+      const validIds = new Set(leadServices.map((r) => r.id));
+      if (months.length > 0) setProposalMonthCount(Math.max(1, Math.min(24, months.length)));
+      const overrides: Record<string, Record<string, number | "">> = {};
+      for (const row of rows) {
+        if (row.proposalId && validIds.has(row.proposalId) && row.valuesByMonth && typeof row.valuesByMonth === "object") {
+          overrides[row.proposalId] = { ...row.valuesByMonth };
+        }
+      }
+      if (Object.keys(overrides).length > 0) setProposalGridOverrides(overrides);
+      proposalRestoredFromLeadRef.current = true;
+      proposalSkipNextSaveRef.current = true;
+    } catch {
+      // ignore parse error
+    }
+  }, [lead, leadServices]);
+
+  /** Columnas mensuales para la tabla de propuesta (mes actual + siguientes). */
+  const proposalMonthColumns = useMemo(
+    () => getProposalMonthColumns(Math.max(1, proposalMonthCount)),
+    [proposalMonthCount]
+  );
+
+  /** Filas de la grilla: un servicio por fila, valores por mes (override o row.mes/precio). */
+  const proposalGridRows = useMemo((): ProposalGridRow[] => {
+    return leadServices.map((row) => {
+      const valuesByMonth: Record<string, number | ""> = {};
+      const overrides = proposalGridOverrides[row.id];
+      proposalMonthColumns.forEach((col, idx) => {
+        const oneBased = idx + 1;
+        if (overrides && col.key in overrides) {
+          valuesByMonth[col.key] = overrides[col.key];
+        } else if (row.mes === oneBased) {
+          valuesByMonth[col.key] = row.precio != null ? row.precio : "";
+        } else {
+          valuesByMonth[col.key] = "";
+        }
+      });
+      return {
+        proposalId: row.id,
+        serviceId: row.service_id,
+        codigo: row.codigo ?? null,
+        nombre: row.nombre ?? null,
+        billingType: row.billing_type ?? null,
+        valuesByMonth,
+      };
+    });
+  }, [leadServices, proposalMonthColumns, proposalGridOverrides]);
+
+  /** Persistir draft de propuesta con debounce (1s) al editar tabla o meses. */
+  useEffect(() => {
+    if (!id || activeTab !== "consultor") return;
+    if (proposalSkipNextSaveRef.current) {
+      proposalSkipNextSaveRef.current = false;
+      return;
+    }
+    if (proposalDraftSaveRef.current) clearTimeout(proposalDraftSaveRef.current);
+    proposalDraftSaveRef.current = setTimeout(() => {
+      proposalDraftSaveRef.current = null;
+      const draft = {
+        months: proposalMonthColumns.map((c) => ({ key: c.key, label: c.label })),
+        rows: proposalGridRows.map((r) => ({ proposalId: r.proposalId, serviceId: r.serviceId, valuesByMonth: { ...r.valuesByMonth } })),
+      };
+      fetch(`/api/admin/leads/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposal_draft_json: JSON.stringify(draft) }),
+      }).catch(() => {});
+    }, 1000);
+    return () => {
+      if (proposalDraftSaveRef.current) clearTimeout(proposalDraftSaveRef.current);
+    };
+  }, [id, activeTab, proposalMonthColumns, proposalGridRows]);
+
+  // Servicio elegido en el formulario (para placeholder precio y alcance_base)
+  const selectedService = useMemo(
+    () => servicesCatalog.find((s) => s.id === selectedServiceId) ?? null,
+    [servicesCatalog, selectedServiceId]
+  );
+  // Autocompletar alcance cuando el usuario selecciona un servicio nuevo
+  useEffect(() => {
+    if (!selectedServiceId) return;
+    const svc = servicesCatalog.find((s) => s.id === selectedServiceId);
+    if (svc?.alcance_base) setSelectedAlcance(svc.alcance_base);
+  }, [selectedServiceId, servicesCatalog]);
+
+  function formatBillingType(value: string | null | undefined): string {
+    if (!value) return "—";
+    const v = String(value).toLowerCase();
+    if (v === "monthly") return "Mensual";
+    if (v === "one_time") return "Única vez";
+    return value;
+  }
+  function formatMoney(moneda: string | null | undefined, precio: number | null | undefined): string {
+    if (precio == null || !Number.isFinite(precio)) return "—";
+    const m = moneda?.trim() || "";
+    return m ? `${m} ${precio}` : String(precio);
+  }
+  function getUniqueCurrencies(items: LeadServiceProposal[]): string[] {
+    const set = new Set<string>();
+    for (const row of items) {
+      const m = row.moneda?.trim();
+      if (m) set.add(m);
+    }
+    return Array.from(set);
+  }
+  function sumByBillingType(items: LeadServiceProposal[], type: "one_time" | "monthly"): number {
+    const t = type.toLowerCase();
+    return items
+      .filter((r) => String(r.billing_type ?? "").toLowerCase() === t)
+      .reduce((sum, r) => sum + (Number(r.precio) || 0), 0);
+  }
+  function formatSummaryMoney(items: LeadServiceProposal[], amount: number): string {
+    if (!Number.isFinite(amount)) return "—";
+    if (items.length === 0) return "—";
+    const currencies = getUniqueCurrencies(items);
+    if (currencies.length !== 1) return "Monedas mixtas";
+    return formatMoney(currencies[0], amount);
+  }
+
+  function groupServicesByMonth(items: LeadServiceProposal[]): { mes: number; items: LeadServiceProposal[] }[] {
+    const byMonth = new Map<number, LeadServiceProposal[]>();
+    for (const row of items) {
+      const m = Number(row.mes);
+      if (!byMonth.has(m)) byMonth.set(m, []);
+      byMonth.get(m)!.push(row);
+    }
+    return Array.from(byMonth.entries())
+      .map(([mes, items]) => ({ mes, items }))
+      .sort((a, b) => a.mes - b.mes);
+  }
+  function getMonthSubtotal(items: LeadServiceProposal[]): number {
+    return items.reduce((sum, r) => sum + (Number(r.precio) || 0), 0);
+  }
+  function getMonthCurrency(items: LeadServiceProposal[]): string | null {
+    const currencies = getUniqueCurrencies(items);
+    return currencies.length === 1 ? currencies[0] : null;
+  }
+  function formatMonthSubtotal(items: LeadServiceProposal[]): string {
+    if (items.length === 0) return "—";
+    const sub = getMonthSubtotal(items);
+    const cur = getMonthCurrency(items);
+    if (cur === null) return "Monedas mixtas";
+    if (!Number.isFinite(sub) || sub === 0 && items.every((r) => r.precio == null || r.precio === "")) return "—";
+    return formatMoney(cur, sub);
+  }
+
+  const PHASE_ORDER = ["Diagnóstico y Base", "Implementación", "Optimización y Crecimiento"] as const;
+  type PhaseKey = (typeof PHASE_ORDER)[number];
+
+  function getProposalPhase(item: LeadServiceProposal): PhaseKey {
+    const bt = String(item.billing_type ?? "").toLowerCase();
+    const mes = Number(item.mes);
+    if (bt === "one_time" && mes === 1) return "Diagnóstico y Base";
+    if (bt === "one_time" && mes >= 2) return "Implementación";
+    if (bt === "monthly") return "Optimización y Crecimiento";
+    return "Implementación";
+  }
+  function groupServicesByPhase(items: LeadServiceProposal[]): { phase: PhaseKey; items: LeadServiceProposal[] }[] {
+    const byPhase = new Map<PhaseKey, LeadServiceProposal[]>();
+    for (const p of PHASE_ORDER) byPhase.set(p, []);
+    for (const row of items) {
+      const phase = getProposalPhase(row);
+      byPhase.get(phase)!.push(row);
+    }
+    return PHASE_ORDER.map((phase) => ({ phase, items: byPhase.get(phase)! })).filter((x) => x.items.length > 0);
+  }
+  function getPhaseDescription(phase: PhaseKey): string {
+    const desc: Record<PhaseKey, string> = {
+      "Diagnóstico y Base":
+        "Servicios orientados a entender la situación actual, ordenar prioridades y crear la base estratégica de trabajo.",
+      "Implementación":
+        "Servicios enfocados en construir, lanzar o poner en marcha los activos y acciones necesarias.",
+      "Optimización y Crecimiento":
+        "Servicios orientados a mejorar resultados, escalar la captación y sostener el crecimiento en el tiempo.",
+    };
+    return desc[phase] ?? "";
+  }
+  function getPhaseSubtotal(items: LeadServiceProposal[]): number {
+    return items.reduce((sum, r) => sum + (Number(r.precio) || 0), 0);
+  }
+  function formatPhaseSubtotal(items: LeadServiceProposal[]): string {
+    if (items.length === 0) return "—";
+    const sub = getPhaseSubtotal(items);
+    const cur = getMonthCurrency(items);
+    if (cur === null) return "Monedas mixtas";
+    if (!Number.isFinite(sub) || (sub === 0 && items.every((r) => r.precio == null || r.precio === ""))) return "—";
+    return formatMoney(cur, sub);
+  }
+
+  /** Parsea lead.ai_report por bloques ### TAB:<moduleId> y devuelve Record<moduleId, contenido>. */
+  function parseReportTabsLocal(report: string): Record<string, string> {
+    const tabs: Record<string, string> = {};
+    if (!report || !report.trim()) return tabs;
+    const tabPattern = /###\s+TAB:\s*(\w+)\s*\n/gi;
+    const matches: Array<{ tabId: string; startIndex: number }> = [];
+    let match;
+    while ((match = tabPattern.exec(report)) !== null) {
+      matches.push({ tabId: match[1], startIndex: match.index + match[0].length });
+    }
+    for (let i = 0; i < matches.length; i++) {
+      const startIndex = matches[i].startIndex;
+      const remaining = report.slice(startIndex);
+      const nextTabMatch = remaining.match(/###\s+TAB:\s*\w+\s*\n/i);
+      const endIndex = nextTabMatch && typeof nextTabMatch.index === "number" ? startIndex + nextTabMatch.index : report.length;
+      const content = report.slice(startIndex, endIndex).trim();
+      if (content) tabs[matches[i].tabId] = content;
+    }
+    return tabs;
+  }
+
+  /** Extrae texto estratégico desde ACCIONES, plan_crecimiento, OPORTUNIDADES, propuesta_easy para sugerencias. */
+  function getStrategicSourceText(lead: Lead | null): { tabs: Record<string, string>; sourceText: string } {
+    const raw = (lead as { ai_report?: string | null } | undefined)?.ai_report;
+    if (!raw || !String(raw).trim()) return { tabs: {}, sourceText: "" };
+    const tabs = parseReportTabsLocal(String(raw));
+    const order = ["ACCIONES", "plan_crecimiento", "OPORTUNIDADES", "propuesta_easy"];
+    const parts: string[] = [];
+    for (const id of order) {
+      const content = tabs[id];
+      if (content?.trim()) parts.push(content.trim());
+    }
+    return { tabs, sourceText: parts.join("\n\n") };
+  }
+
+  function normalizeText(text: string): string {
+    return String(text ?? "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function matchesStrategicKeywords(text: string, keywords: string[]): boolean {
+    const norm = normalizeText(text);
+    return keywords.some((k) => norm.includes(normalizeText(k)));
+  }
+
+  function getSuggestedServicesFromAiReport(
+    catalog: EasyService[],
+    proposed: LeadServiceProposal[],
+    lead: Lead | null
+  ): SuggestedService[] {
+    const already = getAlreadyProposedServiceIds(proposed);
+    const { sourceText, tabs } = getStrategicSourceText(lead);
+    const hasAiReport = sourceText.length > 0;
+
+    if (!hasAiReport) {
+      const signals = getLeadSignals(lead, proposed);
+      return getSuggestedServices(catalog, proposed, signals);
+    }
+
+    const normSource = normalizeText(sourceText);
+    const candidates: SuggestedService[] = [];
+
+    const add = (sourceKeywords: string[], catalogKeywords: string[], priority: SuggestedService["priority"], reason: string) => {
+      if (!matchesStrategicKeywords(sourceText, sourceKeywords)) return;
+      for (const svc of catalog) {
+        if (already.has(svc.id)) continue;
+        if (!matchesService(svc, catalogKeywords)) continue;
+        candidates.push({ reason, priority, service: svc });
+      }
+    };
+
+    // REGLA 1 — REDES
+    add(
+      ["redes", "instagram", "contenido", "presencia digital", "comunidad", "publicaciones", "visibilidad en redes"],
+      ["redes", "social", "contenido", "community", "instagram", "facebook"],
+      "alta",
+      "El análisis estratégico detecta la necesidad de fortalecer la presencia y la comunicación en redes sociales."
+    );
+
+    // REGLA 2 — PAUTA
+    add(
+      ["pauta", "ads", "campañas", "captación", "tráfico", "leads", "meta ads", "google ads", "conversiones"],
+      ["pauta", "ads", "trafico", "captacion", "media", "campañas", "meta", "google"],
+      "alta",
+      "El diagnóstico sugiere acelerar captación y visibilidad mediante campañas pagas."
+    );
+
+    // REGLA 3 — WEB / LANDING (evitar si el informe dice que la web está correcta)
+    const webNegative = /(la\s+web\s+está\s+correcta|sitio\s+correcto|presencia\s+web\s+correcta|web\s+bien\s+resuelta)/i.test(normSource);
+    const webPositive = matchesStrategicKeywords(sourceText, ["web", "landing", "sitio", "página", "conversion", "conversión web", "mejorar la web", "optimizar sitio"]);
+    if (webPositive && (!webNegative || matchesStrategicKeywords(sourceText, ["crear", "rediseño", "nueva web", "nuevo sitio", "desarrollar web"]))) {
+      for (const svc of catalog) {
+        if (already.has(svc.id)) continue;
+        if (!matchesService(svc, ["web", "landing", "sitio", "pagina"])) continue;
+        candidates.push({
+          reason: "Las acciones recomendadas muestran una oportunidad de mejora en la base web y en la conversión digital.",
+          priority: "media",
+          service: svc,
+        });
+      }
+    }
+
+    // REGLA 4 — CONSULTORÍA / ESTRATEGIA
+    add(
+      ["estrategia", "consultoría", "orden comercial", "hoja de ruta", "prioridades", "propuesta de valor", "posicionamiento"],
+      ["consultoria", "estrategia", "growth", "diagnostico", "auditoria"],
+      "alta",
+      "El informe plantea una necesidad de dirección estratégica y priorización comercial."
+    );
+
+    // REGLA 5 — AUTOMATIZACIÓN / CRM
+    add(
+      ["automatizacion", "automatización", "crm", "seguimiento", "pipeline", "nutricion", "nutrición", "embudo", "cierre comercial", "procesos comerciales"],
+      ["automatizacion", "crm", "pipeline", "embudo", "proceso comercial"],
+      "media",
+      "Las recomendaciones apuntan a ordenar el seguimiento comercial y mejorar la conversión del proceso."
+    );
+
+    // REGLA 6 — LINKEDIN (solo si el informe lo menciona en acciones/oportunidades)
+    add(
+      ["linkedin", "marca personal", "social selling", "autoridad profesional", "posicionamiento en linkedin"],
+      ["linkedin", "marca personal", "social selling", "contenido ejecutivo"],
+      "media",
+      "El análisis detecta una oportunidad concreta de posicionamiento comercial en LinkedIn."
+    );
+
+    const byId = new Map<string, SuggestedService>();
+    for (const c of candidates) {
+      const existing = byId.get(c.service.id);
+      if (!existing || PRIORITY_ORDER[c.priority] < PRIORITY_ORDER[existing.priority]) {
+        byId.set(c.service.id, c);
+      }
+    }
+    return Array.from(byId.values())
+      .sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || (a.service.orden ?? 0) - (b.service.orden ?? 0))
+      .slice(0, 6);
+  }
+
+  function getFlowStepClasses(status: "done" | "current" | "pending"): string {
+    if (status === "done") {
+      return "border-green-300 bg-green-50/80 text-slate-900";
+    }
+    if (status === "current") {
+      return "border-amber-400 bg-amber-50/90 text-slate-900 ring-2 ring-amber-200";
+    }
+    return "border-slate-200 bg-slate-50/50 text-slate-500";
+  }
+
+  function getLeadSignals(lead: Lead | null, items: LeadServiceProposal[]): {
+    hasWebsite: boolean;
+    hasInstagram: boolean;
+    hasFacebook: boolean;
+    hasLinkedin: boolean;
+    hasAiReport: boolean;
+    hasObjetivo: boolean;
+    hasAudiencia: boolean;
+    hasExistingProposal: boolean;
+  } {
+    const emp = lead?.empresas;
+    const webLead = lead?.website?.trim();
+    const webEmp = (emp as { web?: string | null } | undefined)?.web?.trim();
+    const instaEmp = (emp as { instagram?: string | null } | undefined)?.instagram?.trim();
+    const fbEmp = (emp as { facebook?: string | null } | undefined)?.facebook?.trim();
+    const aiReport = (lead as { ai_report?: string | null } | undefined)?.ai_report;
+    return {
+      hasWebsite: !!(webLead || webEmp),
+      hasInstagram: !!instaEmp,
+      hasFacebook: !!fbEmp,
+      hasLinkedin: !!(lead?.linkedin_empresa?.trim() || lead?.linkedin_director?.trim()),
+      hasAiReport: !!(typeof aiReport === "string" && aiReport.trim()),
+      hasObjetivo: !!(lead?.objetivos?.trim()),
+      hasAudiencia: !!(lead?.audiencia?.trim()),
+      hasExistingProposal: items.length > 0,
+    };
+  }
+  function getAlreadyProposedServiceIds(items: LeadServiceProposal[]): Set<string> {
+    return new Set(items.map((r) => r.service_id));
+  }
+  function matchesService(service: EasyService, keywords: string[]): boolean {
+    const raw = [
+      service.codigo ?? "",
+      service.nombre ?? "",
+      service.categoria ?? "",
+      service.descripcion_corta ?? "",
+      service.alcance_base ?? "",
+    ].join(" ");
+    const lower = raw.toLowerCase();
+    return keywords.some((k) => lower.includes(k.toLowerCase()));
+  }
+  function getPriorityBadgeClasses(priority: "alta" | "media" | "baja"): string {
+    if (priority === "alta") return "rounded px-2 py-0.5 text-xs font-medium bg-red-100 text-red-800 border border-red-200";
+    if (priority === "media") return "rounded px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200";
+    return "rounded px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200";
+  }
+  function getSuggestedPriorityText(priority: "alta" | "media" | "baja"): string {
+    if (priority === "alta") return "Alta prioridad";
+    if (priority === "media") return "Prioridad media";
+    return "Prioridad baja";
+  }
+  function getServicePhaseLabel(billingType: string | null | undefined): string {
+    const bt = String(billingType ?? "").toLowerCase();
+    if (bt === "one_time") return "Fase inicial / implementación";
+    if (bt === "monthly") return "Fase de continuidad / crecimiento";
+    return "Fase operativa";
+  }
+  const DEFAULT_SALES_COPY: ServiceSalesCopy = {
+    why: "Este servicio puede aportar valor al lead en función de su etapa actual y complementar una propuesta más amplia de crecimiento.",
+    outcome: "Ayuda a fortalecer la ejecución, mejorar la propuesta comercial o reforzar la base operativa del negocio.",
+    howToSell: "Se puede presentar como una pieza que suma coherencia y capacidad de avance dentro de una propuesta integral.",
+  };
+  function getServiceSalesCopy(service: EasyService, _signals: ReturnType<typeof getLeadSignals>): ServiceSalesCopy {
+    if (matchesService(service, ["web", "landing", "sitio", "pagina"])) {
+      return {
+        why: "Este servicio es recomendable porque el lead necesita una base digital clara donde presentar su propuesta, captar interés y ordenar su presencia online.",
+        outcome: "Permite mejorar visibilidad, dar una imagen más profesional y crear un activo concreto para convertir tráfico o interés en oportunidades reales.",
+        howToSell: "Se puede presentar como la base mínima necesaria para que el negocio tenga una presencia sólida, creíble y preparada para sostener acciones comerciales o publicitarias.",
+      };
+    }
+    if (matchesService(service, ["auditoria", "diagnostico", "consultoria", "estrategia", "growth"])) {
+      return {
+        why: "Este servicio ayuda a ordenar prioridades, detectar oportunidades y definir un camino más claro antes de invertir tiempo o presupuesto en acciones aisladas.",
+        outcome: "Genera claridad estratégica, reduce improvisación y permite que las siguientes decisiones comerciales o de marketing tengan más dirección.",
+        howToSell: "Se puede vender como una instancia de orden y visión, ideal para transformar intuiciones en una hoja de ruta concreta con foco en resultados.",
+      };
+    }
+    if (matchesService(service, ["pauta", "ads", "trafico", "captacion", "meta", "google"])) {
+      return {
+        why: "Este servicio es útil cuando el lead ya tiene una base mínima y necesita acelerar visibilidad, generación de demanda o captación de oportunidades.",
+        outcome: "Permite aumentar alcance, atraer público más calificado y generar un flujo más constante de contactos o consultas.",
+        howToSell: "Se puede presentar como el paso lógico para convertir la base digital existente en un sistema activo de generación de oportunidades.",
+      };
+    }
+    if (matchesService(service, ["linkedin", "contenido", "marca personal", "social selling"])) {
+      return {
+        why: "Este servicio aprovecha la presencia profesional del lead para construir posicionamiento, autoridad y apertura comercial en canales relevantes.",
+        outcome: "Mejora percepción de marca, genera confianza y facilita conversaciones comerciales desde una posición más sólida.",
+        howToSell: "Se puede vender como una herramienta para posicionarse mejor, abrir puertas y acompañar ventas consultivas con mayor credibilidad.",
+      };
+    }
+    if (matchesService(service, ["automatizacion", "implementacion", "crm", "sistema", "pipeline"])) {
+      return {
+        why: "Este servicio permite pasar de acciones dispersas a una operación más ordenada, trazable y escalable.",
+        outcome: "Mejora seguimiento, reduce pérdida de oportunidades y ayuda a profesionalizar la gestión comercial o técnica.",
+        howToSell: "Se puede presentar como una mejora estructural que ordena procesos y crea capacidad real de crecimiento sostenido.",
+      };
+    }
+    return DEFAULT_SALES_COPY;
+  }
+  const PRIORITY_ORDER = { alta: 0, media: 1, baja: 2 };
+  function getSuggestedServices(
+    catalog: EasyService[],
+    proposed: LeadServiceProposal[],
+    signals: ReturnType<typeof getLeadSignals>
+  ): SuggestedService[] {
+    const already = getAlreadyProposedServiceIds(proposed);
+    const candidates: SuggestedService[] = [];
+
+    const add = (keywords: string[], priority: SuggestedService["priority"], reason: string) => {
+      for (const svc of catalog) {
+        if (already.has(svc.id)) continue;
+        if (!matchesService(svc, keywords)) continue;
+        candidates.push({ reason, priority, service: svc });
+      }
+    };
+
+    if (!signals.hasWebsite) {
+      add(["web", "landing", "sitio", "pagina"], "alta", "El lead no muestra una presencia web clara y necesita una base digital visible.");
+    }
+    if (signals.hasWebsite && !signals.hasAiReport) {
+      add(["auditoria", "diagnostico", "consultoria"], "alta", "Conviene comenzar con una instancia de diagnóstico para ordenar prioridades y detectar oportunidades.");
+    }
+    if ((signals.hasInstagram || signals.hasFacebook) && !signals.hasObjetivo) {
+      add(["consultoria", "estrategia", "growth"], "media", "El lead tiene presencia digital, pero falta una dirección estratégica clara para convertirla en resultados.");
+    }
+    if (signals.hasWebsite && (signals.hasInstagram || signals.hasFacebook) && !signals.hasExistingProposal) {
+      add(["pauta", "ads", "trafico", "captacion"], "media", "Ya existe una base digital mínima; el siguiente paso puede ser acelerar captación y visibilidad.");
+    }
+    if (signals.hasLinkedin) {
+      add(["linkedin", "contenido", "marca personal", "social selling"], "media", "La presencia en LinkedIn abre oportunidades comerciales y de posicionamiento.");
+    }
+    if (signals.hasAiReport && !signals.hasExistingProposal) {
+      add(["consultoria", "implementacion", "automatizacion"], "alta", "El lead ya cuenta con diagnóstico IA y está en condiciones de transformarlo en plan de acción.");
+    }
+
+    const byId = new Map<string, SuggestedService>();
+    for (const c of candidates) {
+      const existing = byId.get(c.service.id);
+      if (!existing || PRIORITY_ORDER[c.priority] < PRIORITY_ORDER[existing.priority]) {
+        byId.set(c.service.id, c);
+      }
+    }
+    return Array.from(byId.values())
+      .sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || (a.service.orden ?? 0) - (b.service.orden ?? 0))
+      .slice(0, 6);
+  }
+
+  async function handleAddProposalService() {
+    if (!id) return;
+    setServicesError("");
+    if (!selectedServiceId.trim()) {
+      setServicesError("Seleccioná un servicio antes de agregarlo.");
+      return;
+    }
+    const precioNum = selectedPrecio === "" ? null : Number(selectedPrecio);
+    const basePrice = precioNum ?? selectedService?.precio_base ?? 0;
+    setServicesSaving(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/services`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: selectedServiceId,
+          mes: 1,
+          precio: precioNum ?? selectedService?.precio_base ?? null,
+          alcance_editado: selectedAlcance.trim() || null,
+          observaciones: selectedObservaciones.trim() || null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setServicesError(json?.error ?? "Error al agregar el servicio");
+        return;
+      }
+      setSelectedServiceId("");
+      setSelectedMes(1);
+      setSelectedPrecio("");
+      setSelectedAlcance("");
+      setSelectedObservaciones("");
+      await loadLeadServices();
+      const newProposal = (json as { proposal?: { id: string } })?.proposal;
+      if (newProposal?.id && Number.isFinite(basePrice)) {
+        const cols = getProposalMonthColumns(Math.max(1, proposalMonthCount));
+        const next: Record<string, number | ""> = {};
+        cols.forEach((c) => { next[c.key] = basePrice; });
+        setProposalGridOverrides((prev) => ({ ...prev, [newProposal.id]: next }));
+      }
+    } catch (e) {
+      setServicesError(e instanceof Error ? e.message : "Error al agregar el servicio");
+    } finally {
+      setServicesSaving(false);
+    }
+  }
+
+  async function handleSaveProposalEdit() {
+    if (!id || !editingServiceId) return;
+    setServicesError("");
+    const mes = Number(editingValues.mes);
+    if (!Number.isInteger(mes) || mes < 1 || mes > 24) {
+      setServicesError("El mes debe estar entre 1 y 24.");
+      return;
+    }
+    setServicesSaving(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/services/${editingServiceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mes,
+          precio: editingValues.precio === "" ? null : Number(editingValues.precio),
+          alcance_editado: editingValues.alcance_editado.trim() || null,
+          observaciones: editingValues.observaciones.trim() || null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setServicesError(json?.error ?? "No se pudo guardar el servicio propuesto.");
+        return;
+      }
+      setEditingServiceId(null);
+      setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
+      await loadLeadServices();
+    } catch (e) {
+      setServicesError(e instanceof Error ? e.message : "No se pudo guardar el servicio propuesto.");
+    } finally {
+      setServicesSaving(false);
+    }
+  }
+
+  async function handleDeleteProposal(proposalId: string) {
+    if (!id) return;
+    if (!confirm("¿Eliminar este servicio de la propuesta?")) return;
+    setServicesError("");
+    setDeletingServiceId(proposalId);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/services/${proposalId}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setServicesError(json?.error ?? "No se pudo eliminar el servicio propuesto.");
+        return;
+      }
+      if (editingServiceId === proposalId) {
+        setEditingServiceId(null);
+        setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
+      }
+      setProposalGridOverrides((prev) => {
+        const next = { ...prev };
+        delete next[proposalId];
+        return next;
+      });
+      await loadLeadServices();
+    } catch (e) {
+      setServicesError(e instanceof Error ? e.message : "No se pudo eliminar el servicio propuesto.");
+    } finally {
+      setDeletingServiceId(null);
+    }
+  }
+
+  async function handleConfirmProposal() {
+    if (!id) return;
+    setProposalConfirming(true);
+    setServicesError("");
+    try {
+      const draft = {
+        months: proposalMonthColumns.map((c) => ({ key: c.key, label: c.label })),
+        rows: proposalGridRows.map((r) => ({ proposalId: r.proposalId, serviceId: r.serviceId, valuesByMonth: { ...r.valuesByMonth } })),
+      };
+      const res = await fetch(`/api/admin/leads/${id}/proposal/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.ok) {
+        setServicesError(json?.error ?? "No se pudo confirmar la propuesta.");
+        return;
+      }
+      await fetchLead();
+    } catch (e) {
+      setServicesError(e instanceof Error ? e.message : "No se pudo confirmar la propuesta.");
+    } finally {
+      setProposalConfirming(false);
+    }
+  }
+
+  async function handleAddSuggestedService(suggestion: SuggestedService) {
+    if (!id) return;
+    setServicesError("");
+    const basePrice = suggestion.service.precio_base ?? 0;
+    setServicesSaving(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}/services`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: suggestion.service.id,
+          mes: 1,
+          precio: suggestion.service.precio_base ?? null,
+          alcance_editado: suggestion.service.alcance_base?.trim() || null,
+          observaciones: `Sugerido automáticamente para el lead (${suggestion.priority}).`,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setServicesError(json?.error ?? "Error al agregar el servicio");
+        return;
+      }
+      await loadLeadServices();
+      const newProposal = (json as { proposal?: { id: string } })?.proposal;
+      if (newProposal?.id && Number.isFinite(basePrice)) {
+        const cols = getProposalMonthColumns(Math.max(1, proposalMonthCount));
+        const next: Record<string, number | ""> = {};
+        cols.forEach((c) => { next[c.key] = basePrice; });
+        setProposalGridOverrides((prev) => ({ ...prev, [newProposal.id]: next }));
+      }
+    } catch (e) {
+      setServicesError(e instanceof Error ? e.message : "Error al agregar el servicio");
+    } finally {
+      setServicesSaving(false);
+    }
+  }
 
   // Helper: el lead es "mío" si soy comercial y lead.comercial_id coincide con mi comercial (o app_user id como fallback)
   const isLeadOwner =
@@ -1337,7 +2334,7 @@ export default function LeadDetailPage() {
                   <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
                   {lead?.origen === "Desde entidad" && (
                     <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">
-                      Desde Entidad
+                      Desde Iniciativa
                     </span>
                   )}
                 </div>
@@ -1407,6 +2404,16 @@ export default function LeadDetailPage() {
                 title="Meet Asistido (en pausa)"
               >
                 Meet Asistido
+              </button>
+
+              <button
+                type="button"
+                onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                disabled={disabled || !id}
+                title={leadServices?.length || (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json ? "Abrir propuesta comercial del lead" : "Abre el constructor de propuesta comercial del lead"}
+              >
+                Propuesta comercial
               </button>
 
               {!lead?.is_member && (
@@ -1481,85 +2488,143 @@ export default function LeadDetailPage() {
             </div>
           )}
 
-          {/* Tabs */}
+          {/* Flujo del proceso */}
+          {lead && (
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6">
+              <h2 className="text-lg font-semibold text-slate-900">Flujo del proceso</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Mapa de avance del lead dentro del proceso comercial, consultivo y de propuesta.
+              </p>
+              {(() => {
+                const steps = flowSteps;
+                const currentStep = currentFlowStep;
+                return (
+                  <>
+                    <div className="mt-4 flex items-center gap-2 flex-wrap text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-green-500" />
+                        Completo
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-amber-500 ring-2 ring-amber-200" />
+                        Paso actual
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-slate-300" />
+                        Pendiente
+                      </span>
+                    </div>
+                    <div className="mt-4 flex flex-col md:flex-row md:items-start md:flex-nowrap overflow-x-auto pb-2 gap-4 md:gap-0">
+                      {steps.map((step, index) => (
+                        <div key={step.id} className="flex items-start gap-0 flex-shrink-0">
+                          {index > 0 && (
+                            <div className="hidden md:block flex-shrink-0 w-4 lg:w-6 h-0.5 mt-5 border-t-2 border-slate-200 self-center" aria-hidden />
+                          )}
+                          <div
+                            className={`rounded-xl border p-3 w-[180px] md:min-w-[140px] md:max-w-[160px] ${getFlowStepClasses(step.status)}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`flex-shrink-0 h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                                  step.status === "done"
+                                    ? "bg-green-600 text-white"
+                                    : step.status === "current"
+                                    ? "bg-amber-500 text-white"
+                                    : "bg-slate-300 text-slate-600"
+                                }`}
+                              >
+                                {step.status === "done" ? "✓" : step.status === "current" ? "•" : ""}
+                              </span>
+                              <span className="text-sm font-medium truncate">{step.label}</span>
+                              {step.id === "presentacion" && step.status === "done" && (
+                                <span className="flex-shrink-0 text-sm opacity-80" title="Material listo para compartir" aria-hidden>📄</span>
+                              )}
+                            </div>
+                            <p className="mt-2 text-xs opacity-90 line-clamp-2">{step.description}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                      <h3 className="text-sm font-semibold text-slate-800">Siguiente paso recomendado</h3>
+                      {currentStep ? (
+                        (() => {
+                          const config = NEXT_STEP_CONFIG[currentStep.id];
+                          const label = config?.label ?? currentStep.label;
+                          const description = config?.description ?? (currentStep.id === "presentacion" ? "La propuesta ya cuenta con material listo para presentar o compartir con el cliente." : currentStep.description);
+                          const cta = config?.cta ?? `Ir a ${currentStep.label.toLowerCase()}`;
+                          const tab = config?.tab ?? "datos";
+                          const section = config?.section ?? "lead-data-base";
+                          return (
+                            <>
+                              <p className="mt-1 text-sm text-slate-700">
+                                Siguiente paso: <strong>{label}</strong>.
+                              </p>
+                              <p className="mt-2 text-xs text-slate-600 whitespace-pre-line">{description.trim()}</p>
+                              {config?.checklist && config.checklist.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-medium text-slate-600 mb-1.5">Checklist del paso</p>
+                                  <ul className="list-disc list-inside text-xs text-slate-600 space-y-0.5">
+                                    {config.checklist.map((item, i) => (
+                                      <li key={i}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {id && (
+                                <div className="mt-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => router.push(`/admin/leads/${id}?tab=${tab}&section=${section}`)}
+                                    className="rounded-xl border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 shadow-sm"
+                                  >
+                                    {cta}
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()
+                      ) : (
+                        <p className="mt-1 text-sm text-slate-700">
+                          El flujo principal del lead se encuentra completo.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Tabs por rol */}
           {lead && (
             <div className="mt-4 inline-flex overflow-hidden rounded-xl border bg-white">
-              <button
-                type="button"
-                onClick={() => setActiveTab("entidad")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "entidad"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                Datos de Entidad
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("lead")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "lead"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                Datos nuevos del lead
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("ia")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "ia"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                Agente IA
-              </button>
-              <button
-                type="button"
-                disabled
-                className="px-4 py-2 text-sm font-semibold text-slate-400 bg-slate-100 cursor-not-allowed rounded-lg"
-                title="Meet Asistido (en pausa)"
-              >
-                Meet Asistido
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("acciones")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "acciones"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                Acciones
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("contactos")}
-                className={`px-4 py-2 text-sm font-semibold transition ${
-                  activeTab === "contactos"
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-700 hover:bg-slate-50"
-                }`}
-              >
-                Contactos
-              </button>
+              {visibleTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === tab.id ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           )}
 
           {/* Warning si no está vinculado a empresa */}
-          {!hasEntidad && activeTab === "entidad" && (
+          {!hasEntidad && activeTab === "datos" && (
             <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-yellow-900">
-                    Este lead no está vinculado a una entidad
+                    Este lead no está vinculado a una iniciativa
                   </div>
                   <div className="mt-1 text-xs text-yellow-700">
-                    Vincula este lead a una entidad para acceder a sus datos completos.
+                    Vincula este lead a una iniciativa para acceder a sus datos completos.
                   </div>
                 </div>
                 {editing && (
@@ -1607,11 +2672,37 @@ export default function LeadDetailPage() {
           )}
 
           {/* Contenido de Tabs */}
-          {activeTab === "entidad" && (
-            <div className="mt-5 grid grid-cols-1 gap-4">
-              {/* Sección: Datos de Empresa (base) - solo lectura */}
-              <div className="rounded-2xl border bg-white p-4">
-                <div className="text-xs font-semibold text-slate-500">Datos de Entidad</div>
+          {activeTab === "datos" && (
+            <div id="lead-data-base" className="mt-5 grid grid-cols-1 gap-4">
+              {/* Investigación Digital */}
+              <div className="rounded-2xl border bg-white">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setInvestigacionOpen((v) => !v)}
+                  onKeyDown={(e) => e.key === "Enter" && setInvestigacionOpen((v) => !v)}
+                  className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900 flex items-center gap-2"
+                >
+                  <span className="text-slate-500">{investigacionOpen ? "▼" : "▶"}</span>
+                  Investigación Digital
+                </div>
+                {investigacionOpen && (
+                <div className="p-4">
+                <div className="text-xs font-semibold text-slate-500 mb-3">Datos del lead (base)</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Nombre" editing={editing} value={editing ? (draft.nombre ?? lead?.nombre ?? "") : (lead?.nombre ?? "")} onChange={(v) => setDraft((p) => ({ ...p, nombre: v }))} />
+                  <Field label="Contacto" editing={editing} value={editing ? (draft.contacto ?? lead?.contacto ?? "") : (lead?.contacto ?? "")} onChange={(v) => setDraft((p) => ({ ...p, contacto: v }))} />
+                  <Field label="Teléfono" editing={editing} value={editing ? (draft.telefono ?? lead?.telefono ?? "") : (lead?.telefono ?? "")} onChange={(v) => setDraft((p) => ({ ...p, telefono: v }))} />
+                  <Field label="Email" editing={editing} value={editing ? (draft.email ?? lead?.email ?? "") : (lead?.email ?? "")} onChange={(v) => setDraft((p) => ({ ...p, email: v }))} />
+                  <Field label="Origen" editing={editing} value={editing ? (draft.origen ?? lead?.origen ?? "") : (lead?.origen ?? "")} onChange={(v) => setDraft((p) => ({ ...p, origen: v }))} />
+                  <div>
+                    <div className="text-xs text-slate-500">Etapa</div>
+                    <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {lead?.pipeline ?? "Nuevo"}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs font-semibold text-slate-500 mt-6 mb-3">Datos de Iniciativa</div>
                 <div className="mt-3 space-y-3">
                   <Field
                     label="Nombre"
@@ -1718,16 +2809,26 @@ export default function LeadDetailPage() {
                     />
                   )}
                 </div>
+                </div>
+                )}
               </div>
             </div>
           )}
 
-          {activeTab === "lead" && (
+          {activeTab === "comercial" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
-              <details open className="rounded-xl border bg-white">
-                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+              <div className="rounded-xl border bg-white">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setEstadoComercialOpen((v) => !v)}
+                  onKeyDown={(e) => e.key === "Enter" && setEstadoComercialOpen((v) => !v)}
+                  className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900 flex items-center gap-2"
+                >
+                  <span className="text-slate-500">{estadoComercialOpen ? "▼" : "▶"}</span>
                   Estado Comercial
-                </summary>
+                </div>
+                {estadoComercialOpen && (
                 <div className="px-4 pb-4">
                   <div className="space-y-3">
                     {/* Score (0-10 estrellas) */}
@@ -1868,12 +2969,21 @@ export default function LeadDetailPage() {
                     />
                   </div>
                 </div>
-              </details>
+                )}
+              </div>
 
-              <details open className="rounded-xl border bg-white">
-                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+              <div className="rounded-xl border bg-white">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setDatosLeadOpen((v) => !v)}
+                  onKeyDown={(e) => e.key === "Enter" && setDatosLeadOpen((v) => !v)}
+                  className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900 flex items-center gap-2"
+                >
+                  <span className="text-slate-500">{datosLeadOpen ? "▼" : "▶"}</span>
                   Datos del Lead
-                </summary>
+                </div>
+                {datosLeadOpen && (
                 <div className="px-4 pb-4 space-y-4">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
@@ -1888,7 +2998,7 @@ export default function LeadDetailPage() {
                               try {
                                 await patchLead({ website: empresaWeb });
                                 await fetchLead();
-                                flash("Website copiado desde Entidad.");
+                                flash("Website copiado desde Iniciativa.");
                               } catch (e: any) {
                                 setError(e?.message ?? "Error copiando website");
                               }
@@ -1896,7 +3006,7 @@ export default function LeadDetailPage() {
                           }}
                           className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
                         >
-                          Copiar desde Entidad
+                          Copiar desde Iniciativa
                         </button>
                       )}
                     </div>
@@ -2046,7 +3156,8 @@ export default function LeadDetailPage() {
                     )}
                   </div>
                 </div>
-              </details>
+                )}
+              </div>
 
               {/* ✅ Creado / Actualizado fijo */}
               <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
@@ -2063,132 +3174,836 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
               </div>
+              {/* Agente IA (bloque comercial) */}
+              {allowedProfiles.includes("comercial") && (
+                <details id="ia-report-block" className="rounded-2xl border bg-white" open>
+                  <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                    IA — Informe
+                  </summary>
+                  <div className="px-4 pb-4">
+                    <AiLeadReport
+                      key={`ai-comercial-${leadIdSafe}`}
+                      leadId={leadIdSafe}
+                      lead={leadForAi as any}
+                      allowedProfiles={["comercial"]}
+                      initialProfile="comercial"
+                      onBeforeGenerate={async () => {
+                        await saveDraft();
+                      }}
+                      onPromptSaved={fetchLead}
+                      onPresentationSignalChange={(signals) =>
+                        setPresentationSignals((prev) => ({ ...prev, ...signals }))
+                      }
+                    />
+                  </div>
+                </details>
+              )}
             </div>
           )}
 
-          {activeTab === "ia" && (
+          {activeTab === "tecnico" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
-              <details className="rounded-2xl border bg-white">
-                <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
-                  IA — Informe
-                </summary>
-                <div className="px-4 pb-4">
-                  {/* ✅ Agente IA (FODA + oportunidades + PDF) */}
-                  <AiLeadReport
-                    key={`ai-${leadIdSafe}`}
-                    leadId={leadIdSafe}
-                    lead={leadForAi as any}
-                    onBeforeGenerate={async () => {
-                      // Guardar el draft actual antes de generar el informe
-                      // Reutiliza la misma función que usa "Guardar"
-                      // Si falla, el error se propaga y no se llama a la IA
-                      await saveDraft();
-                    }}
-                  />
-                </div>
-              </details>
-            </div>
-          )}
-
-          {activeTab === "meet" && (
-            <div className="mt-5">
-              {/* ✅ Meet Asistido */}
-              {lead && (
-                <div className="rounded-2xl border bg-white p-6 space-y-4">
-                  {/* Encabezado */}
-                  <div>
-                    <h2 className="text-xl font-semibold text-slate-900">Meet Asistido</h2>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Inicia una sesión de coaching en vivo con transcripción y semáforo estratégico
-                    </p>
+              {allowedProfiles.includes("tecnico") ? (
+                <details className="rounded-2xl border bg-white" open>
+                  <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
+                    IA — Informe técnico
+                  </summary>
+                  <div className="px-4 pb-4">
+                    <AiLeadReport
+                      key={`ai-tecnico-${leadIdSafe}`}
+                      leadId={leadIdSafe}
+                      lead={leadForAi as any}
+                      allowedProfiles={["tecnico"]}
+                      initialProfile="tecnico"
+                      onBeforeGenerate={async () => {
+                        await saveDraft();
+                      }}
+                      onPromptSaved={fetchLead}
+                      onPresentationSignalChange={(signals) =>
+                        setPresentationSignals((prev) => ({ ...prev, ...signals }))
+                      }
+                    />
                   </div>
-
-                  {/* URL de Zoom/Meet */}
-                  <div>
-                    <div className="text-xs text-slate-500">URL de Zoom/Meet</div>
-                    {editing ? (
-                      <input
-                        value={(draft.meet_url as any) ?? ""}
-                        onChange={(e) => setDraft((p) => ({ ...p, meet_url: e.target.value }))}
-                        className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                        placeholder="https://meet.google.com/... o https://zoom.us/j/..."
-                      />
-                    ) : (
-                      <div className="mt-1 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                        {lead?.meet_url ? (
-                          <a
-                            href={lead.meet_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {lead.meet_url}
-                          </a>
-                        ) : (
-                          "—"
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Fila de acciones */}
-                  <div className="flex gap-2 flex-wrap items-center">
-                    <button
-                      type="button"
-                      onClick={startMeetSession}
-                      className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={disabled || !id || startingMeet || loadingSession}
-                      title={activeSession ? "Ir a sesión activa de Meet asistido" : "Iniciar sesión de Meet asistido"}
-                    >
-                      {startingMeet ? "Iniciando…" : activeSession ? "Ir a Meet Asistido" : "Iniciar Meet Asistido"}
-                    </button>
-                    {lead.meet_url && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (lead.meet_url) {
-                            openMeetWindow(lead.meet_url);
-                          }
-                        }}
-                        className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
-                      >
-                        Abrir Meet (Ventana)
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Estado de sesión */}
-                  {activeSession ? (
-                    <div className="rounded-xl border bg-slate-50 p-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="font-semibold text-slate-900 mb-1">Sesión activa</div>
-                          <div className="text-xs text-slate-600 mb-3">
-                            ID: {activeSession.id.substring(0, 8)}...
-                          </div>
-                        </div>
-                        <Link
-                          href={`/admin/leads/${id}/meet-sessions/${activeSession.id}`}
-                          className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 whitespace-nowrap"
-                        >
-                          Abrir panel de sesión
-                        </Link>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-600">
-                      No hay sesión activa.
-                    </div>
-                  )}
-
-                  {/* Indicador de ventana abierta */}
-                  {meetWindowOpened && (
-                    <div className="text-xs text-slate-600 text-center">
-                      Meet abierto en ventana externa
-                    </div>
-                  )}
+                </details>
+              ) : (
+                <div className="rounded-2xl border bg-white p-6">
+                  <div className="text-sm font-semibold text-slate-900 mb-2">Bloque técnico</div>
+                  <p className="text-sm text-slate-600">
+                    Aquí se integrará el contenido técnico (auditoría, métricas, roadmap) para el lead.
+                  </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === "consultor" && (
+            <div className="mt-5 grid grid-cols-1 gap-6">
+              {/* Sección 1: Diagnóstico Estratégico del Lead */}
+              <div className="rounded-2xl border bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">Diagnóstico Estratégico del Lead</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Resumen estratégico generado a partir del análisis IA del lead.
+                </p>
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-sm text-slate-700">
+                    Este diagnóstico se construye automáticamente a partir del informe IA del lead.
+                  </p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Incluirá: investigación digital, FODA, oportunidades, posicionamiento y visión estratégica.
+                  </p>
+                </div>
+              </div>
+
+              {/* Sección 2: Manual de Neuroventas EASY */}
+              <div className="rounded-2xl border bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">Manual de Neuroventas EASY</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Genera un manual de ventas personalizado para este lead basado en su diagnóstico estratégico.
+                </p>
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    disabled
+                    className="rounded-xl px-6 py-3 text-base font-semibold bg-slate-200 text-slate-500 cursor-not-allowed"
+                  >
+                    Generar Manual de Neuroventas
+                  </button>
+                  <p className="mt-3 text-xs text-slate-500">
+                    El manual incluirá: ICP, mensajes de venta, scripts comerciales, manejo de objeciones y estrategia de cierre.
+                  </p>
+                </div>
+              </div>
+
+              {/* Sección 3: Cierre de propuesta — Generar material final para el cliente */}
+              <div id="proposal-export" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
+                  )}
+                  {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
+                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">Material final generado</span>
+                  )}
+                </div>
+                <h2 className="text-xl font-semibold text-slate-900 mt-2">Generar propuesta para el cliente</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  La estructura económica ya fue confirmada. Ahora genera el material final para presentar o compartir con el cliente.
+                </p>
+
+                {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
+                  <p className="mt-3 text-sm text-slate-600 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+                    La propuesta ya cuenta con material final generado. Podés volver a generarlo si hiciste cambios recientes.
+                  </p>
+                )}
+
+                <div className="mt-5 space-y-4">
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                      disabled={!id}
+                      className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Generar presentación Gamma
+                    </button>
+                    <p className="mt-2 text-xs text-slate-500 max-w-md">
+                      Usá la propuesta confirmada y la narrativa comercial para generar una presentación lista para cliente.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Descargar PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Copiar versión texto
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+                  <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Qué se usará para generar la propuesta</p>
+                  <ul className="mt-2 space-y-1 text-sm text-slate-600 list-disc list-inside">
+                    <li>Servicios confirmados de la propuesta mensual</li>
+                    <li>Narrativa comercial base</li>
+                    <li>Resumen económico</li>
+                    <li>Argumentos comerciales cargados</li>
+                  </ul>
+                  <p className="mt-3 text-xs text-slate-500">
+                    Si algo de esta base aún no está correcto, volvé a la propuesta comercial antes de exportar.
+                  </p>
+                </div>
+
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Volver a propuesta comercial
+                  </button>
+                </div>
+              </div>
+
+              {/* Servicios sugeridos para este lead */}
+              <div className="rounded-2xl border bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">Servicios sugeridos para este lead</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Recomendaciones iniciales construidas a partir del diagnóstico estratégico y de las acciones detectadas por la IA.
+                </p>
+                {(() => {
+                  const { sourceText } = getStrategicSourceText(lead);
+                  const hasAiReport = sourceText.length > 0;
+                  return (
+                    <p className="mt-2 text-xs text-slate-500">
+                      {hasAiReport ? "Fuente de sugerencias: acciones, oportunidades y plan de crecimiento del análisis IA." : "Fuente de sugerencias: señales básicas del lead (modo inicial)."}
+                    </p>
+                  );
+                })()}
+                {servicesCatalog.length === 0 ? (
+                  <p className="mt-3 text-sm text-slate-500">Aún no hay catálogo disponible para calcular sugerencias.</p>
+                ) : (() => {
+                  const suggested = getSuggestedServicesFromAiReport(servicesCatalog, leadServices, lead);
+                  const signals = getLeadSignals(lead, leadServices);
+                  if (suggested.length === 0) {
+                    return <p className="mt-3 text-sm text-slate-500">No se detectaron sugerencias automáticas adicionales para este lead por ahora.</p>;
+                  }
+                  return (
+                    <div className="mt-4 space-y-3">
+                      {suggested.map((s) => (
+                        <div key={s.service.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-slate-900">{s.service.nombre}</span>
+                                <span className="text-sm text-slate-500">{s.service.codigo}</span>
+                                {s.service.categoria && (
+                                  <span className="text-xs text-slate-500">{s.service.categoria}</span>
+                                )}
+                                <span className={getPriorityBadgeClasses(s.priority)}>{s.priority}</span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-600">{s.reason}</p>
+                              <div className="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3">
+                                <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Enfoque comercial sugerido</p>
+                                <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
+                                  <li><strong>Por qué recomendarlo:</strong> {getServiceSalesCopy(s.service, signals).why}</li>
+                                  <li><strong>Qué resultado busca:</strong> {getServiceSalesCopy(s.service, signals).outcome}</li>
+                                  <li><strong>Cómo venderlo:</strong> {getServiceSalesCopy(s.service, signals).howToSell}</li>
+                                </ul>
+                                <p className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
+                                  {getSuggestedPriorityText(s.priority)} · {getServicePhaseLabel(s.service.billing_type)}
+                                </p>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+                                {s.service.precio_base != null && (
+                                  <span>{formatMoney(s.service.moneda, s.service.precio_base)}</span>
+                                )}
+                                <span>
+                                  {s.service.billing_type === "monthly" ? "Mensual" : s.service.billing_type === "one_time" ? "Única vez" : "—"}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleAddSuggestedService(s)}
+                              disabled={servicesSaving}
+                              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Agregar sugerencia
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Sección 4: Propuesta Comercial Inteligente */}
+              <div id="services-proposal" className="rounded-2xl border bg-white p-6">
+                <h2 className="text-lg font-semibold text-slate-900">Propuesta Comercial Inteligente</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Selecciona servicios EASY, organízalos por mes y prepara una propuesta comercial editable para este lead.
+                </p>
+
+                {servicesLoading && (
+                  <p className="mt-3 text-sm text-slate-600">Cargando catálogo y propuesta del lead...</p>
+                )}
+                {servicesError && (
+                  <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                    <p className="text-sm text-red-800">{servicesError}</p>
+                  </div>
+                )}
+
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-3">Agregar servicio a la propuesta</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Servicio</label>
+                      <select
+                        value={selectedServiceId}
+                        onChange={(e) => setSelectedServiceId(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      >
+                        <option value="">— Seleccionar —</option>
+                        {servicesCatalog.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.codigo} — {s.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Mes</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={selectedMes}
+                        onChange={(e) => setSelectedMes(Number(e.target.value) || 1)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Precio</label>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={selectedPrecio}
+                        onChange={(e) => setSelectedPrecio(e.target.value)}
+                        placeholder={selectedService?.precio_base != null ? String(selectedService.precio_base) : undefined}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Alcance editable</label>
+                      <textarea
+                        value={selectedAlcance}
+                        onChange={(e) => setSelectedAlcance(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Observaciones</label>
+                      <textarea
+                        value={selectedObservaciones}
+                        onChange={(e) => setSelectedObservaciones(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={handleAddProposalService}
+                      disabled={servicesSaving || servicesLoading}
+                      className="rounded-xl px-4 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {servicesSaving ? "Agregando…" : "Agregar a propuesta"}
+                    </button>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Luego podrás usar esta base para exportar la propuesta comercial a PDF y Gamma.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Tabla mensual de propuesta: matriz servicios x meses */}
+                <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-slate-800">Propuesta por mes</h3>
+                      {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at ? (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
+                      ) : (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Propuesta en construcción</span>
+                      )}
+                      {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && currentFlowStep && id && (() => {
+                        const nextConfig = NEXT_STEP_CONFIG[currentFlowStep.id];
+                        const tab = nextConfig?.tab ?? "consultor";
+                        const section = nextConfig?.section ?? "proposal-export";
+                        const cta = nextConfig?.cta ?? "Ir a generar propuesta para el cliente";
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/admin/leads/${id}?tab=${tab}&section=${section}`)}
+                            className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            {cta}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setProposalMonthCount((c) => Math.min(24, c + 1))}
+                        disabled={!!(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        + Mes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProposalMonthCount((c) => Math.max(1, c - 1))}
+                        disabled={proposalMonthCount <= 1 || !!(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        − Mes
+                      </button>
+                      {!(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
+                        <button
+                          type="button"
+                          onClick={handleConfirmProposal}
+                          disabled={proposalConfirming || proposalGridRows.length === 0}
+                          className="rounded-xl border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                        >
+                          {proposalConfirming ? "Confirmando…" : "Confirmar estructura de propuesta"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {(() => {
+                    const isProposalConfirmed = !!(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at;
+                    return proposalGridRows.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-4">Aún no hay servicios en la propuesta. Agregá uno desde las sugerencias o el formulario de arriba.</p>
+                  ) : (
+                    <div className="overflow-x-auto -mx-1">
+                      <table className="w-full min-w-[480px] text-sm border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50">
+                            <th className="text-left py-2 pl-2 pr-3 font-semibold text-slate-700 sticky left-0 bg-slate-50 z-10 min-w-[140px]">Servicios</th>
+                            {proposalMonthColumns.map((col) => (
+                              <th key={col.key} className="text-right py-2 px-2 font-semibold text-slate-700 min-w-[72px]">
+                                {col.label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {proposalGridRows.map((row) => (
+                            <tr key={row.proposalId} className="border-b border-slate-100 hover:bg-slate-50/50">
+                              <td className="py-1.5 pl-2 pr-3 align-middle sticky left-0 bg-white z-10 border-r border-slate-100">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-slate-900 truncate max-w-[180px]" title={[row.codigo, row.nombre].filter(Boolean).join(" — ")}>
+                                    {[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}
+                                  </span>
+                                  {!isProposalConfirmed && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteProposal(row.proposalId)}
+                                      disabled={deletingServiceId !== null}
+                                      className="flex-shrink-0 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                                      title="Eliminar de la propuesta"
+                                    >
+                                      {deletingServiceId === row.proposalId ? "…" : "Eliminar"}
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                              {proposalMonthColumns.map((col) => (
+                                <td key={col.key} className="py-1 px-1 align-middle">
+                                  <input
+                                    type="number"
+                                    step={0.01}
+                                    min={0}
+                                    readOnly={isProposalConfirmed}
+                                    value={row.valuesByMonth[col.key] === "" ? "" : row.valuesByMonth[col.key]}
+                                    onChange={(e) => {
+                                      if (isProposalConfirmed) return;
+                                      const raw = e.target.value;
+                                      const num = raw === "" ? "" : Number(raw);
+                                      setProposalGridOverrides((prev) => ({
+                                        ...prev,
+                                        [row.proposalId]: {
+                                          ...(prev[row.proposalId] ?? {}),
+                                          [col.key]: num,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-full min-w-[60px] max-w-[80px] rounded border border-slate-200 px-1.5 py-1 text-right text-slate-800 text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:cursor-not-allowed"
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                          <tr className="border-t-2 border-slate-300 bg-slate-100 font-semibold">
+                            <td className="py-2 pl-2 pr-3 text-slate-800 sticky left-0 bg-slate-100 z-10">Total</td>
+                            {proposalMonthColumns.map((col) => (
+                              <td key={col.key} className="py-2 px-2 text-right text-slate-900 min-w-[72px]">
+                                {getColumnTotal(proposalGridRows, col.key).toLocaleString("es-UY", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              </td>
+                            ))}
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                  })()}
+                  {proposalGridRows.length > 0 && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      Total del período: {proposalMonthColumns.reduce((sum, col) => sum + getColumnTotal(proposalGridRows, col.key), 0).toLocaleString("es-UY", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-800 mb-3">Servicios propuestos para este lead</h3>
+                  {leadServices.length === 0 ? (
+                    <p className="text-sm text-slate-500">Aún no hay servicios cargados en la propuesta.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[640px] text-sm text-left">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-600 font-medium">
+                            <th className="py-2 pr-3">Mes</th>
+                            <th className="py-2 pr-3">Servicio</th>
+                            <th className="py-2 pr-3">Tipo</th>
+                            <th className="py-2 pr-3">Precio</th>
+                            <th className="py-2 pr-3">Alcance</th>
+                            <th className="py-2 pr-3">Observaciones</th>
+                            <th className="py-2">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leadServices.map((row) => {
+                            const isEditing = editingServiceId === row.id;
+                            return (
+                              <tr key={row.id} className="border-b border-slate-100">
+                                <td className="py-2 pr-3 text-slate-900 align-top">
+                                  {isEditing ? (
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={24}
+                                      value={editingValues.mes}
+                                      onChange={(e) => setEditingValues((v) => ({ ...v, mes: Number(e.target.value) || 1 }))}
+                                      className="w-16 rounded border border-slate-300 px-2 py-1 text-sm"
+                                    />
+                                  ) : (
+                                    row.mes
+                                  )}
+                                </td>
+                                <td className="py-2 pr-3 text-slate-900 align-top">
+                                  {[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}
+                                </td>
+                                <td className="py-2 pr-3 text-slate-700 align-top">{formatBillingType(row.billing_type)}</td>
+                                <td className="py-2 pr-3 text-slate-700 align-top">
+                                  {isEditing ? (
+                                    <input
+                                      type="number"
+                                      step={0.01}
+                                      value={editingValues.precio}
+                                      onChange={(e) => setEditingValues((v) => ({ ...v, precio: e.target.value }))}
+                                      className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
+                                    />
+                                  ) : (
+                                    formatMoney(row.moneda, row.precio)
+                                  )}
+                                </td>
+                                <td className="py-2 pr-3 text-slate-700 align-top max-w-[200px]">
+                                  {isEditing ? (
+                                    <textarea
+                                      value={editingValues.alcance_editado}
+                                      onChange={(e) => setEditingValues((v) => ({ ...v, alcance_editado: e.target.value }))}
+                                      rows={2}
+                                      className="w-full rounded border border-slate-300 px-2 py-1 text-sm min-w-[140px]"
+                                    />
+                                  ) : (
+                                    <span className="truncate block" title={row.alcance_editado ?? undefined}>
+                                      {row.alcance_editado?.trim() || "—"}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 pr-3 text-slate-700 align-top max-w-[180px]">
+                                  {isEditing ? (
+                                    <textarea
+                                      value={editingValues.observaciones}
+                                      onChange={(e) => setEditingValues((v) => ({ ...v, observaciones: e.target.value }))}
+                                      rows={2}
+                                      className="w-full rounded border border-slate-300 px-2 py-1 text-sm min-w-[120px]"
+                                    />
+                                  ) : (
+                                    <span className="truncate block" title={row.observaciones ?? undefined}>
+                                      {row.observaciones?.trim() || "—"}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 align-top">
+                                  {isEditing ? (
+                                    <div className="flex flex-wrap gap-1 items-start">
+                                      <button
+                                        type="button"
+                                        onClick={handleSaveProposalEdit}
+                                        disabled={servicesSaving}
+                                        className="rounded border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-800 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {servicesSaving ? "Guardando…" : "Guardar"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingServiceId(null);
+                                          setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
+                                        }}
+                                        disabled={servicesSaving}
+                                        className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                      >
+                                        Cancelar
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteProposal(row.id)}
+                                        disabled={deletingServiceId !== null}
+                                        className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {deletingServiceId === row.id ? "Eliminando…" : "Eliminar"}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingServiceId(row.id);
+                                          setEditingValues({
+                                            mes: row.mes,
+                                            precio: row.precio != null ? String(row.precio) : "",
+                                            alcance_editado: row.alcance_editado?.trim() ?? "",
+                                            observaciones: row.observaciones?.trim() ?? "",
+                                          });
+                                        }}
+                                        className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                                      >
+                                        Editar
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteProposal(row.id)}
+                                        disabled={deletingServiceId !== null}
+                                        className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {deletingServiceId === row.id ? "Eliminando…" : "Eliminar"}
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-800">Argumentos comerciales de la propuesta</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Base consultiva para presentar cada servicio incluido dentro de la propuesta.
+                  </p>
+                  {leadServices.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">Aún no hay servicios cargados para construir argumentos comerciales.</p>
+                  ) : (
+                    <div className="mt-4 space-y-4">
+                      {leadServices.map((row) => {
+                        const catalogService = servicesCatalog.find((c) => c.id === row.service_id);
+                        const copy = catalogService ? getServiceSalesCopy(catalogService, getLeadSignals(lead, leadServices)) : DEFAULT_SALES_COPY;
+                        return (
+                          <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+                            <div className="flex flex-wrap items-center gap-2 text-sm">
+                              <span className="font-medium text-slate-900">{[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}</span>
+                              <span className="text-slate-500">Mes {row.mes}</span>
+                              <span className="text-slate-500">{formatBillingType(row.billing_type)}</span>
+                              <span className="text-slate-600">{formatMoney(row.moneda, row.precio)}</span>
+                            </div>
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700 space-y-1.5">
+                              <p><strong>Por qué incluirlo:</strong> {copy.why}</p>
+                              <p><strong>Qué resultado busca:</strong> {copy.outcome}</p>
+                              <p><strong>Cómo presentarlo al lead:</strong> {copy.howToSell}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-800">Vista consolidada por mes</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Resumen de la propuesta comercial organizado por mes para facilitar la construcción de la oferta final.
+                  </p>
+                  {leadServices.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">Aún no hay meses para consolidar porque no hay servicios cargados.</p>
+                  ) : (
+                    <>
+                      {groupServicesByMonth(leadServices).map(({ mes, items }) => (
+                        <div key={mes} className="mt-4 rounded-lg border border-slate-200 bg-slate-50/50 overflow-hidden">
+                          <div className="flex items-center justify-between px-4 py-2 bg-slate-100 border-b border-slate-200">
+                            <span className="text-sm font-semibold text-slate-800">Mes {mes}</span>
+                            <span className="text-sm font-medium text-slate-700">{formatMonthSubtotal(items)}</span>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full min-w-[400px] text-sm text-left">
+                              <thead>
+                                <tr className="border-b border-slate-200 text-slate-600 font-medium">
+                                  <th className="py-2 pr-3 pl-4">Servicio</th>
+                                  <th className="py-2 pr-3">Tipo</th>
+                                  <th className="py-2 pr-3">Precio</th>
+                                  <th className="py-2 pr-3">Alcance</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {items.map((row) => (
+                                  <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
+                                    <td className="py-2 pr-3 pl-4 text-slate-900">
+                                      {[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}
+                                    </td>
+                                    <td className="py-2 pr-3 text-slate-700">{formatBillingType(row.billing_type)}</td>
+                                    <td className="py-2 pr-3 text-slate-700">{formatMoney(row.moneda, row.precio)}</td>
+                                    <td className="py-2 pr-3 text-slate-700 max-w-[200px] truncate" title={row.alcance_editado ?? undefined}>
+                                      {row.alcance_editado?.trim() || "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/30 p-3">
+                        <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Lectura estratégica de la propuesta</h4>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Esta vista permitirá luego transformar la propuesta en una estructura comercial lista para exportar a PDF y Gamma, con narrativa por fase, inversión y alcance.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div id="proposal-builder" className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-800">Fases de la propuesta</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Lectura estratégica de la propuesta comercial organizada por fase de trabajo.
+                  </p>
+                  {leadServices.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">Aún no hay servicios suficientes para construir una lectura por fases.</p>
+                  ) : (
+                    <>
+                      {groupServicesByPhase(leadServices).map(({ phase, items }) => (
+                        <div key={phase} className="mt-4 rounded-lg border border-slate-200 bg-slate-50/50 overflow-hidden">
+                          <div className="flex items-center justify-between px-4 py-2 bg-slate-100 border-b border-slate-200">
+                            <span className="text-sm font-semibold text-slate-800">{phase}</span>
+                            <span className="text-sm font-medium text-slate-700">{formatPhaseSubtotal(items)}</span>
+                          </div>
+                          <p className="px-4 py-2 text-xs text-slate-600 bg-white border-b border-slate-100">{getPhaseDescription(phase)}</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full min-w-[400px] text-sm text-left">
+                              <thead>
+                                <tr className="border-b border-slate-200 text-slate-600 font-medium">
+                                  <th className="py-2 pr-3 pl-4">Servicio</th>
+                                  <th className="py-2 pr-3">Mes</th>
+                                  <th className="py-2 pr-3">Tipo</th>
+                                  <th className="py-2 pr-3">Precio</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {items.map((row) => (
+                                  <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
+                                    <td className="py-2 pr-3 pl-4 text-slate-900">
+                                      {[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}
+                                    </td>
+                                    <td className="py-2 pr-3 text-slate-700">Mes {row.mes}</td>
+                                    <td className="py-2 pr-3 text-slate-700">{formatBillingType(row.billing_type)}</td>
+                                    <td className="py-2 pr-3 text-slate-700">{formatMoney(row.moneda, row.precio)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-semibold text-slate-800">Narrativa comercial base</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Base consultiva para presentar la propuesta al lead.
+                  </p>
+                  {leadServices.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">No hay aún suficiente información cargada para construir una narrativa comercial.</p>
+                  ) : (
+                    <>
+                      <div className="mt-3 space-y-3 text-sm text-slate-700">
+                        {groupServicesByPhase(leadServices).some((x) => x.phase === "Diagnóstico y Base") && (
+                          <p>La propuesta comienza con una fase de diagnóstico y base, orientada a ordenar la situación actual del lead, detectar oportunidades y preparar una estructura clara para avanzar.</p>
+                        )}
+                        {groupServicesByPhase(leadServices).some((x) => x.phase === "Implementación") && (
+                          <p>Luego se incorpora una fase de implementación, donde se ejecutan los activos, sistemas o acciones necesarias para transformar la estrategia en una operación concreta.</p>
+                        )}
+                        {groupServicesByPhase(leadServices).some((x) => x.phase === "Optimización y Crecimiento") && (
+                          <p>Finalmente, la propuesta contempla una fase de optimización y crecimiento, enfocada en sostener resultados, mejorar el rendimiento y acompañar la evolución comercial en el tiempo.</p>
+                        )}
+                      </div>
+                      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                        <p className="text-xs text-slate-600">
+                          Más adelante esta narrativa podrá editarse manualmente y exportarse como propuesta comercial formal en PDF o Gamma.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {leadServices.length > 0 && (
+                  <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
+                    <h3 className="text-sm font-semibold text-slate-800 mb-3">Resumen económico de la propuesta</h3>
+                    {(() => {
+                      const oneTimeItems = leadServices.filter((r) => String(r.billing_type ?? "").toLowerCase() === "one_time");
+                      const monthlyItems = leadServices.filter((r) => String(r.billing_type ?? "").toLowerCase() === "monthly");
+                      const totalOneTime = sumByBillingType(leadServices, "one_time");
+                      const totalMonthly = sumByBillingType(leadServices, "monthly");
+                      const totalGeneral = totalOneTime + totalMonthly;
+                      const mixedOne = getUniqueCurrencies(oneTimeItems).length > 1;
+                      const mixedMonthly = getUniqueCurrencies(monthlyItems).length > 1;
+                      const mixedTotal = getUniqueCurrencies(leadServices).length > 1;
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                          <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Implementación única</p>
+                            <p className="mt-1 font-semibold text-slate-900">
+                              {mixedOne ? "Monedas mixtas" : formatSummaryMoney(oneTimeItems, totalOneTime)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Inversión mensual</p>
+                            <p className="mt-1 font-semibold text-slate-900">
+                              {mixedMonthly ? "Monedas mixtas" : formatSummaryMoney(monthlyItems, totalMonthly)}
+                            </p>
+                          </div>
+                          <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Total base estimado</p>
+                            <p className="mt-1 font-semibold text-slate-900">
+                              {mixedTotal ? "Monedas mixtas" : formatSummaryMoney(leadServices, totalGeneral)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

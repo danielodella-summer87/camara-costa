@@ -134,7 +134,7 @@ export default function ImportarEntidadesPage() {
         <div className="rounded-2xl border bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Importar Entidades (Excel)</h1>
+              <h1 className="text-2xl font-semibold text-slate-900">Importar Iniciativas (Excel)</h1>
               <p className="mt-2 text-sm text-slate-600">
                 Subí el archivo Excel (.xlsx) usando la plantilla oficial. Columnas obligatorias:{" "}
                 <span className="font-semibold">nombre, tipo_empresa, rubro, telefono, email, direccion</span>.

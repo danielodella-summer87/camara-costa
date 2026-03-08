@@ -3,7 +3,13 @@
  * Todas las validaciones de acceso pasan por este helper.
  */
 
-export type RoleKey = "admin" | "operador" | "comercial" | "viewer";
+export type RoleKey =
+  | "admin"
+  | "operador"
+  | "comercial"
+  | "tecnico"
+  | "consultor"
+  | "viewer";
 
 /** Usuario con rol (ej. respuesta de /api/admin/permissions/me → user). Acepta varias formas de envío del rol. */
 export type UserWithRole = {
@@ -64,10 +70,19 @@ const PERMISSIONS_BY_ROLE: Record<RoleKey, string[]> = {
   admin: ["*"],
   operador: ["leads.read", "leads.write", "helpdesk.read", "helpdesk.write"],
   comercial: ["leads.read", "leads.write"],
+  tecnico: ["leads.read", "leads.write"],
+  consultor: ["leads.read", "leads.write"],
   viewer: ["leads.read"],
 };
 
-const NORMALIZED_ROLES: RoleKey[] = ["admin", "operador", "comercial", "viewer"];
+const NORMALIZED_ROLES: RoleKey[] = [
+  "admin",
+  "operador",
+  "comercial",
+  "tecnico",
+  "consultor",
+  "viewer",
+];
 
 /** Alias de nombres de rol en DB (roles.name) a RoleKey */
 const ROLE_ALIASES: Record<string, RoleKey> = {
@@ -88,6 +103,8 @@ const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
   operador: "Operador",
   comercial: "Comercial",
+  tecnico: "Técnico",
+  consultor: "Consultor",
   viewer: "Viewer",
   operaciones: "Operador",
   solo_lectura: "Viewer",
@@ -114,7 +131,7 @@ const PATH_ROLES: { prefix: string; allowed: RoleKey[] }[] = [
   // ✅ Agenda: todos los roles operativos
   { prefix: "/admin/agenda", allowed: ["admin", "comercial", "operador"] },
 
-  { prefix: "/admin/leads", allowed: ["admin", "comercial", "operador"] },
+  { prefix: "/admin/leads", allowed: ["admin", "comercial", "operador", "tecnico", "consultor"] },
 ];
 
 /**

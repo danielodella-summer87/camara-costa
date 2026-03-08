@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
+import { getLeadFlowSteps, getCurrentFlowStep, getLeadFlowProgressPercent, getLeadNextAction, LEAD_FLOW_LABELS } from "@/lib/leads/leadFlow";
 
 type Lead = {
   id: string;
@@ -16,6 +17,10 @@ type Lead = {
   pipeline: string | null;
   notas: string | null;
   objetivos?: string | null;
+  audiencia?: string | null;
+  website?: string | null;
+  linkedin_empresa?: string | null;
+  ai_report?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   estado?: string | null;
@@ -23,6 +28,8 @@ type Lead = {
   member_since?: string | null;
   score?: number | null;
   comerciales?: { id: string; nombre: string } | null;
+  empresas?: { instagram?: string | null; facebook?: string | null } | null;
+  services_count?: number;
 };
 
 type PipelineRow = {
@@ -76,6 +83,12 @@ function formatLocalFilenameDate(d = new Date()) {
 
 function norm(s: string | null | undefined) {
   return (s ?? "").trim().toLowerCase();
+}
+
+function getProgressBadgeClasses(percent: number): string {
+  if (percent >= 75) return "bg-green-100 text-green-700";
+  if (percent >= 40) return "bg-amber-100 text-amber-700";
+  return "bg-slate-100 text-slate-600";
 }
 
 // Componente para botón "Nuevo lead" con opciones
@@ -146,7 +159,7 @@ function NewLeadButton() {
               const empresa = empresasJson?.data?.find((e: any) => e.id === empresaId);
               
               if (!empresa) {
-                alert("Entidad no encontrada");
+                alert("Iniciativa no encontrada");
                 return;
               }
 
@@ -847,6 +860,12 @@ export default function LeadsPage() {
                   <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
                     Objetivo
                   </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
+                    Progreso
+                  </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
+                    Siguiente paso
+                  </th>
                   <th className="w-20 px-3 py-2 text-right text-xs font-semibold text-slate-600">
                     Acciones
                   </th>
@@ -855,6 +874,29 @@ export default function LeadsPage() {
               <tbody className="divide-y divide-slate-200">
               {filtered.map((l) => {
                 const checked = selectedIds.has(l.id);
+                const leadForFlow = {
+                  id: l.id,
+                  nombre: l.nombre,
+                  telefono: l.telefono,
+                  email: l.email,
+                  website: l.website,
+                  objetivos: l.objetivos,
+                  audiencia: l.audiencia,
+                  linkedin_empresa: l.linkedin_empresa,
+                  ai_report: l.ai_report,
+                  empresas: l.empresas,
+                };
+                const servicesCount = l.services_count ?? 0;
+                const steps = getLeadFlowSteps(leadForFlow, servicesCount);
+                const currentStep = getCurrentFlowStep(steps);
+                const progressPercent = getLeadFlowProgressPercent(steps);
+                const tooltipLines = steps.map((s) => {
+                  if (s.status === "done") return `✓ ${LEAD_FLOW_LABELS[s.id]}`;
+                  if (s.status === "current") return `→ ${LEAD_FLOW_LABELS[s.id]}`;
+                  return `○ ${LEAD_FLOW_LABELS[s.id]}`;
+                });
+                const tooltipText = `Avance del flujo: ${progressPercent}%\n\nFlujo del lead:\n${tooltipLines.join("\n")}`;
+                const nextAction = getLeadNextAction(currentStep);
 
                 return (
                   <tr
@@ -896,6 +938,59 @@ export default function LeadsPage() {
                       title={l.objetivos || ""}
                     >
                       {l.objetivos?.trim() || "—"}
+                    </td>
+                    <td className="px-3 py-2 align-top" title={tooltipText}>
+                      {currentStep ? (
+                        <span className="inline-flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium flex-shrink-0 ${getProgressBadgeClasses(progressPercent)}`}>
+                            [{progressPercent}%]
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                              currentStep.status === "done"
+                                ? "bg-green-100 text-green-700"
+                                : currentStep.status === "current"
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-2 w-2 rounded-full flex-shrink-0 ${
+                                currentStep.status === "done"
+                                  ? "bg-green-500"
+                                  : currentStep.status === "current"
+                                  ? "bg-amber-500"
+                                  : "bg-slate-400"
+                              }`}
+                              aria-hidden
+                            />
+                            <span className="truncate max-w-[140px] hidden sm:inline">{currentStep.label}</span>
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium flex-shrink-0 ${getProgressBadgeClasses(progressPercent)}`}>
+                            [{progressPercent}%]
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium bg-green-100 text-green-700">
+                            <span className="inline-block h-2 w-2 rounded-full bg-green-500 flex-shrink-0" aria-hidden />
+                            <span className="truncate max-w-[140px] hidden sm:inline">Presentación lista</span>
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className="px-3 py-2 align-top text-sm max-w-[200px] truncate"
+                      title={currentStep ? `Paso actual del flujo: ${currentStep.label}` : "Flujo completo"}
+                    >
+                      {currentStep ? (
+                        <span className="text-slate-700">
+                          <span className="mr-1 opacity-70" aria-hidden>→</span>
+                          {nextAction}
+                        </span>
+                      ) : (
+                        <span className="text-green-700 font-medium">✓ Flujo completo</span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right align-top">
                       <Link

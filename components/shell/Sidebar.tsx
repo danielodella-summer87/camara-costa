@@ -17,7 +17,8 @@ import {
   BarChart3,
   CalendarDays,
   SlidersHorizontal,
-  Calendar
+  Calendar,
+  BookOpen
 } from "lucide-react";
 
 // TODO: Conectar con el rol real del usuario desde autenticación
@@ -103,12 +104,13 @@ export default function Sidebar() {
 
   const items: SidebarItem[] = [
     { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
-    { label: "Entidades", href: "/admin/empresas", icon: Building2 },
+    { label: "Iniciativas", href: "/admin/empresas", icon: Building2 },
     { label: "Leads", href: "/admin/leads", icon: Target },
     { label: memberLabel, href: "/admin/socios", icon: Users },
     { label: "Agenda", href: "/admin/agenda", icon: Calendar },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },
     { label: "Eventos", href: "/admin/eventos", icon: CalendarDays },
+    { label: "Manual de neuroventas", href: "/admin/neuroventas", icon: BookOpen },
     { label: "IA", href: "/admin/configuracion/ia", icon: Sparkles, permission: "config.admin" },
     { label: "Personalización", href: "/admin/personalizacion", icon: SlidersHorizontal },
     { label: "Configuración", href: "/admin/configuracion", icon: SettingsIcon, permission: "config.admin" },

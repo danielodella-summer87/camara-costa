@@ -10,16 +10,13 @@ Font.register({
     {
       src: path.join(fontDir, "NotoSans-Regular.ttf"),
       fontWeight: "normal",
-      fontStyle: "normal",
     },
     {
       src: path.join(fontDir, "NotoSans-Bold.ttf"),
       fontWeight: "bold",
-      fontStyle: "normal",
     },
     {
       src: path.join(fontDir, "NotoSans-Italic.ttf"),
-      fontWeight: "normal",
       fontStyle: "italic",
     },
     {

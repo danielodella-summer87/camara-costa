@@ -326,7 +326,7 @@ export default function EmpresaDetailPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">
-              {loading ? "Cargando…" : empresa?.nombre ?? "Entidad"}
+              {loading ? "Cargando…" : empresa?.nombre ?? "Iniciativa"}
             </h1>
             <p className="mt-1 text-sm text-slate-600">
               Detalle y datos de contacto.

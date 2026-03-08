@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { pdf } from "@react-pdf/renderer";
 import LeadReportPdf from "@/components/pdf/LeadReportPdf";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
+import { parseLeadCustomPrompt, serializeLeadCustomPrompt, getModuleCustomPrompt } from "@/lib/leads/customPrompt";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -171,10 +172,18 @@ function removeMissingDataSections(content: string): string {
   return cleaned.trim();
 }
 
+/** Normaliza un id de tab del report a la clave canónica usada en TABS_CONFIG (evita desalineación UI vs backend). */
+function canonicalTabId(rawId: string): string {
+  const normalized = rawId.trim();
+  if (!normalized) return rawId;
+  const found = TABS_CONFIG.find((t) => t.tabId.toLowerCase() === normalized.toLowerCase());
+  return found ? found.tabId : rawId;
+}
+
 /**
  * Parsea el informe completo y extrae todas las secciones por TAB
  * Formato esperado: ### TAB:<ID>
- * Retorna un objeto { [tabId]: contenido }
+ * Retorna un objeto { [tabId]: contenido } con claves canónicas alineadas a TABS_CONFIG.
  */
 function parseReportTabs(report: string): Record<string, string> {
   const tabs: Record<string, string> = {};
@@ -189,7 +198,7 @@ function parseReportTabs(report: string): Record<string, string> {
   
   let match;
   while ((match = tabPattern.exec(report)) !== null) {
-    const tabId = match[1];
+    const rawId = match[1];
     const startIndex = match.index + match[0].length;
     
     // Buscar el siguiente ### TAB: o el final del documento
@@ -203,7 +212,7 @@ function parseReportTabs(report: string): Record<string, string> {
 
     const endIndex = nextIndex !== null ? startIndex + nextIndex : report.length;
     
-    matches.push({ tabId, startIndex, endIndex });
+    matches.push({ tabId: rawId, startIndex, endIndex });
   }
   
   // Si no hay matches, intentar buscar al final del documento (último tab sin salto de línea)
@@ -211,17 +220,18 @@ function parseReportTabs(report: string): Record<string, string> {
     const altPattern = /###\s+TAB:\s*(\w+)\s*$/gm;
     let altMatch;
     while ((altMatch = altPattern.exec(report)) !== null) {
-      const tabId = altMatch[1];
+      const rawId = altMatch[1];
       const startIndex = altMatch.index! + altMatch[0].length;
-      matches.push({ tabId, startIndex, endIndex: report.length });
+      matches.push({ tabId: rawId, startIndex, endIndex: report.length });
     }
   }
   
-  // Extraer contenido para cada tab encontrado
-  for (const { tabId, startIndex, endIndex } of matches) {
+  // Extraer contenido para cada tab; claves canónicas para alinear con TABS_CONFIG
+  for (const { tabId: rawId, startIndex, endIndex } of matches) {
     const content = report.slice(startIndex, endIndex).trim();
     if (content) {
-      tabs[tabId] = content;
+      const key = canonicalTabId(rawId);
+      tabs[key] = content;
     }
   }
   
@@ -337,22 +347,44 @@ async function textToPdfBytes(title: string, content: string) {
   return await pdfDoc.save();
 }
 
+type AiProfile = "comercial" | "tecnico";
+
 export function AiLeadReport({
   leadId,
   lead,
   onBeforeGenerate,
+  onPromptSaved,
+  allowedProfiles = ["comercial", "tecnico"],
+  initialProfile,
+  onPresentationSignalChange,
 }: {
   leadId: string;
   lead?: LeadMini | null;
   onBeforeGenerate?: () => Promise<void>;
+  onPromptSaved?: () => void;
+  allowedProfiles?: AiProfile[];
+  initialProfile?: AiProfile;
+  onPresentationSignalChange?: (signals: {
+    gammaUrl?: string | null;
+    pdfUrl?: string | null;
+    lastGeneratedPdf?: boolean;
+    exportReady?: boolean;
+  }) => void;
 }) {
+  const canUseCommercial = allowedProfiles.includes("comercial");
+  const canUseTechnical = allowedProfiles.includes("tecnico");
+  const hasAnyProfile = canUseCommercial || canUseTechnical;
+
   const [aiLoading, setAiLoading] = useState(false);
   const [report, setReport] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
   const [status, setStatus] = useState<"idle" | "saving" | "generating" | "done">("idle");
   const [aiPromptExtra, setAiPromptExtra] = useState<string>("");
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [promptSavedMessage, setPromptSavedMessage] = useState<string | null>(null);
+  const [promptError, setPromptError] = useState<string | null>(null);
   const [reportExpanded, setReportExpanded] = useState(false);
   const [activeReportTab, setActiveReportTab] = useState<string>(TABS_CONFIG[0].id);
   const [regeneratingTab, setRegeneratingTab] = useState<string | null>(null);
@@ -360,15 +392,139 @@ export function AiLeadReport({
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [missingAnswersText, setMissingAnswersText] = useState<string>("");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [globalConfigFromApi, setGlobalConfigFromApi] = useState<{ basePrompt: string; modulos: Record<string, string> } | null>(null);
 
   const [moduleStatus, setModuleStatus] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
   const [aiDoneMsg, setAiDoneMsg] = useState<string>("");
-  const [reportProfile, setReportProfile] = useState<"comercial" | "tecnico">("comercial");
+  const [reportProfile, setReportProfile] = useState<AiProfile>(() => {
+    if (initialProfile && allowedProfiles.includes(initialProfile)) return initialProfile;
+    if (canUseCommercial) return "comercial";
+    if (canUseTechnical) return "tecnico";
+    return "comercial";
+  });
+  const [gammaPromptOpen, setGammaPromptOpen] = useState(false);
+  const [gammaPromptText, setGammaPromptText] = useState("");
+  const [gammaPromptLoading, setGammaPromptLoading] = useState(false);
+  const [gammaPromptError, setGammaPromptError] = useState<string | null>(null);
+  const [gammaLoading, setGammaLoading] = useState(false);
+  const [gammaUrl, setGammaUrl] = useState<string | null>(null);
+  const [gammaPdfUrl, setGammaPdfUrl] = useState<string | null>(null);
+  const [gammaError, setGammaError] = useState<string | null>(null);
+  const [gammaGenerationId, setGammaGenerationId] = useState<string | null>(null);
   const moduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const modulePanelRef = useRef<HTMLDivElement | null>(null);
 
   const VISION_TAB_ID = "vision_estrategica";
+
+  useEffect(() => {
+    if (!onPresentationSignalChange) return;
+    if (gammaUrl?.trim() || gammaPdfUrl?.trim()) {
+      onPresentationSignalChange({
+        gammaUrl: gammaUrl ?? null,
+        pdfUrl: gammaPdfUrl ?? null,
+        exportReady: true,
+      });
+    }
+  }, [gammaUrl, gammaPdfUrl, onPresentationSignalChange]);
+
+  const fetchGammaPrompt = async (type: "comercial" | "tecnico") => {
+    if (!leadId?.trim()) return;
+    setGammaPromptLoading(true);
+    setGammaPromptError(null);
+    setGammaPromptText("");
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/gamma-prompt?type=${type}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as any)?.error ?? "Error generando prompt");
+      const prompt = (json as any)?.data?.prompt ?? "";
+      setGammaPromptText(prompt);
+      setGammaPromptOpen(true);
+    } catch (e: any) {
+      setGammaPromptError(e?.message ?? "Error generando prompt Gamma");
+    } finally {
+      setGammaPromptLoading(false);
+    }
+  };
+
+  const copyGammaPrompt = async () => {
+    if (!gammaPromptText) return;
+    await navigator.clipboard.writeText(gammaPromptText);
+    setToastMessage("Prompt copiado al portapapeles");
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  const pollGammaStatus = async (generationId: string) => {
+    for (let i = 0; i < 45; i++) {
+      const res = await fetch(
+        `/api/admin/leads/${leadId}/gamma-proposal/status?generationId=${encodeURIComponent(generationId)}`
+      );
+      const json = await res.json().catch(() => ({}));
+
+      if (json?.status === "completed") {
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[GAMMA frontend completed payload]", JSON.stringify(json, null, 2));
+        }
+        const pdfUrl = json?.pdfUrl ?? null;
+        const gammaUrlVal = json?.gammaUrl ?? null;
+        setGammaUrl(gammaUrlVal);
+        setGammaPdfUrl(pdfUrl);
+        setGammaLoading(false);
+        setGammaError(null);
+        onPresentationSignalChange?.({
+          gammaUrl: gammaUrlVal ?? null,
+          pdfUrl: pdfUrl ?? null,
+          exportReady: Boolean(gammaUrlVal || pdfUrl),
+        });
+        if (pdfUrl) {
+          setToastMessage("PDF Gamma listo");
+          setTimeout(() => setToastMessage(null), 3000);
+          window.open(pdfUrl, "_blank");
+        } else if (gammaUrlVal) {
+          setToastMessage("Gamma lista");
+          setTimeout(() => setToastMessage(null), 3000);
+          window.open(gammaUrlVal, "_blank");
+        }
+        return;
+      }
+
+      if (json?.status === "failed") {
+        setGammaLoading(false);
+        setGammaError("Gamma no pudo completar la propuesta.");
+        return;
+      }
+
+      await new Promise((r) => setTimeout(r, 4000));
+    }
+
+    setGammaLoading(false);
+    setGammaError("Gamma sigue procesando. Puedes reintentar abrir el estado en unos minutos.");
+  };
+
+  const generateGammaProposal = async (profile: "comercial" | "tecnico") => {
+    if (!leadId?.trim()) return;
+    setGammaLoading(true);
+    setGammaError(null);
+    setGammaUrl(null);
+    setGammaPdfUrl(null);
+    setGammaGenerationId(null);
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/gamma-proposal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as any)?.error ?? "Error generando Gamma");
+      const generationId = (json as any)?.generationId ?? null;
+      if (!generationId) throw new Error("No se recibió generationId");
+      setGammaGenerationId(generationId);
+      await pollGammaStatus(generationId);
+    } catch (e: any) {
+      setGammaError(e?.message ?? "Error generando propuesta en Gamma");
+      setGammaLoading(false);
+    }
+  };
 
   const visibleTabs = useMemo(
     () =>
@@ -377,6 +533,133 @@ export function AiLeadReport({
       ),
     [reportProfile]
   );
+
+  // Cargar prompt global real desde API (misma fuente que el backend)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin/config/ia", { cache: "no-store" });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const data = (json as { data?: { basePrompt?: string; modulos?: Record<string, string> } | null })?.data;
+        if (data) {
+          const next = {
+            basePrompt: typeof data.basePrompt === "string" ? data.basePrompt : "",
+            modulos: data.modulos && typeof data.modulos === "object" && !Array.isArray(data.modulos) ? data.modulos : {},
+          };
+          setGlobalConfigFromApi(next);
+          if (process.env.NODE_ENV !== "production") {
+            console.log("[PROMPT DEBUG] globalConfigFromApi", {
+              basePromptLength: next.basePrompt?.length ?? 0,
+              modulosKeys: Object.keys(next.modulos),
+              modulosSample: Object.fromEntries(Object.entries(next.modulos).slice(0, 3).map(([k, v]) => [k, (v ?? "").slice(0, 60) + "…"])),
+            });
+          }
+        }
+      } catch {
+        if (!cancelled) setGlobalConfigFromApi(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Resuelve el prompt global efectivo del módulo activo: base + prompt del módulo.
+   * Devuelve { resolvedModuleKey, basePrompt, modulePrompt, combinedPrompt }.
+   */
+  const getResolvedGlobalPromptForActiveModule = useCallback(
+    (
+      config: { basePrompt?: string; modulos?: Record<string, string> } | null,
+      activeTab: string,
+      tabs: ReadonlyArray<{ id: string; label: string; tabId: string }>
+    ): { resolvedModuleKey: string | null; basePrompt: string; modulePrompt: string; combinedPrompt: string } => {
+      const empty = { resolvedModuleKey: null, basePrompt: "", modulePrompt: "", combinedPrompt: "" };
+      if (!config) return empty;
+      const basePrompt = (typeof config.basePrompt === "string" ? config.basePrompt : "").trim();
+      const modulos = config.modulos && typeof config.modulos === "object" ? config.modulos : {};
+      const activeTabConfig = tabs.find((t) => t.id === activeTab) ?? TABS_CONFIG.find((t) => t.id === activeTab);
+      if (!activeTabConfig) {
+        const combinedPrompt = basePrompt || "";
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[PROMPT DEBUG] activeReportTab", activeTab);
+          console.log("[PROMPT DEBUG] activeTabConfig", null);
+          console.log("[PROMPT DEBUG] resolvedModuleKey", "(no tab config)");
+          console.log("[PROMPT DEBUG] basePrompt preview", basePrompt?.slice(0, 120) || "(vacío)");
+          console.log("[PROMPT DEBUG] modulePrompt preview", "(vacío)");
+          console.log("[PROMPT DEBUG] combinedPrompt preview", combinedPrompt?.slice(0, 200) || "(vacío)");
+        }
+        return { resolvedModuleKey: null, basePrompt, modulePrompt: "", combinedPrompt };
+      }
+      const tabId = activeTabConfig.tabId;
+      let modulePrompt = (modulos[tabId] ?? "").trim();
+      let resolvedModuleKey: string | null = modulePrompt ? tabId : null;
+      if (!modulePrompt && tabId) {
+        const keyMatch = Object.keys(modulos).find((k) => k.toLowerCase() === tabId.toLowerCase());
+        if (keyMatch) {
+          modulePrompt = (modulos[keyMatch] ?? "").trim();
+          resolvedModuleKey = keyMatch;
+        }
+      }
+      const parts = [basePrompt, modulePrompt].map((s) => (typeof s === "string" ? s.trim() : "")).filter(Boolean);
+      const combinedPrompt = parts.join("\n\n");
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[PROMPT DEBUG] activeReportTab", activeTab);
+        console.log("[PROMPT DEBUG] activeTabConfig", activeTabConfig);
+        console.log("[PROMPT DEBUG] resolvedModuleKey", resolvedModuleKey);
+        console.log("[PROMPT DEBUG] basePrompt preview", basePrompt?.slice(0, 120) || "(vacío)");
+        console.log("[PROMPT DEBUG] modulePrompt preview", modulePrompt?.slice(0, 120) || "(vacío)");
+        console.log("[PROMPT DEBUG] combinedPrompt preview", combinedPrompt?.slice(0, 200) || "(vacío)");
+      }
+      return { resolvedModuleKey, basePrompt, modulePrompt, combinedPrompt };
+    },
+    []
+  );
+
+  // Prompt global del módulo activo solamente (sin base). El base se edita en Configuración global.
+  const globalModulePrompt = useMemo(() => {
+    const resolved = getResolvedGlobalPromptForActiveModule(globalConfigFromApi, activeReportTab, visibleTabs);
+    return resolved.modulePrompt;
+  }, [globalConfigFromApi, activeReportTab, visibleTabs, getResolvedGlobalPromptForActiveModule]);
+
+  // Módulo activo: tabId para custom prompt por módulo (alineado con TABS_CONFIG)
+  const resolvedModuleKey = useMemo(() => {
+    const tab = visibleTabs.find((t) => t.id === activeReportTab) ?? TABS_CONFIG.find((t) => t.id === activeReportTab);
+    return tab?.tabId ?? null;
+  }, [activeReportTab, visibleTabs]);
+
+  // Parsear ai_custom_prompt: por módulo (byModule) o legacy (string plano)
+  const parsedCustomPrompt = useMemo(
+    () => parseLeadCustomPrompt(lead?.ai_custom_prompt),
+    [lead?.ai_custom_prompt]
+  );
+
+  // Custom del lead para el módulo activo (case-insensitive)
+  const moduleCustomPrompt = useMemo(
+    () => (resolvedModuleKey ? getModuleCustomPrompt(parsedCustomPrompt, resolvedModuleKey) : null),
+    [parsedCustomPrompt, resolvedModuleKey]
+  );
+
+  // Prioridad: A) custom del lead para este módulo, B) prompt global del módulo, C) legacy (compatibilidad)
+  const visiblePrompt = useMemo(() => {
+    const fromModule = moduleCustomPrompt?.trim();
+    if (fromModule) return fromModule;
+    if (globalModulePrompt?.trim()) return globalModulePrompt;
+    return parsedCustomPrompt.legacyText?.trim() ?? globalModulePrompt ?? "";
+  }, [moduleCustomPrompt, globalModulePrompt, parsedCustomPrompt.legacyText]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[CUSTOM PROMPT DEBUG] resolvedModuleKey", resolvedModuleKey);
+      console.log("[CUSTOM PROMPT DEBUG] raw ai_custom_prompt", lead?.ai_custom_prompt);
+      console.log("[CUSTOM PROMPT DEBUG] parsed custom prompt", parsedCustomPrompt);
+      console.log("[CUSTOM PROMPT DEBUG] module custom prompt", moduleCustomPrompt);
+      console.log("[CUSTOM PROMPT DEBUG] visiblePrompt", visiblePrompt?.slice(0, 150) ?? "(vacío)");
+      console.log("[PROMPT EDIT DEBUG] isEditingPrompt", isEditingPrompt);
+      console.log("[PROMPT EDIT DEBUG] visiblePrompt", visiblePrompt?.slice(0, 80) ?? "(vacío)");
+      console.log("[PROMPT EDIT DEBUG] draftPrompt", aiPromptExtra?.slice(0, 80) ?? "(vacío)");
+    }
+  }, [resolvedModuleKey, lead?.ai_custom_prompt, parsedCustomPrompt, moduleCustomPrompt, visiblePrompt, isEditingPrompt, aiPromptExtra]);
 
   useEffect(() => {
     const isActiveInVisible = visibleTabs.some((t) => t.id === activeReportTab);
@@ -400,63 +683,97 @@ export function AiLeadReport({
     }
   }, [lead]);
 
-  // Precargar el textarea desde lead.ai_custom_prompt
+  // Sincronizar valor mostrado con el prompt resuelto solo cuando NO estamos editando
   useEffect(() => {
-    const initialPrompt = lead?.ai_custom_prompt ?? "";
-    setAiPromptExtra(initialPrompt);
-  }, [lead?.ai_custom_prompt]);
+    if (!isEditingPrompt) setAiPromptExtra(visiblePrompt);
+  }, [visiblePrompt, isEditingPrompt]);
 
-  // Autosave con debounce (700ms)
-  // Solo guarda cuando el usuario cambia el valor (no en el primer render)
-  const isInitialMount = useRef(true);
+  // Al cambiar de módulo/tab, salir de edición y mostrar el prompt del nuevo módulo
   useEffect(() => {
-    // Saltar el primer render (cuando se precarga desde lead.ai_custom_prompt)
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
+    setIsEditingPrompt(false);
+    setAiPromptExtra(visiblePrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al cambiar tab; visiblePrompt ya es del tab actual
+  }, [activeReportTab]);
+
+  const savePromptToLead = async () => {
+    if (!leadId?.trim()) return;
+    const moduleKey = visibleTabs.find((t) => t.id === activeReportTab)?.tabId ?? TABS_CONFIG.find((t) => t.id === activeReportTab)?.tabId;
+    if (!moduleKey) {
+      setPromptError("No se pudo identificar el módulo activo.");
       return;
     }
-
-    // Limpiar timeout anterior si existe
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+    setPromptError(null);
+    setPromptSavedMessage(null);
+    setSavingPrompt(true);
+    try {
+      const parsed = parseLeadCustomPrompt(lead?.ai_custom_prompt);
+      const newByModule = { ...parsed.byModule };
+      newByModule[moduleKey] = aiPromptExtra.trim();
+      const payload = serializeLeadCustomPrompt(newByModule);
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId.trim())}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_custom_prompt: payload }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPromptError((json as { error?: string })?.error ?? "Error guardando el prompt del lead.");
+        return;
+      }
+      setPromptSavedMessage("Prompt de este módulo guardado.");
+      setTimeout(() => setPromptSavedMessage(null), 4000);
+      setIsEditingPrompt(false);
+      onPromptSaved?.();
+    } catch (e: any) {
+      setPromptError(e?.message ?? "Error guardando el prompt del lead.");
+    } finally {
+      setSavingPrompt(false);
     }
+  };
 
-    // Si no hay leadId, no guardar
+  const cancelPromptEdit = () => {
+    setAiPromptExtra(visiblePrompt);
+    setIsEditingPrompt(false);
+    setPromptError(null);
+  };
+
+  const restoreGlobalPrompt = async () => {
     if (!leadId?.trim()) return;
-
-    // Crear nuevo timeout para guardar después del debounce
-    saveTimeoutRef.current = setTimeout(async () => {
-      const validLeadId = leadId.trim();
-      const valueToSave = aiPromptExtra.trim() || null;
-
-      try {
-        setSavingPrompt(true);
-        const res = await fetch(`/api/admin/leads/${encodeURIComponent(validLeadId)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ai_custom_prompt: valueToSave }),
-        });
-
-        if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          console.warn("Error guardando ai_custom_prompt:", json?.error);
-          // No mostrar error al usuario para no romper UX
-        }
-      } catch (e: any) {
-        console.warn("Error guardando ai_custom_prompt:", e?.message);
-        // No mostrar error al usuario para no romper UX
-      } finally {
-        setSavingPrompt(false);
+    const moduleKey = visibleTabs.find((t) => t.id === activeReportTab)?.tabId ?? TABS_CONFIG.find((t) => t.id === activeReportTab)?.tabId;
+    if (!moduleKey) {
+      setPromptError("No se pudo identificar el módulo activo.");
+      return;
+    }
+    setPromptError(null);
+    setPromptSavedMessage(null);
+    setSavingPrompt(true);
+    try {
+      const parsed = parseLeadCustomPrompt(lead?.ai_custom_prompt);
+      const newByModule = { ...parsed.byModule };
+      delete newByModule[moduleKey];
+      const payload = serializeLeadCustomPrompt(newByModule);
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId.trim())}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai_custom_prompt: payload }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPromptError((json as { error?: string })?.error ?? "Error restaurando prompt global.");
+        return;
       }
-    }, 700); // 700ms de debounce
-
-    // Cleanup: limpiar timeout si el componente se desmonta o cambia el valor
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-    };
-  }, [aiPromptExtra, leadId]);
+      setPromptSavedMessage("Este módulo vuelve a usar el prompt global.");
+      setTimeout(() => setPromptSavedMessage(null), 4000);
+      const resolved = getResolvedGlobalPromptForActiveModule(globalConfigFromApi, activeReportTab, visibleTabs);
+      setAiPromptExtra(resolved.modulePrompt);
+      setIsEditingPrompt(false);
+      onPromptSaved?.();
+    } catch (e: any) {
+      setPromptError(e?.message ?? "Error restaurando prompt global.");
+    } finally {
+      setSavingPrompt(false);
+    }
+  };
 
   const filename = useMemo(() => {
     const base = (lead?.nombre || "lead").toString().trim().replace(/[^\w\-]+/g, "_");
@@ -588,6 +905,15 @@ export function AiLeadReport({
     setTimeout(() => setToastMessage(null), 2000);
   };
 
+  // Lookup case-insensitive del prompt del módulo (evita envío de prompt vacío si la config usa otra clave)
+  const getModulePromptForTab = useCallback((tabId: string, modules: Record<string, string> | undefined): string => {
+    if (!modules || !tabId) return "";
+    const key = Object.keys(modules).find(
+      (k) => k.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_") === tabId.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_")
+    );
+    return key ? (modules[key] || "") : (modules[tabId] || "");
+  }, []);
+
   // Regenera un solo módulo; retorna { ok, report, error } para uso en loop o manual
   const regenerateSingleModule = async (tabId: string): Promise<{ ok: boolean; report?: string; error?: string }> => {
     if (!leadId?.trim()) return { ok: false, error: "Sin leadId" };
@@ -596,6 +922,7 @@ export function AiLeadReport({
 
     const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
     const onlyModule = (tabId ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
+    const modulePrompt = getModulePromptForTab(tabId, promptsData.prompts.modules);
     const body = {
       custom_prompt: customPromptValue,
       personalization: customPromptValue,
@@ -604,10 +931,19 @@ export function AiLeadReport({
       profile: reportProfile,
       prompts: {
         base: promptsData.prompts.base || "",
-        modules: { [tabId]: promptsData.prompts.modules?.[tabId] || "" },
+        modules: { [tabId]: modulePrompt },
       },
       prompts_meta: promptsData.meta,
     };
+
+    if (process.env.NODE_ENV !== "production") {
+      const activeTabConfig = visibleTabs.find((t) => t.tabId === tabId) ?? TABS_CONFIG.find((t) => t.tabId === tabId);
+      console.log("[MODULE REGEN DEBUG] activeReportTab", activeReportTab);
+      console.log("[MODULE REGEN DEBUG] activeTabConfig", activeTabConfig);
+      console.log("[MODULE REGEN DEBUG] tabId", activeTabConfig?.tabId ?? tabId);
+      console.log("[MODULE REGEN DEBUG] prompt being sent", (aiPromptExtra ?? modulePrompt ?? "").slice(0, 200));
+      console.log("[MODULE REGEN DEBUG] profile", reportProfile);
+    }
 
     try {
       const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
@@ -620,6 +956,10 @@ export function AiLeadReport({
         return { ok: false, error: text || "Error regenerando módulo" };
       }
       const data = await res.json();
+      if (process.env.NODE_ENV !== "production") {
+        const json = data;
+        console.log("[MODULE REGEN DEBUG] response", json);
+      }
       const updatedReport = data.data?.report ?? data.report ?? "";
       return { ok: true, report: updatedReport };
     } catch (err: any) {
@@ -824,6 +1164,11 @@ export function AiLeadReport({
     }
   };
 
+  const baseName = ((lead as any)?.empresas?.nombre ?? lead?.nombre ?? "lead")
+    .toString()
+    .replace(/\s+/g, "-")
+    .toLowerCase();
+
   const handleExportPdf = async (profile: "comercial" | "tecnico") => {
     try {
       setError(null);
@@ -841,14 +1186,46 @@ export function AiLeadReport({
         throw new Error((err as any)?.error ?? res.statusText ?? "Error generando PDF");
       }
       const blob = await res.blob();
-      const baseName = ((lead as any)?.empresas?.nombre ?? lead?.nombre ?? "lead")
-        .toString()
-        .replace(/\s+/g, "-")
-        .toLowerCase();
       const filename = `informe-${profile}-${baseName}.pdf`;
       await downloadBlob(blob, filename);
 
       setToastMessage("✅ PDF descargado.");
+      onPresentationSignalChange?.({ lastGeneratedPdf: true, exportReady: true });
+    } catch (e: any) {
+      setError(e?.message ?? "Error generando PDF");
+      setToastMessage(null);
+    }
+  };
+
+  const handleExportPdfVision = async () => {
+    try {
+      setError(null);
+      if (!leadId?.trim()) {
+        setError("Falta el lead.");
+        return;
+      }
+      const visionContent = reportTabs["vision_estrategica"] ?? "";
+      if (!visionContent?.trim()) {
+        setError("No hay contenido de Visión Estratégica para exportar. Genera el informe primero.");
+        return;
+      }
+      setToastMessage("Generando PDF Visión Estratégica…");
+      const sections = [{ name: "Visión Estratégica", content: visionContent }];
+      const doc = (
+        <LeadReportPdf
+          title="Informe Visión Estratégica"
+          subtitle="Resumen estratégico del lead"
+          leadName={(lead as any)?.empresas?.nombre ?? lead?.nombre ?? ""}
+          generatedAt={new Date().toLocaleString()}
+          sections={sections}
+          footerLeft="Cámara Costa"
+          footerRight="Generado por EASY CRM"
+        />
+      );
+      const blob = await pdf(doc).toBlob();
+      await downloadBlob(blob, `informe-vision-estrategica-${baseName}.pdf`);
+      setToastMessage("✅ PDF descargado.");
+      onPresentationSignalChange?.({ lastGeneratedPdf: true, exportReady: true });
     } catch (e: any) {
       setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
@@ -858,6 +1235,16 @@ export function AiLeadReport({
   async function copy() {
     if (!report.trim()) return;
     await navigator.clipboard.writeText(report);
+  }
+
+  if (!hasAnyProfile) {
+    return (
+      <div className="rounded-2xl border bg-white p-4">
+        <p className="text-sm text-slate-600">
+          No tienes perfiles de IA habilitados para este lead.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -882,107 +1269,208 @@ export function AiLeadReport({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setReportProfile("comercial");
-              runFullAiGeneration();
-            }}
-            disabled={aiLoading}
-            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-              aiLoading
-                ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
-                : "bg-blue-600 text-white hover:bg-blue-700"
-            }`}
-          >
-            {aiLoading ? (
-              <span className="inline-flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
-                Generando...
-              </span>
-            ) : (
-              "Generar Comercial"
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setReportProfile("tecnico");
-              runFullAiGeneration();
-            }}
-            disabled={aiLoading}
-            className="rounded-xl px-4 py-2 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            Generar Técnico
-          </button>
-
-          {report.trim() && (
-            <button
-              type="button"
-              onClick={() => {
-                setActiveReportTab("vision_estrategica");
-                regenerateTab("vision_estrategica");
-              }}
-              disabled={aiLoading || regeneratingTab === "vision_estrategica"}
-              className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-              title="Generar Visión Estratégica basada en el informe completo"
-            >
-              {regeneratingTab === "VISION_ESTRATEGICA" ? (
-                <>
-                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></span>
-                  Generando...
-                </>
-              ) : (
-                <>
-                  Visión Estratégica
-                </>
+        <div className="space-y-4">
+          {/* ETAPA 1 — Generación */}
+          <div>
+            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 1 — Generación</div>
+            <div className="flex flex-wrap gap-2">
+              {canUseCommercial && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportProfile("comercial");
+                    runFullAiGeneration();
+                  }}
+                  disabled={aiLoading}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                    aiLoading
+                      ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  }`}
+                >
+                  {aiLoading ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
+                      Generando...
+                    </span>
+                  ) : (
+                    "Generar Análisis Comercial"
+                  )}
+                </button>
               )}
-            </button>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => handleExportPdf("comercial")}
-              disabled={!leadId || aiLoading}
-              className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              title="Descargar Informe Comercial"
-            >
-              Informe Comercial
-            </button>
-            <button
-              type="button"
-              onClick={() => handleExportPdf("tecnico")}
-              disabled={!leadId || aiLoading}
-              className="rounded-xl px-4 py-2 text-sm font-medium bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
-              title="Descargar Informe Técnico"
-            >
-              Informe Técnico
-            </button>
+              {canUseTechnical && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportProfile("tecnico");
+                    runFullAiGeneration();
+                  }}
+                  disabled={aiLoading}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  Generar Técnico
+                </button>
+              )}
+              {report.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveReportTab("vision_estrategica");
+                    regenerateTab("vision_estrategica");
+                  }}
+                  disabled={aiLoading || regeneratingTab === "vision_estrategica"}
+                  className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                  title="Generar Visión Estratégica basada en el informe completo"
+                >
+                  {regeneratingTab === "VISION_ESTRATEGICA" ? (
+                    <>
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></span>
+                      Generando...
+                    </>
+                  ) : (
+                    <>Generar Visión Estratégica</>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={copy}
-            disabled={!report.trim()}
-            className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-            title="Copiar al portapapeles"
-          >
-            Copiar
-          </button>
+          {/* ETAPA 2 — Informes (vista) */}
+          <div>
+            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 2 — Informes</div>
+            <div className="flex flex-wrap gap-2">
+              {canUseCommercial && report.trim() && (
+                <button
+                  type="button"
+                  onClick={() => { setReportProfile("comercial"); const firstModuleId = getReportProfile("comercial").moduleIds[0]; const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId); setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id); }}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium bg-slate-50 text-slate-700 hover:bg-slate-100"
+                  title="Ver informe comercial"
+                >
+                  Informe Comercial
+                </button>
+              )}
+              {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveReportTab("vision_estrategica")}
+                  className="rounded-xl border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100"
+                  title="Ver Visión Estratégica"
+                >
+                  Informe Visión Estratégica
+                </button>
+              )}
+            </div>
+          </div>
 
-          {report.trim() && (
-            <button
-              type="button"
-              onClick={() => setViewMode(viewMode === "rendered" ? "raw" : "rendered")}
-              className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50"
-              title={viewMode === "rendered" ? "Ver texto crudo" : "Ver vista renderizada"}
-            >
-              {viewMode === "rendered" ? "Texto" : "Vista"}
-            </button>
-          )}
+          {/* ETAPA 3 — Exportación (PDF + Gamma) */}
+          <div>
+            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 3 — Exportación</div>
+            <div className="flex flex-wrap gap-2">
+              {canUseCommercial && (
+                <button
+                  type="button"
+                  onClick={() => handleExportPdf("comercial")}
+                  disabled={!leadId || aiLoading}
+                  className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                  title="Descargar PDF Informe Comercial"
+                >
+                  PDF Informe Comercial
+                </button>
+              )}
+              {canUseTechnical && (
+                <button
+                  type="button"
+                  onClick={() => handleExportPdf("tecnico")}
+                  disabled={!leadId || aiLoading}
+                  className="rounded-xl px-4 py-2 text-sm font-medium bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+                  title="Descargar PDF Informe Técnico"
+                >
+                  PDF Informe Técnico
+                </button>
+              )}
+              {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleExportPdfVision}
+                  disabled={!leadId || aiLoading}
+                  className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                  title="Descargar PDF Visión Estratégica"
+                >
+                  PDF Visión Estratégica
+                </button>
+              )}
+              {canUseCommercial && (
+                <button
+                  type="button"
+                  onClick={() => fetchGammaPrompt("comercial")}
+                  disabled={!leadId || gammaPromptLoading}
+                  className="rounded-xl border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                  title="Editar prompt para Gamma (presentación comercial)"
+                >
+                  {gammaPromptLoading ? "..." : "Editar Prompt Gamma Comercial"}
+                </button>
+              )}
+              {canUseTechnical && (
+                <button
+                  type="button"
+                  onClick={() => fetchGammaPrompt("tecnico")}
+                  disabled={!leadId || gammaPromptLoading}
+                  className="rounded-xl border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                  title="Editar prompt para Gamma (presentación técnica)"
+                >
+                  {gammaPromptLoading ? "..." : "Editar Prompt Gamma Técnico"}
+                </button>
+              )}
+              {canUseCommercial && (
+                <button
+                  type="button"
+                  onClick={() => generateGammaProposal("comercial")}
+                  disabled={!leadId || gammaLoading}
+                  className="rounded-xl border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                  title="Crear propuesta en Gamma desde plantilla comercial"
+                >
+                  {gammaLoading ? "Generando…" : "Generar Gamma Comercial"}
+                </button>
+              )}
+              {canUseTechnical && (
+                <button
+                  type="button"
+                  onClick={() => generateGammaProposal("tecnico")}
+                  disabled={!leadId || gammaLoading}
+                  className="rounded-xl border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                  title="Crear propuesta en Gamma desde plantilla técnica"
+                >
+                  {gammaLoading ? "Generando…" : "Generar Gamma Técnico"}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ETAPA 4 — Utilidades */}
+          <div>
+            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 4 — Utilidades</div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={copy}
+                disabled={!report.trim()}
+                className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                title="Copiar al portapapeles"
+              >
+                Copiar
+              </button>
+              {report.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setViewMode(viewMode === "rendered" ? "raw" : "rendered")}
+                  className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50"
+                  title={viewMode === "rendered" ? "Ver texto crudo" : "Ver vista renderizada"}
+                >
+                  {viewMode === "rendered" ? "Ver Texto" : "Vista"}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1000,6 +1488,62 @@ export function AiLeadReport({
       {error && (
         <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {gammaLoading && (
+        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          Generando propuesta en Gamma…
+        </div>
+      )}
+      {gammaGenerationId && !gammaUrl && !gammaPdfUrl && (
+        <div className="mt-2 text-xs text-slate-500">
+          ID de generación: {gammaGenerationId}
+        </div>
+      )}
+      {(gammaPdfUrl || gammaUrl) && !gammaLoading && (
+        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 flex items-center gap-3 flex-wrap">
+          {gammaPdfUrl ? (
+            <>
+              <span>PDF Gamma listo</span>
+              <a
+                href={gammaPdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download="informe-gamma.pdf"
+                className="font-medium underline hover:no-underline"
+              >
+                Descargar PDF Gamma
+              </a>
+              {gammaUrl && (
+                <a
+                  href={gammaUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium underline hover:no-underline opacity-80"
+                >
+                  Abrir en Gamma
+                </a>
+              )}
+            </>
+          ) : (
+            <>
+              <span>Gamma lista</span>
+              <a
+                href={gammaUrl!}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline hover:no-underline"
+              >
+                Abrir Gamma
+              </a>
+            </>
+          )}
+        </div>
+      )}
+      {gammaError && (
+        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {gammaError}
         </div>
       )}
 
@@ -1108,46 +1652,120 @@ export function AiLeadReport({
                       </button>
                     </div>
                     
-                    {/* Prompt en uso */}
-                    {(() => {
-                      const activeTabConfig = visibleTabs.find(t => t.id === activeReportTab) ?? TABS_CONFIG.find(t => t.id === activeReportTab);
-                      if (!activeTabConfig) return null;
-                      
-                      const promptsData = getAiPromptsFromLocalStorage();
-                      const modulePrompt = promptsData?.prompts.modules?.[activeTabConfig.tabId] || "";
-                      const basePrompt = promptsData?.prompts.base || "";
-                      
-                      if (!modulePrompt && !basePrompt) return null;
-                      
-                      const previewLines = modulePrompt.split("\n").slice(0, 2).join("\n");
-                      const fullPrompt = modulePrompt || basePrompt;
-                      
-                      return (
-                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="text-xs font-semibold text-blue-900 mb-1">Prompt en uso</div>
-                              {showPromptPreview ? (
-                                <pre className="text-xs text-blue-800 whitespace-pre-wrap font-mono max-h-40 overflow-y-auto">
-                                  {fullPrompt}
-                                </pre>
-                              ) : (
-                                <div className="text-xs text-blue-700 line-clamp-2">
-                                  {previewLines || "(Sin preview disponible)"}
-                                </div>
-                              )}
-                            </div>
+                    {/* Prompt en uso (personalización por lead, editable) */}
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                      <div className="text-xs font-semibold text-blue-900 mb-1">Prompt en uso</div>
+                      <p className="text-xs text-blue-700 mb-2">
+                        Este prompt corresponde solo al módulo activo de este lead. El prompt global no se modifica.
+                      </p>
+                      {promptSavedMessage && (
+                        <div className="mb-2 rounded border border-green-300 bg-green-50 px-2 py-1.5 text-xs text-green-800">
+                          {promptSavedMessage}
+                        </div>
+                      )}
+                      {promptError && (
+                        <div className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                          {promptError}
+                        </div>
+                      )}
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            moduleCustomPrompt?.trim()
+                              ? "bg-amber-100 text-amber-800"
+                              : parsedCustomPrompt.legacyText && visiblePrompt === parsedCustomPrompt.legacyText.trim()
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {moduleCustomPrompt?.trim()
+                            ? "Prompt personalizado de este módulo"
+                            : parsedCustomPrompt.legacyText && visiblePrompt === parsedCustomPrompt.legacyText.trim()
+                              ? "Prompt legacy del lead"
+                              : "Prompt global del módulo"}
+                        </span>
+                      </div>
+
+                      {!isEditingPrompt ? (
+                        <>
+                          <div className="mb-2 w-full rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-mono text-slate-700 whitespace-pre-wrap min-h-[80px] max-h-48 overflow-y-auto">
+                            {visiblePrompt || "(Sin prompt definido para este módulo)"}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => setShowPromptPreview(!showPromptPreview)}
-                              className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
+                              onClick={() => {
+                                setAiPromptExtra(visiblePrompt);
+                                setIsEditingPrompt(true);
+                              }}
+                              className="rounded-lg border border-blue-300 bg-blue-100 px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-200"
                             >
-                              {showPromptPreview ? "Ocultar" : "Ver completo"}
+                              Editar prompt
                             </button>
                           </div>
+                        </>
+                      ) : (
+                        <>
+                          <textarea
+                            value={aiPromptExtra}
+                            onChange={(e) => setAiPromptExtra(e.target.value)}
+                            placeholder="Prompt del módulo activo. Editá y guardá para fijar un prompt personalizado solo para este módulo."
+                            className="mb-2 w-full rounded border border-blue-200 bg-white px-2 py-1.5 text-xs font-mono text-slate-800 min-h-[80px] resize-y"
+                            rows={4}
+                          />
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={savePromptToLead}
+                              disabled={savingPrompt}
+                              className="rounded-lg border border-blue-300 bg-blue-100 px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-200 disabled:opacity-50"
+                            >
+                              {savingPrompt ? "Guardando…" : "Guardar prompt del lead"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelPromptEdit}
+                              disabled={savingPrompt}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              Cancelar edición
+                            </button>
+                            <button
+                              type="button"
+                              onClick={restoreGlobalPrompt}
+                              disabled={savingPrompt}
+                              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              Restaurar prompt global
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Comparación por módulo: solo cuando este módulo tiene custom */}
+                    {moduleCustomPrompt?.trim() && (
+                      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-xs font-semibold text-slate-800 mb-2">Comparación de prompt (este módulo)</div>
+                        <p className="text-xs text-slate-600 mb-3">
+                          Este módulo usa una versión personalizada. El prompt global del módulo no se modifica.
+                        </p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs font-medium text-slate-700 mb-1">Prompt global del módulo</div>
+                            <div className="rounded border border-slate-200 bg-white p-2 max-h-40 overflow-y-auto text-xs font-mono text-slate-700 whitespace-pre-wrap">
+                              {globalModulePrompt || "(Sin prompt global del módulo)"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs font-medium text-slate-700 mb-1">Prompt personalizado de este módulo</div>
+                            <div className="rounded border border-slate-200 bg-white p-2 max-h-40 overflow-y-auto text-xs font-mono text-slate-700 whitespace-pre-wrap">
+                              {moduleCustomPrompt || "—"}
+                            </div>
+                          </div>
                         </div>
-                      );
-                    })()}
+                      </div>
+                    )}
                   </div>
                   {(() => {
                     // Buscar el tab activo en TABS_CONFIG
@@ -1372,6 +1990,63 @@ export function AiLeadReport({
           </>
         )}
       </div>
+
+      {/* Modal Prompt Gamma */}
+      {gammaPromptOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setGammaPromptOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <h3 className="text-lg font-semibold text-slate-900">Prompt para Gamma</h3>
+              <button
+                type="button"
+                onClick={() => setGammaPromptOpen(false)}
+                className="text-slate-500 hover:text-slate-700 text-2xl leading-none"
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
+            {gammaPromptError && (
+              <div className="mx-4 mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {gammaPromptError}
+              </div>
+            )}
+            <div className="flex-1 overflow-hidden p-4">
+              <textarea
+                readOnly
+                value={gammaPromptText}
+                className="w-full h-96 min-h-[200px] rounded-xl border border-slate-200 p-4 text-sm font-mono text-slate-800 resize-y"
+                placeholder="El prompt se generará al hacer clic en Comercial o Técnico."
+              />
+            </div>
+            <div className="flex gap-2 px-4 py-3 border-t bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={copyGammaPrompt}
+                disabled={!gammaPromptText}
+                className="rounded-xl px-4 py-2 text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                Copiar
+              </button>
+              <button
+                type="button"
+                onClick={() => setGammaPromptOpen(false)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

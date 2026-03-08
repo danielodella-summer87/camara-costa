@@ -60,6 +60,7 @@ type LeadRow = {
   is_member?: boolean | null;
   member_since?: string | null;
   meet_url?: string | null;
+  services_count?: number;
 };
 
 type LeadsApiResponse = {
@@ -125,7 +126,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,website,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -204,12 +205,28 @@ export async function GET(req: Request) {
       );
     }
 
+    const leadIds = (data ?? []).map((l: any) => l.id).filter(Boolean);
+    let servicesCountByLeadId: Record<string, number> = {};
+    if (leadIds.length > 0) {
+      const { data: countRows } = await supabase
+        .from("lead_service_proposals")
+        .select("lead_id")
+        .in("lead_id", leadIds);
+      const counts: Record<string, number> = {};
+      for (const row of countRows ?? []) {
+        const lid = (row as { lead_id?: string }).lead_id;
+        if (lid) counts[lid] = (counts[lid] ?? 0) + 1;
+      }
+      servicesCountByLeadId = counts;
+    }
+
     const normalizedData = (data ?? []).map((lead: any) => ({
       ...lead,
       comercial: Array.isArray(lead.comerciales)
         ? lead.comerciales[0] ?? null
         : lead.comerciales ?? null,
-      comerciales: undefined, // opcional: lo eliminamos
+      comerciales: undefined,
+      services_count: servicesCountByLeadId[lead.id] ?? 0,
     }));
 
     return NextResponse.json(
