@@ -55,7 +55,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "mes debe ser un entero entre 1 y 24" }, { status: 400 });
     }
 
-    const precio = body?.precio != null && body.precio !== "" ? Number(body.precio) : null;
+    const precio = body?.precio != null ? Number(body.precio) : null;
     const alcanceEditado = typeof body?.alcance_editado === "string" ? body.alcance_editado.trim() || null : null;
     const observaciones = typeof body?.observaciones === "string" ? body.observaciones.trim() || null : null;
 
