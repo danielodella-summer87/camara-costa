@@ -7,8 +7,11 @@ import {
   getGammaPromptProfile,
   buildGammaCommercialPrompt,
   buildGammaTechnicalPrompt,
+  buildGammaProPromptFromPayload,
   type GammaPromptContext,
+  type ProposalPayloadForGamma,
 } from "@/lib/ai/gammaPromptProfiles";
+import { buildProposalExportPayload } from "@/lib/leads/proposalExportPayload";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +57,7 @@ export async function POST(
     const { data: leadRow, error: leadErr } = await sb
       .from("leads")
       .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_report,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,web,instagram,facebook,direccion,ciudad,pais,rubro_id,rubros:rubro_id(nombre))"
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_report,proposal_draft_json,proposal_confirmed_at,empresa_id,empresas:empresa_id(id,nombre,email,telefono,celular,web,instagram,facebook,direccion,ciudad,pais,rubro_id,rubros:rubro_id(nombre))"
       )
       .eq("id", id)
       .maybeSingle();
@@ -67,56 +70,128 @@ export async function POST(
     const lead = leadRow as any;
     const empresa = lead?.empresas ?? null;
     const rubro = (empresa as any)?.rubros as { nombre?: string } | null;
+    const proposalConfirmedAt = lead?.proposal_confirmed_at && String(lead.proposal_confirmed_at).trim() ? lead.proposal_confirmed_at : null;
 
-    let contacts: Array<{ nombre?: string; cargo?: string | null; telefono?: string | null; email?: string | null }> = [];
+    let leadServices: Array<{ id: string; service_id: string; codigo?: string | null; nombre?: string | null; mes?: number; precio?: number | null; moneda?: string | null; alcance_editado?: string | null; observaciones?: string | null; billing_type?: string | null }> = [];
     try {
-      const { data: contactsData } = await sb
-        .from("lead_contacts")
-        .select("nombre,cargo,telefono,email")
+      const { data: svcRows } = await sb
+        .from("lead_service_proposals")
+        .select("id,lead_id,service_id,mes,precio,moneda,alcance_editado,observaciones,orden,easy_services(codigo,nombre,billing_type)")
         .eq("lead_id", id)
-        .order("is_primary", { ascending: false })
-        .order("created_at", { ascending: true });
-      if (contactsData?.length) contacts = contactsData as typeof contacts;
+        .order("mes", { ascending: true })
+        .order("orden", { ascending: true });
+      if (svcRows?.length) {
+        leadServices = (svcRows as any[]).map((r) => ({
+          id: r.id,
+          service_id: r.service_id,
+          codigo: r.easy_services?.codigo ?? null,
+          nombre: r.easy_services?.nombre ?? null,
+          mes: r.mes,
+          precio: r.precio,
+          moneda: r.moneda,
+          alcance_editado: r.alcance_editado,
+          observaciones: r.observaciones,
+          billing_type: r.easy_services?.billing_type ?? null,
+        }));
+      }
     } catch {
       // ignorar
     }
 
-    const reportProfile = getGammaPromptProfile(profile);
-    const aiReport = (lead.ai_report && String(lead.ai_report).trim()) || "Sin informe IA generado aún.";
+    let prompt: string;
 
-    const ctx: GammaPromptContext = {
-      lead: {
-        nombre: lead.nombre,
-        objetivos: lead.objetivos,
-        audiencia: lead.audiencia,
-        tamano: lead.tamano,
-        oferta: lead.oferta,
-        notas: lead.notas,
-        origen: lead.origen,
-        pipeline: lead.pipeline,
-        website: lead.website,
-      },
-      empresa: empresa
-        ? {
-            nombre: empresa.nombre,
-            web: empresa.web,
-            email: empresa.email,
-            telefono: empresa.telefono,
-            direccion: empresa.direccion,
-            ciudad: empresa.ciudad,
-            pais: empresa.pais,
-            instagram: empresa.instagram,
-            facebook: empresa.facebook,
-            rubroNombre: rubro?.nombre ?? null,
-          }
-        : null,
-      contactos: contacts,
-      aiReport,
-      reportProfile,
-    };
-
-    const prompt =
-      profile === "tecnico" ? buildGammaTechnicalPrompt(ctx) : buildGammaCommercialPrompt(ctx);
+    if (profile === "comercial" && proposalConfirmedAt && leadServices.length > 0) {
+      const payload = buildProposalExportPayload({
+        lead: {
+          id: lead.id,
+          nombre: lead.nombre,
+          website: lead.website,
+          proposal_draft_json: lead.proposal_draft_json,
+          proposal_confirmed_at: lead.proposal_confirmed_at,
+          empresas: lead.empresas,
+        },
+        leadServices,
+      });
+      const gammaPayload: ProposalPayloadForGamma = {
+        lead: {
+          nombre: payload.lead.nombre,
+          empresa: payload.lead.empresa,
+          rubro: payload.lead.rubro,
+          website: payload.lead.website,
+        },
+        proposal: payload.proposal,
+        monthlyTable: payload.monthlyTable,
+        services: payload.services.map((s) => ({
+          codigo: s.codigo,
+          nombre: s.nombre,
+          monthlyValues: payload.monthlyTable?.rows.find((r) => r.proposalId === s.proposalId)?.monthlyValues ?? {},
+          salesArgument: s.salesArgument,
+          strategicReason: s.strategicReason,
+        })),
+        narrative: {
+          summary: payload.narrative.summary,
+          objectives: payload.narrative.objectives.length ? payload.narrative.objectives.join("\n") : "",
+          whyNow: payload.narrative.whyNow,
+          nextStep: payload.narrative.nextStep,
+        },
+        contact: {
+          agencyName: payload.contact.agencyName,
+          website: payload.contact.website,
+          whatsapp: payload.contact.whatsapp,
+        },
+      };
+      prompt = buildGammaProPromptFromPayload(gammaPayload);
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[COMMERCIAL DOC] type: proposal");
+        console.log("[COMMERCIAL DOC] prompt length:", prompt.length);
+      }
+    } else {
+      let contacts: Array<{ nombre?: string; cargo?: string | null; telefono?: string | null; email?: string | null }> = [];
+      try {
+        const { data: contactsData } = await sb
+          .from("lead_contacts")
+          .select("nombre,cargo,telefono,email")
+          .eq("lead_id", id)
+          .order("is_primary", { ascending: false })
+          .order("created_at", { ascending: true });
+        if (contactsData?.length) contacts = contactsData as typeof contacts;
+      } catch {
+        // ignorar
+      }
+      const reportProfile = getGammaPromptProfile(profile);
+      const aiReport = (lead.ai_report && String(lead.ai_report).trim()) || "Sin informe IA generado aún.";
+      const ctx: GammaPromptContext = {
+        lead: {
+          nombre: lead.nombre,
+          objetivos: lead.objetivos,
+          audiencia: lead.audiencia,
+          tamano: lead.tamano,
+          oferta: lead.oferta,
+          notas: lead.notas,
+          origen: lead.origen,
+          pipeline: lead.pipeline,
+          website: lead.website,
+        },
+        empresa: empresa
+          ? {
+              nombre: empresa.nombre,
+              web: empresa.web,
+              email: empresa.email,
+              telefono: empresa.telefono,
+              direccion: empresa.direccion,
+              ciudad: empresa.ciudad,
+              pais: empresa.pais,
+              instagram: empresa.instagram,
+              facebook: empresa.facebook,
+              rubroNombre: rubro?.nombre ?? null,
+            }
+          : null,
+        contactos: contacts,
+        aiReport,
+        reportProfile,
+      };
+      prompt = profile === "tecnico" ? buildGammaTechnicalPrompt(ctx) : buildGammaCommercialPrompt(ctx);
+    }
 
     const { generationId } = await createGammaFromTemplate({ profile, prompt });
 
@@ -132,7 +207,21 @@ export async function POST(
       status: "pending",
     });
   } catch (e: any) {
-    console.error("[GAMMA] Error:", e?.message ?? e);
+    const responseText = e?.message ?? String(e);
+    const isGammaTimeoutOrServerError =
+      /cloudflare/i.test(responseText) ||
+      /error code:\s*524/i.test(responseText) ||
+      /<html/i.test(responseText);
+
+    if (isGammaTimeoutOrServerError) {
+      console.error("Gamma timeout or server error", responseText);
+      return NextResponse.json(
+        { ok: false, error: "Gamma tardó demasiado en responder. Intenta generar la presentación nuevamente." },
+        { status: 502 }
+      );
+    }
+
+    console.error("[GAMMA] Error:", responseText);
     return NextResponse.json(
       { ok: false, error: e?.message ?? "Error generando propuesta Gamma" },
       { status: 500 }

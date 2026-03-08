@@ -16,7 +16,7 @@ import Acciones from "@/components/acciones/Acciones";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
 import { usePermissions } from "@/lib/rbac/usePermissions";
 
@@ -519,6 +519,7 @@ idealmente como presentación en Gamma o como documento exportable.`,
 };
 
 import { getLeadFlowSteps, getCurrentFlowStep, type LeadFlowStep } from "@/lib/leads/leadFlow";
+import { buildProposalExportPayload } from "@/lib/leads/proposalExportPayload";
 
 function getVisibleLeadTabs(role: string | null): ReadonlyArray<(typeof LEAD_TABS)[number]> {
   const r = role?.trim().toLowerCase() ?? null;
@@ -673,12 +674,131 @@ export default function LeadDetailPage() {
     exportReady?: boolean;
   }>({});
 
+  /** Generación de documentos comerciales (Diagnóstico, Visión, Propuesta). */
+  const [commercialDocLoading, setCommercialDocLoading] = useState<"diagnostic" | "strategy" | "proposal" | null>(null);
+  const [commercialDocError, setCommercialDocError] = useState<string | null>(null);
+  /** URLs de documentos generados en esta sesión (persistido en sessionStorage por lead). */
+  const [commercialDocUrls, setCommercialDocUrls] = useState<{ diagnostic: string | null; strategy: string | null; proposal: string | null }>({
+    diagnostic: null,
+    strategy: null,
+    proposal: null,
+  });
+
   /** Pasos del flujo y paso actual (recalculan con lead, leadServices, proposal_confirmed_at, presentationSignals). */
   const flowSteps = useMemo(
     () => getLeadFlowSteps(lead ?? null, leadServices, presentationSignals),
     [lead, leadServices, presentationSignals]
   );
   const currentFlowStep = useMemo(() => getCurrentFlowStep(flowSteps), [flowSteps]);
+
+  /** Payload único de propuesta económica (fuente de verdad para PDF/Gamma/texto/vista cliente). */
+  const proposalExportPayload = useMemo(
+    () =>
+      buildProposalExportPayload({
+        lead: lead ?? null,
+        leadServices,
+        narrative: undefined,
+      }),
+    [lead, leadServices]
+  );
+
+  useEffect(() => {
+    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
+      console.log("[PROPOSAL PAYLOAD DEBUG]", proposalExportPayload);
+    }
+  }, [proposalExportPayload]);
+
+  const COMMERCIAL_DOCS_STORAGE_KEY = "lead_commercial_docs";
+
+  /** Cargar desde sessionStorage las URLs de documentos ya generados para este lead. */
+  useEffect(() => {
+    if (!id || typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null };
+        setCommercialDocUrls((prev) => ({
+          diagnostic: parsed.diagnostic ?? prev.diagnostic,
+          strategy: parsed.strategy ?? prev.strategy,
+          proposal: parsed.proposal ?? prev.proposal,
+        }));
+      }
+    } catch {
+      // ignorar
+    }
+  }, [id]);
+
+  /** Persistir URLs de documentos generados en sessionStorage. */
+  const persistCommercialDocUrl = useCallback(
+    (docType: "diagnostic" | "strategy" | "proposal", url: string) => {
+      if (!id) return;
+      setCommercialDocUrls((prev) => {
+        const next = { ...prev, [docType]: url };
+        try {
+          sessionStorage.setItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`, JSON.stringify(next));
+        } catch {
+          // ignorar
+        }
+        return next;
+      });
+    },
+    [id]
+  );
+
+  /** Generar documento comercial (Diagnóstico, Visión Estratégica o Propuesta) vía Gamma y abrir cuando esté listo. */
+  const generateCommercialDoc = useCallback(
+    async (docType: "diagnostic" | "strategy" | "proposal") => {
+      if (!id?.trim()) return;
+      setCommercialDocError(null);
+      setCommercialDocLoading(docType);
+      try {
+        const endpoint =
+          docType === "diagnostic"
+            ? `/api/admin/leads/${id}/gamma-diagnostic`
+            : docType === "strategy"
+              ? `/api/admin/leads/${id}/gamma-strategy`
+              : `/api/admin/leads/${id}/gamma-proposal`;
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: docType === "proposal" ? JSON.stringify({ profile: "comercial" }) : undefined,
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((json as { error?: string })?.error ?? "Error generando documento");
+        const generationId = (json as { generationId?: string })?.generationId ?? null;
+        if (!generationId) throw new Error("No se recibió generationId");
+        let completed = false;
+        for (let i = 0; i < 45; i++) {
+          const statusRes = await fetch(
+            `/api/admin/leads/${id}/gamma-proposal/status?generationId=${encodeURIComponent(generationId)}`
+          );
+          const statusJson = await statusRes.json().catch(() => ({}));
+          if (statusJson?.status === "completed") {
+            completed = true;
+            const url = statusJson?.pdfUrl ?? statusJson?.gammaUrl ?? null;
+            if (url) {
+              persistCommercialDocUrl(docType, url);
+              window.open(url, "_blank");
+            }
+            break;
+          }
+          if (statusJson?.status === "failed") throw new Error("Gamma no pudo completar el documento.");
+          await new Promise((r) => setTimeout(r, 4000));
+        }
+        if (!completed) setCommercialDocError("Gamma sigue procesando. Podés revisar el estado en unos minutos.");
+      } catch (e) {
+        setCommercialDocError(e instanceof Error ? e.message : "Error generando documento");
+      } finally {
+        setCommercialDocLoading(null);
+      }
+    },
+    [id, persistCommercialDocUrl]
+  );
+
+  const hasDiagnosticGenerated = Boolean(commercialDocUrls.diagnostic);
+  const hasStrategyGenerated = Boolean(commercialDocUrls.strategy);
+  const hasProposalGenerated = Boolean(commercialDocUrls.proposal);
+  const allDocsGenerated = hasDiagnosticGenerated && hasStrategyGenerated && hasProposalGenerated;
 
   // ✅ Usuario actual (app_user.id, comercial_id cuando la API lo exponga)
   const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
@@ -3174,30 +3294,200 @@ export default function LeadDetailPage() {
                   </div>
                 </div>
               </div>
-              {/* Agente IA (bloque comercial) */}
-              {allowedProfiles.includes("comercial") && (
-                <details id="ia-report-block" className="rounded-2xl border bg-white" open>
-                  <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
-                    IA — Informe
-                  </summary>
-                  <div className="px-4 pb-4">
-                    <AiLeadReport
-                      key={`ai-comercial-${leadIdSafe}`}
-                      leadId={leadIdSafe}
-                      lead={leadForAi as any}
-                      allowedProfiles={["comercial"]}
-                      initialProfile="comercial"
-                      onBeforeGenerate={async () => {
-                        await saveDraft();
-                      }}
-                      onPromptSaved={fetchLead}
-                      onPresentationSignalChange={(signals) =>
-                        setPresentationSignals((prev) => ({ ...prev, ...signals }))
-                      }
-                    />
+
+              {/* PROCESO COMERCIAL — pipeline visual tipo wizard */}
+              <div id="proceso-comercial" className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-xl font-semibold text-slate-900" title="Este flujo sigue el método de venta consultiva: diagnóstico del negocio, definición de estrategia y propuesta comercial.">Proceso comercial</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Este flujo genera los tres documentos clave del proceso consultivo: diagnóstico, estrategia y propuesta.
+                </p>
+                {commercialDocError && (
+                  <p className="mt-2 text-sm text-red-600 rounded-lg bg-red-50 border border-red-100 px-3 py-2">
+                    {commercialDocError}
+                  </p>
+                )}
+
+                {/* Progreso global */}
+                {(() => {
+                  const completed = [hasDiagnosticGenerated, hasStrategyGenerated, hasProposalGenerated].filter(Boolean).length;
+                  return (
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <span className="text-xs font-medium text-slate-600">
+                        Progreso del proceso: {completed} de 3 pasos generados
+                      </span>
+                      <div className="h-2 flex-1 min-w-[120px] max-w-[200px] rounded-full bg-slate-200 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                          style={{ width: `${(completed / 3) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Pipeline: [ Paso 1 ] —— [ Paso 2 ] —— [ Paso 3 ] */}
+                <div className="mt-6 flex flex-col sm:flex-row flex-wrap items-stretch gap-0 sm:gap-0 overflow-x-auto">
+                  {/* Paso 1 */}
+                  <div className="flex flex-1 min-w-[200px] sm:min-w-0 items-start">
+                    <div
+                      className={`w-full rounded-xl border-2 p-4 ${
+                        hasDiagnosticGenerated
+                          ? "border-emerald-200 bg-emerald-50/50"
+                          : "border-slate-200 bg-slate-50/50"
+                      }`}
+                    >
+                      <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 1</span>
+                      <h3 className="mt-2 text-sm font-semibold text-slate-900">🔍 Diagnóstico comercial</h3>
+                      <p className="mt-1 text-xs font-medium text-slate-600">
+                        {hasDiagnosticGenerated ? "✓ Generado" : "○ Pendiente"}
+                      </p>
+                      <button
+                        type="button"
+                        title="Genera un análisis consultivo del negocio del lead. Identifica problemas comerciales y oportunidades de crecimiento."
+                        onClick={() => generateCommercialDoc("diagnostic")}
+                        disabled={!id || commercialDocLoading !== null}
+                        className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {commercialDocLoading === "diagnostic" ? "Generando…" : "Generar Diagnóstico"}
+                      </button>
+                    </div>
                   </div>
-                </details>
-              )}
+                  <div className="hidden sm:block flex-shrink-0 w-6 self-center border-t-2 border-dashed border-slate-300" aria-hidden />
+                  {/* Paso 2 */}
+                  <div className="flex flex-1 min-w-[200px] sm:min-w-0 items-start">
+                    <div
+                      className={`w-full rounded-xl border-2 p-4 ${
+                        !hasDiagnosticGenerated
+                          ? "border-slate-100 bg-slate-100/80"
+                          : hasStrategyGenerated
+                            ? "border-emerald-200 bg-emerald-50/50"
+                            : "border-slate-200 bg-slate-50/50"
+                      }`}
+                    >
+                      <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 2</span>
+                      <h3 className="mt-2 text-sm font-semibold text-slate-900">🎯 Estrategia de crecimiento</h3>
+                      <p className="mt-1 text-xs font-medium">
+                        {!hasDiagnosticGenerated ? "🔒 Bloqueado" : hasStrategyGenerated ? "✓ Generado" : "○ Pendiente"}
+                      </p>
+                      <button
+                        type="button"
+                        title={hasDiagnosticGenerated ? "Define la arquitectura comercial recomendada: proceso de ventas, infraestructura digital y roadmap de crecimiento." : "Primero debes generar el diagnóstico comercial."}
+                        onClick={() => generateCommercialDoc("strategy")}
+                        disabled={!id || commercialDocLoading !== null || !hasDiagnosticGenerated}
+                        className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {commercialDocLoading === "strategy" ? "Generando…" : "Generar Visión Estratégica"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="hidden sm:block flex-shrink-0 w-6 self-center border-t-2 border-dashed border-slate-300" aria-hidden />
+                  {/* Paso 3 */}
+                  <div className="flex flex-1 min-w-[200px] sm:min-w-0 items-start">
+                    <div
+                      className={`w-full rounded-xl border-2 p-4 ${
+                        !hasStrategyGenerated
+                          ? "border-slate-100 bg-slate-100/80"
+                          : hasProposalGenerated
+                            ? "border-emerald-200 bg-emerald-50/50"
+                            : "border-blue-100 bg-white"
+                      }`}
+                    >
+                      <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 3</span>
+                      <h3 className="mt-2 text-sm font-semibold text-slate-900">📄 Propuesta para el cliente</h3>
+                      <p className="mt-1 text-xs font-medium">
+                        {!hasStrategyGenerated ? "🔒 Bloqueado" : hasProposalGenerated ? "✓ Generado" : "○ Pendiente"}
+                      </p>
+                      <button
+                        type="button"
+                        title={hasStrategyGenerated ? "Crea el documento final para presentar al cliente con servicios, inversión y condiciones de trabajo." : "Primero debes generar la visión estratégica."}
+                        onClick={() => generateCommercialDoc("proposal")}
+                        disabled={!id || commercialDocLoading !== null || !hasStrategyGenerated}
+                        className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {commercialDocLoading === "proposal" ? "Generando…" : "Generar Propuesta"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Herramientas por paso (colapsables debajo del pipeline) */}
+                <div className="mt-6 space-y-4">
+                  <details id="ia-report-block" className="rounded-lg border border-slate-200 bg-white">
+                    <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                      ▼ Herramientas del diagnóstico (Paso 1)
+                    </summary>
+                    <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+                      <p className="mb-3 text-xs text-slate-500">Informe IA por módulos, generación y regeneración del diagnóstico.</p>
+                      {allowedProfiles.includes("comercial") && (
+                        <AiLeadReport
+                          key={`ai-comercial-${leadIdSafe}`}
+                          leadId={leadIdSafe}
+                          lead={leadForAi as any}
+                          allowedProfiles={["comercial"]}
+                          initialProfile="comercial"
+                          onBeforeGenerate={async () => await saveDraft()}
+                          onPromptSaved={fetchLead}
+                          onPresentationSignalChange={(signals) => setPresentationSignals((prev) => ({ ...prev, ...signals }))}
+                        />
+                      )}
+                    </div>
+                  </details>
+                  <details className="rounded-lg border border-slate-200 bg-white">
+                    <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                      ▼ Herramientas de la estrategia (Paso 2)
+                    </summary>
+                    <div className="border-t border-slate-100 px-3 pb-3 pt-2">
+                      <p className="mb-2 text-xs text-slate-500">El documento de visión estratégica se genera con el botón de arriba.</p>
+                      {hasStrategyGenerated && commercialDocUrls.strategy && (
+                        <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                          Abrir documento generado
+                        </a>
+                      )}
+                    </div>
+                  </details>
+                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-xs font-medium text-slate-600 uppercase tracking-wide mb-2">Herramientas de la propuesta (Paso 3)</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
+                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
+                      )}
+                      {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
+                        <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">Material final generado</span>
+                      )}
+                    </div>
+                    {typeof process !== "undefined" && process.env.NODE_ENV === "development" && (
+                      <details className="mt-2 rounded-lg border border-slate-200 bg-slate-50/50 p-2 text-xs text-slate-600">
+                        <summary className="cursor-pointer font-medium">Preview payload (solo desarrollo)</summary>
+                        <div className="mt-2 space-y-1 pl-2">
+                          <p>Meses: {proposalExportPayload.monthlyTable?.months.length ?? 0}</p>
+                          <p>Total general: {proposalExportPayload.monthlyTable?.grandTotal?.toLocaleString("es-UY") ?? "—"}</p>
+                        </div>
+                      </details>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        Descargar PDF propuesta
+                      </button>
+                      <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        Copiar versión texto
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Presentar al cliente — CTA al final del pipeline */}
+                {allDocsGenerated && id && (
+                  <div className="mt-6 pt-4 border-t-2 border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <p className="text-sm text-slate-600">Los tres documentos están listos para presentar.</p>
+                    <Link
+                      href={`/admin/leads/${id}/presentacion`}
+                      className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+                    >
+                      Presentar al cliente
+                    </Link>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -3238,23 +3528,7 @@ export default function LeadDetailPage() {
 
           {activeTab === "consultor" && (
             <div className="mt-5 grid grid-cols-1 gap-6">
-              {/* Sección 1: Diagnóstico Estratégico del Lead */}
-              <div className="rounded-2xl border bg-white p-6">
-                <h2 className="text-lg font-semibold text-slate-900">Diagnóstico Estratégico del Lead</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  Resumen estratégico generado a partir del análisis IA del lead.
-                </p>
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-sm text-slate-700">
-                    Este diagnóstico se construye automáticamente a partir del informe IA del lead.
-                  </p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    Incluirá: investigación digital, FODA, oportunidades, posicionamiento y visión estratégica.
-                  </p>
-                </div>
-              </div>
-
-              {/* Sección 2: Manual de Neuroventas EASY */}
+              {/* Manual de Neuroventas EASY */}
               <div className="rounded-2xl border bg-white p-6">
                 <h2 className="text-lg font-semibold text-slate-900">Manual de Neuroventas EASY</h2>
                 <p className="mt-1 text-sm text-slate-600">
@@ -3274,79 +3548,69 @@ export default function LeadDetailPage() {
                 </div>
               </div>
 
-              {/* Sección 3: Cierre de propuesta — Generar material final para el cliente */}
-              <div id="proposal-export" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex flex-wrap items-center gap-2 mb-1">
-                  {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
-                  )}
-                  {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
-                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">Material final generado</span>
-                  )}
-                </div>
-                <h2 className="text-xl font-semibold text-slate-900 mt-2">Generar propuesta para el cliente</h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  La estructura económica ya fue confirmada. Ahora genera el material final para presentar o compartir con el cliente.
-                </p>
-
-                {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
-                  <p className="mt-3 text-sm text-slate-600 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-                    La propuesta ya cuenta con material final generado. Podés volver a generarlo si hiciste cambios recientes.
+              {/* Documentos de respaldo (análisis interno) */}
+              <div className="space-y-6">
+                {/* BLOQUE B — Informe comercial (respaldo analítico) */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-6">
+                  <h2 className="text-lg font-semibold text-slate-900">Informe comercial</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Documento de respaldo con análisis comercial, investigación digital, FODA, oportunidades, acciones y plan de avance.
                   </p>
-                )}
-
-                <div className="mt-5 space-y-4">
-                  <div>
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                      disabled={!id}
-                      className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Generar presentación Gamma
-                    </button>
-                    <p className="mt-2 text-xs text-slate-500 max-w-md">
-                      Usá la propuesta confirmada y la narrativa comercial para generar una presentación lista para cliente.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+                  <p className="mt-2 text-xs text-slate-500">
+                    Incluye: investigación digital, redes, posicionamiento, competencia, FODA, oportunidades, acciones 72h, plan 30–90 días.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
                       className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                     >
-                      Descargar PDF
+                      Descargar PDF informe comercial
                     </button>
                     <button
                       type="button"
                       onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
                       className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                     >
-                      Copiar versión texto
+                      Copiar informe comercial
                     </button>
                   </div>
                 </div>
 
-                <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                  <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Qué se usará para generar la propuesta</p>
-                  <ul className="mt-2 space-y-1 text-sm text-slate-600 list-disc list-inside">
-                    <li>Servicios confirmados de la propuesta mensual</li>
-                    <li>Narrativa comercial base</li>
-                    <li>Resumen económico</li>
-                    <li>Argumentos comerciales cargados</li>
-                  </ul>
-                  <p className="mt-3 text-xs text-slate-500">
-                    Si algo de esta base aún no está correcto, volvé a la propuesta comercial antes de exportar.
+                {/* BLOQUE C — Visión estratégica (documento ejecutivo complementario) */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-6">
+                  <h2 className="text-lg font-semibold text-slate-900">Visión estratégica</h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Documento ejecutivo complementario para presentar una lectura más global del negocio, sus oportunidades y la dirección estratégica recomendada.
                   </p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Incluye: lectura global, oportunidades de crecimiento, foco estratégico, riesgos, dirección recomendada.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Descargar PDF visión estratégica
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Copiar visión estratégica
+                    </button>
+                  </div>
                 </div>
 
-                <div className="mt-4">
+                <div>
                   <button
                     type="button"
-                    onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                    onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=proceso-comercial`)}
                     className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
-                    Volver a propuesta comercial
+                    Ir a proceso comercial (tab Comercial)
                   </button>
                 </div>
               </div>
