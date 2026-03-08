@@ -1005,7 +1005,7 @@ export default function LeadDetailPage() {
     const sub = getMonthSubtotal(items);
     const cur = getMonthCurrency(items);
     if (cur === null) return "Monedas mixtas";
-    if (!Number.isFinite(sub) || sub === 0 && items.every((r) => r.precio == null || r.precio === "")) return "—";
+    if (!Number.isFinite(sub) || (sub === 0 && items.every((r) => r.precio == null))) return "—";
     return formatMoney(cur, sub);
   }
 
@@ -1048,7 +1048,7 @@ export default function LeadDetailPage() {
     const sub = getPhaseSubtotal(items);
     const cur = getMonthCurrency(items);
     if (cur === null) return "Monedas mixtas";
-    if (!Number.isFinite(sub) || (sub === 0 && items.every((r) => r.precio == null || r.precio === ""))) return "—";
+    if (!Number.isFinite(sub) || (sub === 0 && items.every((r) => r.precio == null))) return "—";
     return formatMoney(cur, sub);
   }
 
