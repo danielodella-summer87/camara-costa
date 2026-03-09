@@ -927,7 +927,7 @@ export default function LeadDetailPage() {
   /** Paso 4 completado: estructura de servicios/table económica definida o confirmada. */
   const hasStructureReady = Boolean(
     (lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at ||
-    (leadServices?.length > 0 && proposalExportPayload?.monthlyTable?.rows?.length > 0)
+    ((leadServices?.length ?? 0) > 0 && ((proposalExportPayload?.monthlyTable?.rows?.length ?? 0) > 0))
   );
 
   /** Siguiente paso recomendado del pipeline comercial (1–6). */
