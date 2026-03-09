@@ -922,7 +922,8 @@ export default function LeadDetailPage() {
   const allDocsGenerated = hasDiagnosticGenerated && hasStrategyGenerated && hasProposalGenerated;
 
   /** Paso 1 completado: existe análisis interno IA (insumo del diagnóstico). */
-  const hasAnalysisInternal = Boolean(lead?.ai_report && String(lead.ai_report).trim().length > 0);
+  const aiReport = (lead as any)?.ai_report;
+  const hasAnalysisInternal = Boolean(aiReport && String(aiReport).trim().length > 0);
   /** Paso 4 completado: estructura de servicios/table económica definida o confirmada. */
   const hasStructureReady = Boolean(
     (lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at ||
@@ -1228,7 +1229,7 @@ export default function LeadDetailPage() {
     return formatMoney(cur, sub);
   }
 
-  /** Parsea lead.ai_report por bloques ### TAB:<moduleId> y devuelve Record<moduleId, contenido>. */
+  /** Parsea el informe IA del lead por bloques ### TAB:<moduleId> y devuelve Record<moduleId, contenido>. */
   function parseReportTabsLocal(report: string): Record<string, string> {
     const tabs: Record<string, string> = {};
     if (!report || !report.trim()) return tabs;
@@ -1251,7 +1252,7 @@ export default function LeadDetailPage() {
 
   /** Extrae texto estratégico desde ACCIONES, plan_crecimiento, OPORTUNIDADES, propuesta_easy para sugerencias. */
   function getStrategicSourceText(lead: Lead | null): { tabs: Record<string, string>; sourceText: string } {
-    const raw = (lead as { ai_report?: string | null } | undefined)?.ai_report;
+    const raw = (lead as any)?.ai_report;
     if (!raw || !String(raw).trim()) return { tabs: {}, sourceText: "" };
     const tabs = parseReportTabsLocal(String(raw));
     const order = ["ACCIONES", "plan_crecimiento", "OPORTUNIDADES", "propuesta_easy"];
@@ -1393,13 +1394,13 @@ export default function LeadDetailPage() {
     const webEmp = (emp as { web?: string | null } | undefined)?.web?.trim();
     const instaEmp = (emp as { instagram?: string | null } | undefined)?.instagram?.trim();
     const fbEmp = (emp as { facebook?: string | null } | undefined)?.facebook?.trim();
-    const aiReport = (lead as { ai_report?: string | null } | undefined)?.ai_report;
+    const aiReportRaw = (lead as any)?.ai_report;
     return {
       hasWebsite: !!(webLead || webEmp),
       hasInstagram: !!instaEmp,
       hasFacebook: !!fbEmp,
       hasLinkedin: !!(lead?.linkedin_empresa?.trim() || lead?.linkedin_director?.trim()),
-      hasAiReport: !!(typeof aiReport === "string" && aiReport.trim()),
+      hasAiReport: !!(typeof aiReportRaw === "string" && aiReportRaw.trim()),
       hasObjetivo: !!(lead?.objetivos?.trim()),
       hasAudiencia: !!(lead?.audiencia?.trim()),
       hasExistingProposal: items.length > 0,
