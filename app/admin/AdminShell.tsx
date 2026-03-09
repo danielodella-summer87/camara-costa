@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
+import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
 import UserMenu from "@/app/admin/components/UserMenu";
 import { usePersonalizacion } from "@/lib/personalizacion";
 import { resolveUILabel } from "@/lib/ui/labels";
+
+const SIDEBAR_STORAGE_KEY = "admin_sidebar_collapsed";
 
 type NavItem = { label: string; href: string };
 type RoleKey = "admin" | "operador" | "comercial" | "viewer";
@@ -134,17 +137,32 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   }, []);
 
   const filteredNav = useMemo(() => filterNavByRole(role, NAV), [role]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+
+  useEffect(() => {
+    const stored = typeof window !== "undefined" ? window.localStorage.getItem(SIDEBAR_STORAGE_KEY) : null;
+    if (stored !== null) setSidebarCollapsed(stored === "true");
+  }, []);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
+      return next;
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="flex min-h-screen">
-        {/* Sidebar */}
+        {/* Sidebar — colapsable en desktop */}
         <aside
           className={cx(
-            "w-64 bg-[#0b1220] text-white border-r border-white/10",
+            "bg-[#0b1220] text-white border-r border-white/10",
             "fixed md:static inset-y-0 left-0 z-40",
-            mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
-            "transition-transform duration-200"
+            "transition-[width,transform] duration-200 ease-out",
+            sidebarCollapsed ? "w-0 md:w-0 overflow-hidden" : "w-64",
+            mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
           )}
         >
           <div className="p-4 border-b border-white/10">
@@ -191,12 +209,30 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setMobileOpen(false)} />
         ) : null}
 
-        <div className="flex-1 md:ml-0">
+        <div className={cx("flex-1 flex flex-col min-w-0", sidebarCollapsed ? "md:ml-0" : "md:ml-0")}>
           <header className="sticky top-0 z-20 bg-white border-b">
             <div className="h-14 px-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <button className="md:hidden border rounded-lg px-3 py-2 text-sm" onClick={() => setMobileOpen((v) => !v)}>
+                <button
+                  type="button"
+                  className="md:hidden border rounded-lg px-3 py-2 text-sm"
+                  onClick={() => setMobileOpen((v) => !v)}
+                  aria-label="Abrir menú"
+                >
                   Menú
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleSidebar}
+                  className="hidden md:flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100"
+                  aria-label={sidebarCollapsed ? "Mostrar menú lateral" : "Ocultar menú lateral"}
+                  title={sidebarCollapsed ? "Mostrar menú" : "Ocultar menú"}
+                >
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="w-5 h-5" aria-hidden />
+                  ) : (
+                    <PanelLeftClose className="w-5 h-5" aria-hidden />
+                  )}
                 </button>
                 <div className="text-sm text-gray-500">
                   Admin / <span className="text-gray-900 font-medium">Dashboard</span>

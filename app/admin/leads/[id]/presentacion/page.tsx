@@ -2,50 +2,65 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-const STORAGE_KEY = "lead_commercial_docs";
-const DOC_LABELS = ["Diagnóstico Comercial", "Visión Estratégica", "Propuesta Comercial"] as const;
+const DOC_ORDER: ("diagnostic" | "strategy" | "proposal")[] = ["diagnostic", "strategy", "proposal"];
+const DOC_LABELS: Record<"diagnostic" | "strategy" | "proposal", string> = {
+  diagnostic: "Diagnóstico Comercial",
+  strategy: "Visión Estratégica",
+  proposal: "Propuesta Comercial",
+};
 
 type DocUrls = { diagnostic: string | null; strategy: string | null; proposal: string | null };
 
-function getUrlsForLead(leadId: string): DocUrls {
-  if (typeof window === "undefined") return { diagnostic: null, strategy: null, proposal: null };
-  try {
-    const raw = sessionStorage.getItem(`${STORAGE_KEY}_${leadId}`);
-    if (!raw) return { diagnostic: null, strategy: null, proposal: null };
-    const parsed = JSON.parse(raw) as DocUrls;
-    return {
-      diagnostic: parsed.diagnostic ?? null,
-      strategy: parsed.strategy ?? null,
-      proposal: parsed.proposal ?? null,
-    };
-  } catch {
-    return { diagnostic: null, strategy: null, proposal: null };
-  }
+/** Orden: diagnostic, strategy, proposal. Solo los que existan. */
+function orderedUrlsFromDocs(docs: DocUrls): string[] {
+  return DOC_ORDER.map((t) => docs[t]).filter(Boolean) as string[];
 }
 
-function getUrlAtOrder(urls: DocUrls, index: number): string | null {
-  if (index === 0) return urls.diagnostic;
-  if (index === 1) return urls.strategy;
-  return urls.proposal;
+function orderedTypesFromDocs(docs: DocUrls): ("diagnostic" | "strategy" | "proposal")[] {
+  return DOC_ORDER.filter((t) => docs[t]);
 }
 
 export default function LeadPresentacionPage() {
   const params = useParams();
   const id = typeof params?.id === "string" ? params.id : null;
   const [urls, setUrls] = useState<DocUrls>({ diagnostic: null, strategy: null, proposal: null });
+  const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  useEffect(() => {
-    if (!id) return;
-    setUrls(getUrlsForLead(id));
+  const loadDocuments = useCallback(() => {
+    if (!id?.trim()) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    fetch(`/api/admin/leads/${id}/documents`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data: { ok?: boolean; documents?: DocUrls }) => {
+        if (data?.ok && data.documents) {
+          setUrls({
+            diagnostic: data.documents.diagnostic ?? null,
+            strategy: data.documents.strategy ?? null,
+            proposal: data.documents.proposal ?? null,
+          });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [id]);
 
-  const orderedUrls = [urls.diagnostic, urls.strategy, urls.proposal].filter(Boolean) as string[];
+  useEffect(() => {
+    loadDocuments();
+  }, [loadDocuments]);
+
+  const orderedUrls = orderedUrlsFromDocs(urls);
+  const orderedTypes = orderedTypesFromDocs(urls);
   const hasAny = orderedUrls.length > 0;
-  const currentUrl = getUrlAtOrder(urls, currentIndex);
-  const canNext = currentIndex < 2 && getUrlAtOrder(urls, currentIndex + 1);
+  const currentUrl = orderedUrls[currentIndex] ?? null;
+  const currentType = orderedTypes[currentIndex];
+  const currentLabel = currentType ? DOC_LABELS[currentType] : "";
+  const canNext = currentIndex < orderedUrls.length - 1;
   const canPrev = currentIndex > 0;
 
   return (
@@ -63,7 +78,11 @@ export default function LeadPresentacionPage() {
           </div>
         </div>
 
-        {!hasAny ? (
+        {loading ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">
+            Cargando documentos…
+          </div>
+        ) : !hasAny ? (
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
             <p className="text-slate-600">
               No hay documentos generados para este lead. Generá los tres documentos (Diagnóstico, Visión Estratégica, Propuesta) desde el proceso comercial del lead.
@@ -79,17 +98,17 @@ export default function LeadPresentacionPage() {
           <>
             <div className="mb-2 flex items-center justify-between rounded-t-xl border border-b-0 border-slate-200 bg-white px-4 py-2">
               <span className="text-sm font-medium text-slate-700">
-                {DOC_LABELS[currentIndex]}
+                {currentLabel}
               </span>
               <span className="text-xs text-slate-500">
-                {currentIndex + 1} de 3
+                {currentIndex + 1} de {orderedUrls.length}
               </span>
             </div>
             <div className="overflow-hidden rounded-b-xl border border-slate-200 bg-white">
               {currentUrl ? (
                 <iframe
                   src={currentUrl}
-                  title={DOC_LABELS[currentIndex]}
+                  title={currentLabel}
                   className="h-[70vh] w-full min-h-[400px]"
                   sandbox="allow-same-origin allow-scripts allow-popups"
                 />
@@ -110,7 +129,7 @@ export default function LeadPresentacionPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setCurrentIndex((i) => (i < 2 ? i + 1 : i))}
+                onClick={() => setCurrentIndex((i) => Math.min(i + 1, orderedUrls.length - 1))}
                 disabled={!canNext}
                 className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50 disabled:cursor-not-allowed"
               >

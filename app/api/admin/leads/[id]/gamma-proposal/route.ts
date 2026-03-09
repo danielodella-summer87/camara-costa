@@ -193,21 +193,34 @@ export async function POST(
       prompt = profile === "tecnico" ? buildGammaTechnicalPrompt(ctx) : buildGammaCommercialPrompt(ctx);
     }
 
-    const { generationId } = await createGammaFromTemplate({ profile, prompt });
-
+    const data = await createGammaFromTemplate({ profile, prompt });
+    const generationId =
+      (data && typeof data === "object" && (data.generationId ?? (data as { id?: string; generation_id?: string }).id ?? (data as { id?: string; generation_id?: string }).generation_id)) ?? null;
+    if (!generationId || typeof generationId !== "string") {
+      console.error("[GAMMA proposal] Respuesta sin generationId", data);
+      return NextResponse.json(
+        { ok: false, error: "No se pudo iniciar la generación del documento." },
+        { status: 502 }
+      );
+    }
     if (process.env.NODE_ENV !== "production") {
       const templateId = profile === "comercial" ? "g_eei2ys2xo99qpqa" : "g_bsbasmgzmqqryc1";
       console.log("[GAMMA create]", { profile, templateId, generationId });
     }
-
     return NextResponse.json({
       ok: true,
-      profile,
       generationId,
       status: "pending",
     });
   } catch (e: any) {
     const responseText = e?.message ?? String(e);
+    if (/GAMMA_API_KEY/i.test(responseText)) {
+      console.error("[GAMMA] Configuración faltante:", responseText);
+      return NextResponse.json(
+        { ok: false, error: "El servicio de presentaciones no está disponible. Contacte al administrador del sistema." },
+        { status: 503 }
+      );
+    }
     const isGammaTimeoutOrServerError =
       /cloudflare/i.test(responseText) ||
       /error code:\s*524/i.test(responseText) ||

@@ -88,16 +88,30 @@ export async function POST(
       console.log("[COMMERCIAL DOC] prompt length:", prompt.length);
     }
 
-    const { generationId } = await createGammaFromTemplate({ profile: "comercial", prompt });
-
+    const data = await createGammaFromTemplate({ profile: "comercial", prompt });
+    const generationId =
+      (data && typeof data === "object" && (data.generationId ?? (data as { id?: string; generation_id?: string }).id ?? (data as { id?: string; generation_id?: string }).generation_id)) ?? null;
+    if (!generationId || typeof generationId !== "string") {
+      console.error("[GAMMA strategy] Respuesta sin generationId", data);
+      return NextResponse.json(
+        { ok: false, error: "No se pudo iniciar la generación del documento." },
+        { status: 502 }
+      );
+    }
     return NextResponse.json({
       ok: true,
-      docType: "strategy",
       generationId,
       status: "pending",
     });
   } catch (e: any) {
     const responseText = e?.message ?? String(e);
+    if (/GAMMA_API_KEY/i.test(responseText)) {
+      console.error("[GAMMA strategy] Configuración faltante:", responseText);
+      return NextResponse.json(
+        { ok: false, error: "El servicio de presentaciones no está disponible. Contacte al administrador del sistema." },
+        { status: 503 }
+      );
+    }
     const isGammaTimeoutOrServerError =
       /cloudflare/i.test(responseText) ||
       /error code:\s*524/i.test(responseText) ||

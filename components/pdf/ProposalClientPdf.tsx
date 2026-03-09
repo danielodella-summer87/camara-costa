@@ -8,6 +8,7 @@ import React from "react";
 import path from "path";
 import { Document, Page, Text, View, Link, StyleSheet, Font } from "@react-pdf/renderer";
 import type { ProposalExportPayload } from "@/lib/leads/proposalExportPayload";
+import { MEETING_BOOKING_URL } from "@/lib/leads/proposalExportPayload";
 
 const fontDir = path.join(process.cwd(), "public", "fonts");
 Font.register({
@@ -75,7 +76,6 @@ const SERVICIOS_INCLUIDOS = {
   },
 } as const;
 
-const MEETING_BOOKING_URL = "https://easydigitalagency.com/uruguay-2/";
 const MEETING_LOCATION_LINES = ["World Trade Center Torre 4", "Piso 40", "Montevideo, Uruguay"];
 
 type Props = { payload: ProposalExportPayload; generatedAt?: string };
@@ -208,7 +208,7 @@ export default function ProposalClientPdf({ payload, generatedAt }: Props) {
         <Text style={styles.contactLine}>+598 94 735 020</Text>
         <Text style={[styles.contactLine, styles.contactLabel]}>Reunámonos</Text>
         <Text style={styles.contactLine}>Podemos revisar esta propuesta juntos en una reunión breve.</Text>
-        <Link src={MEETING_BOOKING_URL} style={[styles.contactLine, styles.link]}>
+        <Link src={payload.contact?.meeting?.bookingUrl ?? MEETING_BOOKING_URL} style={[styles.contactLine, styles.link]}>
           Agendar Reunión con EASY
         </Link>
         <Text style={[styles.contactLine, styles.contactLabel]}>Lugar de reuniones</Text>

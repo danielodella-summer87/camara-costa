@@ -86,9 +86,12 @@ export type ProposalExportPayload = {
   contact: ProposalExportContact;
 };
 
+/** URL única para agendar reunión con EASY (CTA principal en propuesta y PDF). */
+export const MEETING_BOOKING_URL = "https://easydigitalagency.com/uruguay-2/";
+
 const DEFAULT_MEETING: ProposalExportMeeting = {
-  label: "Reunámonos",
-  bookingUrl: "https://easydigitalagency.com/uruguay-2/",
+  label: "Agendar Reunión con EASY",
+  bookingUrl: MEETING_BOOKING_URL,
   location: "World Trade Center Torre 4, piso 40, Montevideo, Uruguay",
 };
 
@@ -380,8 +383,8 @@ export const PROPOSAL_CLIENT_ACTIONS = {
   meetingRequestText:
     "Hola, me gustaría agendar una reunión breve para revisar la propuesta comercial que me enviaron. ¿Qué horarios tienen disponibles?",
   meeting: {
-    label: "Reunámonos",
-    bookingUrl: "https://easydigitalagency.com/uruguay-2/",
+    label: "Agendar Reunión con EASY",
+    bookingUrl: MEETING_BOOKING_URL,
     location: "World Trade Center Torre 4, piso 40, Montevideo, Uruguay",
     supportText: "Podemos revisar esta propuesta juntos en una reunión breve.",
   },

@@ -50,7 +50,15 @@ export async function GET(
       ...(process.env.NODE_ENV !== "production" ? { raw: gamma } : {}),
     });
   } catch (e: any) {
-    console.error("[GAMMA status] Error:", e?.message ?? e);
+    const responseText = e?.message ?? String(e);
+    if (/GAMMA_API_KEY/i.test(responseText)) {
+      console.error("[GAMMA status] Configuración faltante:", responseText);
+      return NextResponse.json(
+        { ok: false, error: "El servicio de presentaciones no está disponible. Contacte al administrador del sistema." },
+        { status: 503 }
+      );
+    }
+    console.error("[GAMMA status] Error:", responseText);
     return NextResponse.json(
       { ok: false, error: e?.message ?? "Error consultando estado Gamma" },
       { status: 500 }

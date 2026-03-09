@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { pdf } from "@react-pdf/renderer";
 import LeadReportPdf from "@/components/pdf/LeadReportPdf";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
@@ -357,6 +358,10 @@ export function AiLeadReport({
   allowedProfiles = ["comercial", "tecnico"],
   initialProfile,
   onPresentationSignalChange,
+  titleLabel,
+  subtitleLabel,
+  buttonHelperText,
+  buttonTooltipContent,
 }: {
   leadId: string;
   lead?: LeadMini | null;
@@ -370,6 +375,14 @@ export function AiLeadReport({
     lastGeneratedPdf?: boolean;
     exportReady?: boolean;
   }) => void;
+  /** Cuando se usa en el tab Comercial: título del bloque (ej. "Análisis interno del lead (IA)") */
+  titleLabel?: string;
+  /** Subtítulo explicativo del bloque */
+  subtitleLabel?: string;
+  /** Texto breve debajo del botón principal de generación */
+  buttonHelperText?: string;
+  /** Contenido del tooltip al pasar el mouse sobre el botón de generación comercial */
+  buttonTooltipContent?: string;
 }) {
   const canUseCommercial = allowedProfiles.includes("comercial");
   const canUseTechnical = allowedProfiles.includes("tecnico");
@@ -1263,9 +1276,11 @@ export function AiLeadReport({
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-900">Agente IA · Informe del Lead</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {titleLabel ?? "Agente IA · Informe del Lead"}
+          </div>
           <div className="mt-1 text-xs text-slate-500">
-            Genera informe técnico de oportunidades con análisis estratégico.
+            {subtitleLabel ?? "Genera informe técnico de oportunidades con análisis estratégico."}
           </div>
         </div>
 
@@ -1275,28 +1290,62 @@ export function AiLeadReport({
             <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 1 — Generación</div>
             <div className="flex flex-wrap gap-2">
               {canUseCommercial && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReportProfile("comercial");
-                    runFullAiGeneration();
-                  }}
-                  disabled={aiLoading}
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    aiLoading
-                      ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
-                      : "bg-blue-600 text-white hover:bg-blue-700"
-                  }`}
-                >
-                  {aiLoading ? (
-                    <span className="inline-flex items-center gap-2">
-                      <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
-                      Generando...
-                    </span>
+                <div className="flex flex-col items-start">
+                  {buttonTooltipContent ? (
+                    <Tooltip content={buttonTooltipContent} maxWidth="320px">
+                      <span className="inline-block">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReportProfile("comercial");
+                            runFullAiGeneration();
+                          }}
+                          disabled={aiLoading}
+                          className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                            aiLoading
+                              ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
+                              : "bg-blue-600 text-white hover:bg-blue-700"
+                          }`}
+                        >
+                          {aiLoading ? (
+                            <span className="inline-flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
+                              Generando...
+                            </span>
+                          ) : (
+                            "Generar Análisis Comercial"
+                          )}
+                        </button>
+                      </span>
+                    </Tooltip>
                   ) : (
-                    "Generar Análisis Comercial"
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReportProfile("comercial");
+                        runFullAiGeneration();
+                      }}
+                      disabled={aiLoading}
+                      className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        aiLoading
+                          ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
+                          : "bg-blue-600 text-white hover:bg-blue-700"
+                      }`}
+                    >
+                      {aiLoading ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
+                          Generando...
+                        </span>
+                      ) : (
+                        "Generar Análisis Comercial"
+                      )}
+                    </button>
                   )}
-                </button>
+                  {buttonHelperText && (
+                    <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>
+                  )}
+                </div>
               )}
               {canUseTechnical && (
                 <button
