@@ -829,6 +829,36 @@ export default function AgendaPage() {
 
   return (
     <PageContainer>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Agenda</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Acciones pendientes de leads y socios (últimos 30 días + próximos 14 días)
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/admin/dashboard"
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Dashboard comercial
+          </Link>
+          <Link
+            href="/admin/leads"
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Leads
+          </Link>
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:opacity-95"
+          >
+            + Agregar actividad
+          </button>
+        </div>
+      </div>
+
       <div className="mb-3 flex gap-2">
         {comerciales.map((c) => (
           <button
@@ -880,22 +910,6 @@ export default function AgendaPage() {
             </div>
           ))}
         </div>
-      </div>
-
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Agenda</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Acciones pendientes de leads y socios (últimos 30 días + próximos 14 días)
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShowCreateModal(true)}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:opacity-95"
-        >
-          + Agregar actividad
-        </button>
       </div>
 
       {/* Modal crear/editar actividad */}

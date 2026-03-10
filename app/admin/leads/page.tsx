@@ -672,9 +672,9 @@ export default function LeadsPage() {
       <div className="rounded-2xl border bg-white p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Leads</h1>
+            <h1 className="text-2xl font-semibold text-slate-900">Gestión operativa</h1>
             <p className="mt-2 text-sm text-zinc-600">
-              Captura, origen, pipeline, notas y seguimiento. (A = texto)
+              Leads: captura, origen, pipeline, notas y seguimiento.
             </p>
             {empresaIdFromUrl && (
               <p className="mt-1 text-sm text-slate-600">
@@ -866,6 +866,9 @@ export default function LeadsPage() {
                   <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">
                     Siguiente paso
                   </th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-amber-700">
+                    Pipeline (DEBUG)
+                  </th>
                   <th className="w-20 px-3 py-2 text-right text-xs font-semibold text-slate-600">
                     Acciones
                   </th>
@@ -991,6 +994,9 @@ export default function LeadsPage() {
                       ) : (
                         <span className="text-green-700 font-medium">✓ Flujo completo</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2 align-top text-xs font-mono text-amber-800 bg-amber-50/50 rounded px-2 py-1" title="Campo pipeline (mismo que Kanban)">
+                      {l.pipeline ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-right align-top">
                       <Link

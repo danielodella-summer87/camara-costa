@@ -38,20 +38,24 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     }
 
     // Intento principal: tabla "leads" con join a empresas
+    const selectLead =
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+
     const q1 = await sb
       .from("leads")
-      .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
-      )
+      .select(selectLead)
       .eq("id", id)
       .maybeSingle();
 
     if (!q1.error && q1.data) {
-      const row = q1.data;
+      const row = q1.data as any;
+      const comercial = Array.isArray(row.comerciales) ? row.comerciales[0] ?? null : row.comerciales ?? null;
       return NextResponse.json(
         {
           data: {
             ...row,
+            comerciales: undefined,
+            comercial,
             linkedin_empresa: row.linkedin_empresa ?? null,
             linkedin_director: row.linkedin_director ?? null,
             meet_url: row.meet_url ?? null,
@@ -64,11 +68,11 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
 
     // Si no existe la tabla o falla por esquema: fallback suave a "lead"
     // (por si el proyecto tiene naming diferente)
+    const selectLeadFallback =
+      "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
     const q2 = await sb
       .from("lead")
-      .select(
-        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))"
-      )
+      .select(selectLeadFallback)
       .eq("id", id)
       .maybeSingle();
 
@@ -82,11 +86,12 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ data: null, error: "Lead no encontrado" } satisfies ApiResp<null>, { status: 404 });
     }
 
-    const row = q2.data;
+    const row = q2.data as any;
     return NextResponse.json(
       {
         data: {
           ...row,
+          comercial: null,
           linkedin_empresa: row.linkedin_empresa ?? null,
           linkedin_director: row.linkedin_director ?? null,
           meet_url: row.meet_url ?? null,

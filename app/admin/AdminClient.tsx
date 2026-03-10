@@ -45,9 +45,9 @@ export default function AdminClient() {
         <div className="rounded-2xl border bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+              <h1 className="text-2xl font-semibold text-slate-900">Centro de control rápido</h1>
               <p className="mt-1 text-sm text-slate-600">
-                Vista por roles (tabs) + KPIs ejecutivos. Área:{" "}
+                Resumen comercial. Área:{" "}
                 <span className="font-semibold">{areaLabel}</span>
               </p>
 
@@ -57,6 +57,18 @@ export default function AdminClient() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/admin/agenda"
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+              >
+                Ver Agenda
+              </Link>
+              <Link
+                href="/admin/dashboard"
+                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+              >
+                Dashboard comercial
+              </Link>
               <Link
                 href="/admin/leads"
                 className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"

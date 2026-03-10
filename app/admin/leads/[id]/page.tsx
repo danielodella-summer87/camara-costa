@@ -17,6 +17,8 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import Acciones from "@/components/acciones/Acciones";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { List, LayoutGrid, FileText } from "lucide-react";
+import { useSetBreadcrumbSegment } from "@/app/admin/context/BreadcrumbContext";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
@@ -78,6 +80,7 @@ type Lead = {
   empresa_id?: string | null;
   empresas?: Empresa | null;
   comercial_id?: string | null;
+  comercial?: { id: string; nombre: string } | null;
   score?: number | null;
   score_categoria?: string | null;
   proposal_draft_json?: string | null;
@@ -569,6 +572,7 @@ function getNextStepDisplay(
 
 import { getLeadFlowSteps, getCurrentFlowStep, getLeadFlowSignals, LEAD_FLOW_STEP_IDS, type LeadFlowStep } from "@/lib/leads/leadFlow";
 import { buildProposalExportPayload } from "@/lib/leads/proposalExportPayload";
+import { getLeadHealth } from "@/lib/crm/leadHealth";
 
 function getVisibleLeadTabs(role: string | null): ReadonlyArray<(typeof LEAD_TABS)[number]> {
   const r = role?.trim().toLowerCase() ?? null;
@@ -2620,181 +2624,260 @@ export default function LeadDetailPage() {
   const instagramEffective = (lead?.empresas?.instagram ?? "").trim() || "";
   const hasEntidad = Boolean(lead?.empresa_id || lead?.empresas?.id);
 
+  /** Lead Health Score (semáforo comercial) centralizado. */
+  const leadHealth = useMemo(() => getLeadHealth(lead ?? null), [lead]);
+
+  const setBreadcrumbSegment = useSetBreadcrumbSegment();
+  useEffect(() => {
+    if (!setBreadcrumbSegment) return;
+    setBreadcrumbSegment(lead?.nombre?.trim() || "Detalle");
+  }, [lead?.nombre, setBreadcrumbSegment]);
+
+  /** Fecha "Activo desde" (created_at) formateada. */
+  const activeFromLabel = useMemo(() => {
+    const iso = lead?.created_at ?? lead?.updated_at;
+    if (!iso) return "Fecha no disponible";
+    try {
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "Fecha no disponible";
+      const days = Math.floor((Date.now() - d.getTime()) / (24 * 60 * 60 * 1000));
+      const dateStr = d.toLocaleDateString("es-UY", { day: "2-digit", month: "2-digit", year: "numeric" });
+      return days <= 0 ? dateStr : `${dateStr} · ${days} días`;
+    } catch {
+      return "Fecha no disponible";
+    }
+  }, [lead?.created_at, lead?.updated_at]);
+
+  const vendedorLabel = lead?.comercial?.nombre?.trim() ? lead.comercial.nombre : "Sin asignar";
+
   return (
     <PageContainer>
       <div className="mx-auto w-full max-w-7xl space-y-6">
-        <div className="rounded-2xl border bg-white p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
-                  {lead?.origen === "Desde entidad" && (
-                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">
-                      Desde Iniciativa
-                    </span>
-                  )}
-                </div>
-                {lead?.is_member && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-                    {labels.memberSingular}
-                    {lead.member_since && (
-                      <span className="text-emerald-600">
-                        desde {new Date(lead.member_since).toLocaleDateString("es-UY", { year: "numeric", month: "short", day: "numeric" })}
-                      </span>
-                    )}
+        <div className="rounded-2xl border bg-white p-6 sm:p-8">
+          {/* FILA 1 — Nombre del lead + línea secundaria (vendedor, activo desde, semáforo) */}
+          <div className="mb-6">
+            <h1 className="text-2xl font-semibold text-slate-900 break-words pr-4">{title}</h1>
+            {lead?.is_member && (
+              <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                {labels.memberSingular}
+                {lead.member_since && (
+                  <span className="text-emerald-600">
+                    desde {new Date(lead.member_since).toLocaleDateString("es-UY", { year: "numeric", month: "short", day: "numeric" })}
                   </span>
                 )}
-              </div>
-              <p className="mt-1 text-sm text-slate-600">
-                Detalle, edición e informe IA.
-              </p>
-
-              <div className="mt-3 inline-flex overflow-hidden rounded-xl border bg-white">
-                <Link
-                  href="/admin/leads"
-                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
-                >
-                  Lista
-                </Link>
-                <Link
-                  href="/admin/leads/kanban"
-                  className="px-3 py-1.5 text-xs hover:bg-slate-50 text-slate-700"
-                >
-                  Kanban
-                </Link>
-                <span className="px-3 py-1.5 text-xs font-semibold bg-slate-100 text-slate-900">
-                  Ficha
+              </span>
+            )}
+            {/* Línea secundaria: vendedor, activo desde, estado del proceso */}
+            {lead && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-slate-600">
+                <span>
+                  <span className="font-medium text-slate-500">Vendedor:</span>{" "}
+                  {vendedorLabel}
                 </span>
+                <span>
+                  <span className="font-medium text-slate-500">Activo desde:</span>{" "}
+                  {activeFromLabel}
+                </span>
+                {leadHealth && (
+                  <Tooltip
+                    content={`${leadHealth.label}: ${leadHealth.reasons.join(". ")}`}
+                    maxWidth={280}
+                  >
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-0.5 text-xs font-semibold ${
+                        leadHealth.color === "green"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : leadHealth.color === "yellow"
+                            ? "border-amber-200 bg-amber-50 text-amber-800"
+                            : "border-red-200 bg-red-50 text-red-700"
+                      }`}
+                    >
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${
+                          leadHealth.color === "green"
+                            ? "bg-emerald-500"
+                            : leadHealth.color === "yellow"
+                              ? "bg-amber-500"
+                              : "bg-red-500"
+                        }`}
+                        aria-hidden
+                      />
+                      {leadHealth.label}
+                    </span>
+                  </Tooltip>
+                )}
               </div>
-            </div>
+            )}
+          </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={fetchLead}
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                disabled={disabled}
-              >
-                Refrescar
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  if (id) {
-                    setDocsOpen(true);
-                  }
-                }}
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                disabled={disabled || !id}
-                title="Documentación PDF del lead"
-              >
-                Documentación
-              </button>
-
-              <button
-                type="button"
-                disabled
-                className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-400 cursor-not-allowed"
-                title="Meet Asistido (en pausa)"
-              >
-                Meet Asistido
-              </button>
-
-              <button
-                type="button"
-                onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
-                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                disabled={disabled || !id}
-                title={leadServices?.length || (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json ? "Abrir propuesta comercial del lead" : "Abre el constructor de propuesta comercial del lead"}
-              >
-                Propuesta comercial
-              </button>
-
-              {visibleTabIds.includes("contactos") && (
+          {/* FILA 2 — Botonera completa */}
+          <div className="flex flex-wrap items-center gap-3 lg:gap-4">
+              {/* Grupo 1 — Acciones operativas frecuentes */}
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setActiveTab("contactos")}
-                  className={`rounded-xl border px-4 py-2 text-sm font-medium disabled:opacity-50 ${activeTab === "contactos" ? "border-slate-400 bg-slate-100 text-slate-900" : "hover:bg-slate-50"}`}
-                  disabled={disabled || !lead}
-                  title="Ver y gestionar contactos del lead"
+                  onClick={fetchLead}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                  disabled={disabled}
                 >
-                  Contactos
+                  Refrescar
                 </button>
-              )}
-              {visibleTabIds.includes("acciones") && (
                 <button
                   type="button"
-                  onClick={() => setActiveTab("acciones")}
-                  className={`rounded-xl border px-4 py-2 text-sm font-medium disabled:opacity-50 ${activeTab === "acciones" ? "border-slate-400 bg-slate-100 text-slate-900" : "hover:bg-slate-50"}`}
-                  disabled={disabled || !lead}
-                  title="Ver acciones y seguimiento del lead"
+                  onClick={() => id && setDocsOpen(true)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                  disabled={disabled || !id}
+                  title="Documentación PDF del lead"
                 >
-                  Acciones
+                  Documentación
                 </button>
-              )}
-
-              {!lead?.is_member && (
                 <button
                   type="button"
-                  onClick={convertToMember}
-                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                  disabled={disabled || !lead}
-                  title={`Convertir este lead en ${labels.memberSingular.toLowerCase()}`}
+                  disabled
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-400 cursor-not-allowed"
+                  title="Meet Asistido (en pausa)"
                 >
-                  Convertir en {labels.memberSingular.toLowerCase()}
+                  Meet Asistido
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                  className="rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition"
+                  disabled={disabled || !id}
+                  title={leadServices?.length || (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json ? "Abrir propuesta comercial del lead" : "Abre el constructor de propuesta comercial del lead"}
+                >
+                  Propuesta comercial
+                </button>
+              </div>
 
-              {!editing ? (
-                canEditLead && (
+              {/* Divider sutil entre grupos */}
+              <div className="hidden sm:block w-px self-stretch min-h-[32px] bg-slate-200" aria-hidden />
+
+              {/* Grupo 2 — Accesos transversales */}
+              <div className="flex flex-wrap items-center gap-2">
+                {visibleTabIds.includes("contactos") && (
                   <button
                     type="button"
-                    onClick={startEdit}
-                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    onClick={() => setActiveTab("contactos")}
+                    className={`rounded-xl border px-4 py-2 text-sm font-medium transition disabled:opacity-50 ${activeTab === "contactos" ? "border-slate-300 bg-slate-100 text-slate-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
                     disabled={disabled || !lead}
+                    title="Ver y gestionar contactos del lead"
                   >
-                    Editar
+                    Contactos
                   </button>
-                )
-              ) : (
-                <>
+                )}
+                {visibleTabIds.includes("acciones") && (
                   <button
                     type="button"
-                    onClick={cancelEdit}
-                    className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                    disabled={disabled}
+                    onClick={() => setActiveTab("acciones")}
+                    className={`rounded-xl border px-4 py-2 text-sm font-medium transition disabled:opacity-50 ${activeTab === "acciones" ? "border-slate-300 bg-slate-100 text-slate-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
+                    disabled={disabled || !lead}
+                    title="Ver acciones y seguimiento del lead"
                   >
-                    Cancelar
+                    Acciones
                   </button>
-                  {canEditLead && (
+                )}
+              </div>
+
+              {/* Divider sutil */}
+              <div className="hidden sm:block w-px self-stretch min-h-[32px] bg-slate-200" aria-hidden />
+
+              {/* Grupo 3 — Gestión del lead */}
+              <div className="flex flex-wrap items-center gap-2">
+                {!lead?.is_member && (
+                  <button
+                    type="button"
+                    onClick={convertToMember}
+                    className="rounded-xl border-2 border-emerald-500 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 hover:border-emerald-600 disabled:opacity-50 transition"
+                    disabled={disabled || !lead}
+                    title={`Convertir este lead en ${labels.memberSingular.toLowerCase()}`}
+                  >
+                    Convertir en {labels.memberSingular.toLowerCase()}
+                  </button>
+                )}
+                {!editing ? (
+                  canEditLead && (
                     <button
                       type="button"
-                      onClick={saveEdit}
-                      className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                      onClick={startEdit}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                      disabled={disabled || !lead}
+                    >
+                      Editar
+                    </button>
+                  )
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
                       disabled={disabled}
                     >
-                      Guardar
+                      Cancelar
                     </button>
-                  )}
-                </>
-              )}
-
-              {canDeleteThisLead && (
-                <button
-                  type="button"
-                  onClick={deleteLead}
-                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-50"
-                  disabled={disabled || !lead}
-                  title="Eliminar lead"
-                >
-                  Eliminar
-                </button>
-              )}
+                    {canEditLead && (
+                      <button
+                        type="button"
+                        onClick={saveEdit}
+                        className="rounded-xl border border-slate-300 bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 transition"
+                        disabled={disabled}
+                      >
+                        Guardar
+                      </button>
+                    )}
+                  </>
+                )}
+                {canDeleteThisLead && (
+                  <button
+                    type="button"
+                    onClick={deleteLead}
+                    className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 transition"
+                    disabled={disabled || !lead}
+                    title="Eliminar lead"
+                  >
+                    Eliminar
+                  </button>
+                )}
+              </div>
             </div>
+
+          {/* FILA 3 — Selector de vista: Lista / Kanban / Ficha */}
+          <div className="mt-6 pt-4 border-t border-slate-100">
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Vista de leads</p>
+            <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50/80 p-1 shadow-sm">
+              <Link
+                href="/admin/leads"
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-white hover:text-slate-900 hover:shadow transition"
+                title="Ver todos los leads en lista"
+              >
+                <List className="w-4 h-4 shrink-0" aria-hidden />
+                Lista
+              </Link>
+              <Link
+                href="/admin/leads/kanban"
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-white hover:text-slate-900 hover:shadow transition"
+                title="Ver leads en tablero Kanban"
+              >
+                <LayoutGrid className="w-4 h-4 shrink-0" aria-hidden />
+                Kanban
+              </Link>
+              <span
+                className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 shadow border border-slate-200"
+                title="Vista ficha del lead actual"
+              >
+                <FileText className="w-4 h-4 shrink-0 text-slate-600" aria-hidden />
+                Ficha
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              <Link href="/admin/dashboard" className="text-slate-600 hover:text-slate-900 underline">
+                Ver Dashboard Comercial
+              </Link>
+            </p>
           </div>
+        </div>
 
           {notice && (
             <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
@@ -4773,7 +4856,6 @@ export default function LeadDetailPage() {
               No se encontró el lead.
             </div>
           )}
-        </div>
 
         <LeadDocsModal
           open={docsOpen}

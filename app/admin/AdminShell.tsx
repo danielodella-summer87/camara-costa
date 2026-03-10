@@ -7,6 +7,7 @@ import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
 import UserMenu from "@/app/admin/components/UserMenu";
 import { usePersonalizacion } from "@/lib/personalizacion";
 import { resolveUILabel } from "@/lib/ui/labels";
+import { BreadcrumbContext } from "@/app/admin/context/BreadcrumbContext";
 
 const SIDEBAR_STORAGE_KEY = "admin_sidebar_collapsed";
 
@@ -21,8 +22,8 @@ type MeResponse = {
 };
 
 const NAV: NavItem[] = [
-  { label: "Dashboard", href: "/admin" },
-  { label: "Iniciativas", href: "/admin/empresas" },
+  { label: "Centro de control", href: "/admin" },
+  { label: "Dashboard comercial", href: "/admin/dashboard" },
   { label: "Leads", href: "/admin/leads" },
   { label: "socios", href: "/admin/socios" },
   { label: "Agenda", href: "/admin/agenda" },
@@ -44,7 +45,43 @@ function cx(...classes: Array<false | null | string | undefined>) {
 function isActive(pathname: string | null, href: string) {
   if (!pathname) return false;
   if (href === "/admin") return pathname === "/admin";
+  if (href === "/admin/dashboard") return pathname === "/admin/dashboard";
   return pathname.startsWith(href);
+}
+
+/** Partes del breadcrumb: [ "Admin", "Leads", "Nombre del lead" ]. */
+function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string | null): string[] {
+  if (!pathname || !pathname.startsWith("/admin")) return ["Admin", "Dashboard"];
+
+  const segments = pathname.replace(/^\/admin\/?/, "").split("/").filter(Boolean);
+
+  if (pathname === "/admin") return ["Admin", "Centro de control rápido"];
+  if (pathname === "/admin/dashboard") return ["Admin", "Dashboard comercial completo"];
+
+  if (pathname.startsWith("/admin/leads/") && segments[0] === "leads" && segments[1] === "kanban")
+    return ["Admin", "Leads", "Pipeline visual"];
+  if (pathname.startsWith("/admin/leads/") && segments[0] === "leads" && segments.length >= 2) {
+    const last = breadcrumbSegment?.trim() || "Detalle";
+    return ["Admin", "Leads", last];
+  }
+  if (pathname.startsWith("/admin/leads")) return ["Admin", "Leads", "Gestión operativa"];
+
+  const labelMap: Record<string, string> = {
+    empresas: "Iniciativas",
+    socios: "Socios",
+    agenda: "Agenda",
+    reuniones: "Reuniones",
+    operaciones: "Operaciones",
+    reportes: "Reportes",
+    eventos: "Eventos",
+    "mesa-de-ayuda": "Mesa de ayuda",
+    neuroventas: "Manual de neuroventas",
+    configuracion: "Configuración",
+    personalizacion: "Personalización",
+  };
+  const first = segments[0] ?? "";
+  const label = labelMap[first] ?? first;
+  return ["Admin", label];
 }
 
 function normalizeRole(role: string | null | undefined): RoleKey | null {
@@ -138,6 +175,16 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
   const filteredNav = useMemo(() => filterNavByRole(role, NAV), [role]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [breadcrumbSegment, setBreadcrumbSegment] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBreadcrumbSegment(null);
+  }, [pathname]);
+
+  const breadcrumbParts = useMemo(
+    () => getBreadcrumbParts(pathname, breadcrumbSegment),
+    [pathname, breadcrumbSegment]
+  );
 
   useEffect(() => {
     const stored = typeof window !== "undefined" ? window.localStorage.getItem(SIDEBAR_STORAGE_KEY) : null;
@@ -155,13 +202,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="flex min-h-screen">
-        {/* Sidebar — colapsable en desktop */}
+        {/* Sidebar — drawer en mobile (siempre w-64 para que al abrir se vea), colapsable en desktop */}
         <aside
           className={cx(
             "bg-[#0b1220] text-white border-r border-white/10",
             "fixed md:static inset-y-0 left-0 z-40",
             "transition-[width,transform] duration-200 ease-out",
-            sidebarCollapsed ? "w-0 md:w-0 overflow-hidden" : "w-64",
+            "w-64",
+            sidebarCollapsed && "md:w-0 md:overflow-hidden",
+            !sidebarCollapsed && "md:w-64",
             mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
           )}
         >
@@ -235,7 +284,12 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                   )}
                 </button>
                 <div className="text-sm text-gray-500">
-                  Admin / <span className="text-gray-900 font-medium">Dashboard</span>
+                  {breadcrumbParts.slice(0, -1).map((part) => (
+                    <span key={part}>{part} / </span>
+                  ))}
+                  <span className="text-gray-900 font-medium">
+                    {breadcrumbParts[breadcrumbParts.length - 1]}
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -246,7 +300,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
               </div>
             </div>
           </header>
-          <main className="p-6">{children}</main>
+          <main className="p-6">
+            <BreadcrumbContext.Provider value={{ setBreadcrumbSegment }}>
+              {children}
+            </BreadcrumbContext.Provider>
+          </main>
         </div>
       </div>
     </div>

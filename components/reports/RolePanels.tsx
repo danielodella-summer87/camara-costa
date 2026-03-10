@@ -101,13 +101,25 @@ function DashboardResumen() {
           </ul>
         </Box>
 
-        <Box title="Próximas acciones (demo)">
-          <ul className="space-y-2">
-            <li>📞 Llamar a 5 leads rating 4–5</li>
-            <li>🤝 Coordinar 2 reuniones con empresas prospecto</li>
-            <li>🗳️ Publicar campaña IG “beneficios de socios”</li>
-          </ul>
-        </Box>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-900">Actividad comercial</div>
+          <p className="mt-2 text-sm text-slate-600">
+            La ejecución diaria (tareas, reuniones, llamadas) está en Agenda.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-1 text-xs text-slate-500 sm:grid-cols-3">
+            <span>Tareas vencidas: —</span>
+            <span>Reuniones hoy: —</span>
+            <span>Llamadas pendientes: —</span>
+          </div>
+          <div className="mt-4">
+            <Link
+              href="/admin/agenda"
+              className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Ver Agenda
+            </Link>
+          </div>
+        </div>
       </div>
 
       <Box title="Checklist ejecutivo (demo)">
@@ -153,44 +165,19 @@ function DashboardDireccion() {
 
 function DashboardComercial() {
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <KpiCard label="Leads nuevos (7d)" value="23" sub="demo" />
-        <KpiCard label="En seguimiento" value="18" sub="demo" />
-        <KpiCard label="Calificados" value="9" sub="demo" />
-        <KpiCard label="Cerrados" value="4" sub="demo (firma + pago)" />
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 className="text-lg font-semibold text-slate-900">Dashboard Comercial</h2>
+      <p className="mt-2 text-sm text-slate-600">
+        El dashboard comercial fue movido a su módulo principal.
+      </p>
+      <div className="mt-4">
+        <Link
+          href="/admin/dashboard"
+          className="inline-flex items-center rounded-xl border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 hover:border-emerald-700"
+        >
+          Ir al Dashboard Comercial
+        </Link>
       </div>
-
-      <Box title="Pipeline (listado + aging) (demo)">
-        <div className="flex flex-wrap gap-2">
-          <PillLink href="/admin/leads?pipeline=Nuevo" label="Ver “Nuevo” (demo)" />
-          <PillLink
-            href="/admin/leads?pipeline=En%20seguimiento"
-            label="Ver “En seguimiento” (demo)"
-          />
-          <PillLink
-            href="/admin/leads?pipeline=Calificado"
-            label="Ver “Calificado” (demo)"
-          />
-          <PillLink
-            href="/admin/leads?pipeline=Cerrado"
-            label="Ver “Cerrado” (demo)"
-          />
-        </div>
-
-        <div className="mt-3 text-xs text-slate-500">
-          Nota: estos links abren Leads filtrados (por ahora). Más adelante armamos
-          tabla/aging real dentro del dashboard.
-        </div>
-      </Box>
-
-      <Box title="Acciones comerciales sugeridas (demo)">
-        <ul className="list-disc space-y-2 pl-5">
-          <li>Contactar hoy leads rating 4–5 sin actualización 30 días</li>
-          <li>Revisión semanal del pipeline + responsables</li>
-          <li>Objetivo: subir “calificados” y “cerrados” con seguimiento cadenciado</li>
-        </ul>
-      </Box>
     </div>
   );
 }
@@ -298,7 +285,9 @@ export function RolePanels({ variant }: { variant: Variant }) {
       >
         <div className="text-sm" style={{ color: theme.text }}>
           <span className="font-semibold">Área: {area}</span>
-          {variant === "dashboard" ? (
+          {variant === "dashboard" && tab === "comercial" ? (
+            <span> · El dashboard comercial está en su módulo principal</span>
+          ) : variant === "dashboard" ? (
             <span> · KPIs + alertas ejecutivas (demo)</span>
           ) : (
             <span> · Reportes operativos (listados + filtros) (demo)</span>
