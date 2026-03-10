@@ -2682,7 +2682,7 @@ export default function LeadDetailPage() {
                 {leadHealth && (
                   <Tooltip
                     content={`${leadHealth.label}: ${leadHealth.reasons.join(". ")}`}
-                    maxWidth={280}
+                    maxWidth="280px"
                   >
                     <span
                       className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-0.5 text-xs font-semibold ${
