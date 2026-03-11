@@ -3885,7 +3885,12 @@ export default function LeadDetailPage() {
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {(lead as { proposal_sent_at?: string | null } | undefined)?.proposal_sent_at && (
-                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">Propuesta enviada ✔</span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">Propuesta enviada ✔</span>
+                          <p className="text-xs text-slate-600">
+                            Propuesta enviada al cliente el {formatDateTime((lead as { proposal_sent_at?: string | null }).proposal_sent_at)}.
+                          </p>
+                        </div>
                       )}
                       <Tooltip content="Abre la presentación generada a partir de la propuesta confirmada." maxWidth="300px">
                         <Link

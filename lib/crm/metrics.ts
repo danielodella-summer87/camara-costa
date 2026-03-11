@@ -12,6 +12,8 @@ export type LeadForMetrics = {
   next_activity_type?: string | null;
   next_activity_at?: string | null;
   rating?: number | null;
+  proposal_confirmed_at?: string | null;
+  proposal_sent_at?: string | null;
 };
 
 function norm(s: string | null | undefined): string {

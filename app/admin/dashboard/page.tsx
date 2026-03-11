@@ -20,6 +20,7 @@ import { ActivityStateSummary } from "@/components/crm/dashboard/ActivityStateSu
 import { StalledLeads } from "@/components/crm/dashboard/StalledLeads";
 import { ConversionMetrics } from "@/components/crm/dashboard/ConversionMetrics";
 import { TopOpportunities } from "@/components/crm/dashboard/TopOpportunities";
+import { PropuestasEsperandoRespuesta } from "@/components/crm/dashboard/PropuestasEsperandoRespuesta";
 import Link from "next/link";
 
 type Lead = {
@@ -33,6 +34,8 @@ type Lead = {
   rating?: number | null;
   email?: string | null;
   telefono?: string | null;
+  proposal_confirmed_at?: string | null;
+  proposal_sent_at?: string | null;
 };
 
 type ApiResp<T> = { data?: T | null; error?: string | null };
@@ -47,7 +50,16 @@ function toLeadForMetrics(l: Lead): LeadForMetrics {
     next_activity_type: l.next_activity_type,
     next_activity_at: l.next_activity_at,
     rating: l.rating,
+    proposal_confirmed_at: l.proposal_confirmed_at,
+    proposal_sent_at: l.proposal_sent_at,
   };
+}
+
+function daysSinceSent(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / (24 * 60 * 60 * 1000)));
 }
 
 const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
@@ -102,6 +114,24 @@ export default function DashboardPage() {
   const conversionPairs = useMemo(() => getConversionMetrics(forMetrics), [forMetrics]);
   const topOpportunities = useMemo(() => getTopOpportunities(forMetrics, 5), [forMetrics]);
 
+  const propuestasEsperandoRespuesta = useMemo(() => {
+    return leads
+      .filter(
+        (l) =>
+          l.proposal_confirmed_at &&
+          l.proposal_sent_at &&
+          !CLOSED_PIPELINES.has(norm(l.pipeline))
+      )
+      .map((l) => ({
+        id: l.id,
+        nombre: l.nombre,
+        pipeline: l.pipeline,
+        proposal_sent_at: l.proposal_sent_at,
+        daysSinceSent: daysSinceSent(l.proposal_sent_at),
+      }))
+      .slice(0, 10);
+  }, [leads]);
+
   return (
     <PageContainer>
       <div className="rounded-2xl border bg-white p-6">
@@ -154,6 +184,7 @@ export default function DashboardPage() {
             <CommercialPriorities priorities={commercialPriorities} />
             <CommercialAlerts alerts={commercialAlerts} />
             <ActivityStateSummary alerts={commercialAlerts} />
+            <PropuestasEsperandoRespuesta leads={propuestasEsperandoRespuesta} />
             <div className="grid gap-8 lg:grid-cols-2">
               <StalledLeads leads={stalledLeads} />
               <ConversionMetrics pairs={conversionPairs} />

@@ -126,7 +126,7 @@ function cleanActivityType(v: unknown): NextActivityType | null {
 }
 
 const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;

@@ -25,6 +25,7 @@ const NAV: NavItem[] = [
   { label: "Centro de control", href: "/admin" },
   { label: "Dashboard comercial", href: "/admin/dashboard" },
   { label: "Leads", href: "/admin/leads" },
+  { label: "LeadsOk", href: "/admin/leadsok" },
   { label: "socios", href: "/admin/socios" },
   { label: "Agenda", href: "/admin/agenda" },
   { label: "Reuniones", href: "/admin/reuniones" },
@@ -65,6 +66,7 @@ function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string |
     return ["Admin", "Leads", last];
   }
   if (pathname.startsWith("/admin/leads")) return ["Admin", "Leads", "Gestión operativa"];
+  if (pathname.startsWith("/admin/leadsok")) return ["Admin", "LeadsOk"];
 
   const labelMap: Record<string, string> = {
     empresas: "Iniciativas",

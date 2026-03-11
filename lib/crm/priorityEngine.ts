@@ -63,11 +63,20 @@ function isAdvancedStage(pipeline: string | null | undefined): boolean {
   );
 }
 
+/** Días desde proposal_sent_at hasta hoy. */
+function daysSinceProposalSent(proposalSentAt: string | null | undefined): number | null {
+  if (!proposalSentAt) return null;
+  const d = new Date(proposalSentAt);
+  if (!Number.isFinite(d.getTime())) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
 /** Puntos por señal (sumamos desde 0). */
 const SIGNALS = {
   overdue_action: 40,
   no_next_action: 25,
   proposal_no_response: 30,
+  proposal_sent_no_response: 20,
   hot_stalled: 35,
   health_critical: 25,
   health_warning: 10,
@@ -95,8 +104,12 @@ export function getPriorityScore(lead: LeadForMetrics): number {
   const rating = Number(lead.rating ?? 0);
   const highRating = Number.isFinite(rating) && rating >= 4;
 
+  const daysSinceSent = daysSinceProposalSent((lead as LeadForMetrics & { proposal_sent_at?: string | null }).proposal_sent_at);
+  const proposalSentNoResponse = (daysSinceSent ?? 0) > 3;
+
   if (overdue) score += SIGNALS.overdue_action;
   if (!hasNext) score += SIGNALS.no_next_action;
+  if (proposalSentNoResponse) score += SIGNALS.proposal_sent_no_response;
   if (isProposalStage(lead.pipeline) && days > 7) score += SIGNALS.proposal_no_response;
   if (isHotOpportunity(lead) && (!hasNext || stalled)) score += SIGNALS.hot_stalled;
   if (health?.status === "critical") score += SIGNALS.health_critical;
@@ -134,7 +147,11 @@ export function getPriorityHeadline(lead: LeadForMetrics, _context?: { score: nu
   const days = daysInStage(lead.updated_at, lead.created_at) ?? 0;
   const threshold = getStalledThreshold(lead.pipeline);
   const stalled = days > threshold;
+  const proposalSentAt = (lead as LeadForMetrics & { proposal_sent_at?: string | null }).proposal_sent_at;
+  const daysSinceSent = daysSinceProposalSent(proposalSentAt);
+  const proposalSentNoResponse = (daysSinceSent ?? 0) > 3;
 
+  if (proposalSentNoResponse) return "Propuesta enviada sin respuesta";
   if (overdue && isProposalStage(lead.pipeline)) return "Propuesta sin respuesta + acción vencida";
   if (overdue) return "Acción vencida";
   if (isProposalStage(lead.pipeline) && days > 7) return "Propuesta sin respuesta";
@@ -159,7 +176,11 @@ export function getPriorityReasons(lead: LeadForMetrics): string[] {
   const stalled = days > threshold;
   const rating = Number(lead.rating ?? 0);
   const highRating = Number.isFinite(rating) && rating >= 4;
+  const proposalSentAt = (lead as LeadForMetrics & { proposal_sent_at?: string | null }).proposal_sent_at;
+  const daysSinceSent = daysSinceProposalSent(proposalSentAt);
+  const proposalSentNoResponse = (daysSinceSent ?? 0) > 3;
 
+  if (proposalSentNoResponse) reasons.push(`Propuesta enviada hace ${daysSinceSent} días sin respuesta`);
   if (overdue) {
     const d = lead.next_activity_at
       ? Math.max(0, Math.floor((Date.now() - new Date(lead.next_activity_at).getTime()) / (24 * 60 * 60 * 1000)))
