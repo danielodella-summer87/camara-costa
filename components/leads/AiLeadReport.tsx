@@ -1701,12 +1701,17 @@ export function AiLeadReport({
                       </button>
                     </div>
                     
-                    {/* Prompt en uso (personalización por lead, editable) */}
-                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                      <div className="text-xs font-semibold text-blue-900 mb-1">Prompt en uso</div>
-                      <p className="text-xs text-blue-700 mb-2">
-                        Este prompt corresponde solo al módulo activo de este lead. El prompt global no se modifica.
-                      </p>
+                    {/* Prompt en uso (personalización por lead, editable) — colapsado por defecto */}
+                    <details className="rounded-lg border border-blue-200 bg-blue-50">
+                      <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold text-blue-900 hover:bg-blue-100/50 rounded-lg">
+                        <Tooltip content="Muestra el prompt del módulo activo (global, legacy o personalizado). Herramienta avanzada para revisar o editar." maxWidth="280px">
+                          <span className="inline-block">▼ Prompt en uso</span>
+                        </Tooltip>
+                      </summary>
+                      <div className="p-3 pt-0 border-t border-blue-100">
+                        <p className="text-xs text-blue-700 mb-2">
+                          Este prompt corresponde solo al módulo activo de este lead. El prompt global no se modifica.
+                        </p>
                       {promptSavedMessage && (
                         <div className="mb-2 rounded border border-green-300 bg-green-50 px-2 py-1.5 text-xs text-green-800">
                           {promptSavedMessage}
@@ -1790,7 +1795,8 @@ export function AiLeadReport({
                           </div>
                         </>
                       )}
-                    </div>
+                      </div>
+                    </details>
 
                     {/* Comparación por módulo: solo cuando este módulo tiene custom */}
                     {moduleCustomPrompt?.trim() && (

@@ -681,6 +681,7 @@ export default function LeadDetailPage() {
   const proposalRestoredFromLeadRef = useRef(false);
   const proposalSkipNextSaveRef = useRef(false);
   const [proposalConfirming, setProposalConfirming] = useState(false);
+  const [proposalSentSaving, setProposalSentSaving] = useState(false);
 
   const [estadoComercialOpen, setEstadoComercialOpen] = useState(false);
   const [datosLeadOpen, setDatosLeadOpen] = useState(false);
@@ -1666,6 +1667,22 @@ export default function LeadDetailPage() {
       setServicesError(e instanceof Error ? e.message : "No se pudo confirmar la propuesta.");
     } finally {
       setProposalConfirming(false);
+    }
+  }
+
+  async function handleMarkProposalSent() {
+    if (!id) return;
+    setProposalSentSaving(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposal_sent_at: new Date().toISOString() }),
+      });
+      if (!res.ok) return;
+      await fetchLead();
+    } finally {
+      setProposalSentSaving(false);
     }
   }
 
@@ -3662,20 +3679,83 @@ export default function LeadDetailPage() {
                   </p>
                 )}
 
-                {/* Siguiente paso recomendado */}
+                {/* BLOQUE 1 — Barra de progreso */}
+                {(() => {
+                  const completed = [hasAnalysisInternal, hasDiagnosticGenerated, hasStrategyGenerated, hasStructureReady, hasProposalGenerated, allDocsGenerated].filter(Boolean).length;
+                  return (
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <span className="text-xs font-medium text-slate-600">
+                        Progreso: {completed} de 6 pasos
+                      </span>
+                      <div className="h-2 flex-1 min-w-[120px] max-w-[240px] rounded-full bg-slate-200 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                          style={{ width: `${(completed / 6) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* BLOQUE 1 — Tarjetas de pasos 1–6 (completado / actual / siguiente / bloqueado) */}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[
+                    { n: 1, label: "Análisis", done: hasAnalysisInternal, actual: nextCommercialStep === 1, tip: "Análisis del lead con IA. Entrada: datos del lead. Salida: informe interno que alimenta diagnóstico y estrategia." },
+                    { n: 2, label: "Diagnóstico", done: hasDiagnosticGenerated, actual: nextCommercialStep === 2, tip: "Documento consultivo del diagnóstico. Usa el análisis interno. Salida: diagnóstico listo para presentar al lead." },
+                    { n: 3, label: "Estrategia", done: hasStrategyGenerated, actual: nextCommercialStep === 3, tip: "Visión estratégica de crecimiento. Usa el diagnóstico. Salida: documento de estrategia." },
+                    { n: 4, label: "Estructura", done: hasStructureReady, actual: nextCommercialStep === 4, tip: "Estructura de servicios y costos. Se define en Consultor. Base económica de la propuesta." },
+                    { n: 5, label: "Propuesta", done: hasProposalGenerated, actual: nextCommercialStep === 5, tip: "Propuesta comercial integral. Usa estrategia y estructura. Salida: documento listo para el cliente." },
+                    { n: 6, label: "Presentación", done: allDocsGenerated, actual: nextCommercialStep === 6, tip: "Vista final para compartir con el cliente. Agrupa diagnóstico, estrategia y propuesta." },
+                  ].map(({ n, label, done, actual, tip }) => (
+                    <Tooltip key={n} content={tip} maxWidth="300px">
+                      <div
+                        className={`rounded-lg border-2 px-3 py-2 min-w-[100px] text-center cursor-help ${
+                          done ? "border-emerald-200 bg-emerald-50/70" : actual ? "border-emerald-400 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"
+                        }`}
+                      >
+                        <span className="text-xs font-semibold text-slate-700">Paso {n}</span>
+                        <p className="text-xs font-medium text-slate-800 mt-0.5">{label}</p>
+                        <p className="text-[10px] mt-0.5 text-slate-500">{done ? "Completado ✓" : actual ? "Actual" : "Bloqueado"}</p>
+                      </div>
+                    </Tooltip>
+                  ))}
+                </div>
+
+                {/* BLOQUE 2 — Paso actual / acción principal */}
                 <div className="mt-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/60 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Siguiente paso recomendado</p>
+                  {nextCommercialStep === 1 && !hasAnalysisInternal && (
+                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Paso actual</p>
+                  )}
+                  {(nextCommercialStep > 1 || hasAnalysisInternal) && (
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Siguiente paso recomendado</p>
+                  )}
+                  {nextCommercialStep > 1 && (
+                    <p className="mt-0.5 text-xs font-medium text-emerald-700">Paso {nextCommercialStep - 1} completado ✓</p>
+                  )}
                   <p className="mt-1 text-sm font-semibold text-slate-900">{nextStepConfig.title}</p>
                   <p className="mt-0.5 text-sm text-slate-600">{nextStepConfig.description}</p>
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Qué obtiene:{" "}
+                    {nextCommercialStep === 1 && "Informe interno del lead que servirá de base para diagnóstico y estrategia."}
+                    {nextCommercialStep === 2 && "Documento consultivo del diagnóstico listo para presentar al lead."}
+                    {nextCommercialStep === 3 && "Documento de visión estratégica que conecta diagnóstico con el plan de crecimiento."}
+                    {nextCommercialStep === 4 && "Tabla de servicios, alcance y costos definida en Consultor (base de la propuesta)."}
+                    {nextCommercialStep === 5 && "Propuesta comercial integral lista para compartir con el cliente."}
+                    {nextCommercialStep === 6 && "Vista de presentación final con todos los documentos para el cliente."}
+                  </p>
                   <div className="mt-3">
                     {nextCommercialStep === 1 && (
-                      <button
-                        type="button"
-                        onClick={() => { const el = document.getElementById("ia-report-block"); el?.scrollIntoView({ behavior: "smooth" }); (el as HTMLDetailsElement)?.setAttribute("open", "true"); }}
-                        className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
-                      >
-                        {nextStepConfig.ctaLabel}
-                      </button>
+                      <Tooltip content="Crea el análisis interno del lead con IA. Este resultado alimenta el diagnóstico comercial y la estrategia. Abre las herramientas del paso 1 para ejecutarlo." maxWidth="320px">
+                        <span className="inline-block">
+                          <button
+                            type="button"
+                            onClick={() => { const el = document.getElementById("ia-report-block"); el?.scrollIntoView({ behavior: "smooth" }); (el as HTMLDetailsElement)?.setAttribute("open", "true"); }}
+                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
+                          >
+                            {nextStepConfig.ctaLabel}
+                          </button>
+                        </span>
+                      </Tooltip>
                     )}
                     {nextCommercialStep === 2 && (
                       <Tooltip content="Genera el documento comercial del Paso 2. Este archivo presenta el diagnóstico consultivo del lead de forma clara y profesional." maxWidth="300px">
@@ -3706,13 +3786,17 @@ export default function LeadDetailPage() {
                       </Tooltip>
                     )}
                     {nextCommercialStep === 4 && id && (
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
-                        className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
-                      >
-                        {nextStepConfig.ctaLabel}
-                      </button>
+                      <Tooltip content="Lleva al tab Consultor para definir la tabla de servicios, alcance y costos. Es la base económica de la propuesta comercial." maxWidth="320px">
+                        <span className="inline-block">
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
+                          >
+                            {nextStepConfig.ctaLabel}
+                          </button>
+                        </span>
+                      </Tooltip>
                     )}
                     {nextCommercialStep === 5 && (
                       <Tooltip content="Genera la propuesta comercial final con servicios, inversión y condiciones para presentar al cliente." maxWidth="300px">
@@ -3729,215 +3813,126 @@ export default function LeadDetailPage() {
                       </Tooltip>
                     )}
                     {nextCommercialStep === 6 && allDocsGenerated && id && (
-                      <Link
-                        href={`/admin/leads/${id}/presentacion`}
-                        className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
-                      >
-                        {nextStepConfig.ctaLabel}
-                      </Link>
+                      <Tooltip content="Abre la vista de presentación final con diagnóstico, estrategia y propuesta listos para compartir con el cliente." maxWidth="320px">
+                        <span className="inline-block">
+                          <Link
+                            href={`/admin/leads/${id}/presentacion`}
+                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
+                          >
+                            {nextStepConfig.ctaLabel}
+                          </Link>
+                        </span>
+                      </Tooltip>
                     )}
                   </div>
                 </div>
 
-                {/* Progreso: X de 6 pasos */}
-                {(() => {
-                  const completed = [hasAnalysisInternal, hasDiagnosticGenerated, hasStrategyGenerated, hasStructureReady, hasProposalGenerated, allDocsGenerated].filter(Boolean).length;
-                  return (
-                    <div className="mt-4 flex flex-wrap items-center gap-3">
-                      <span className="text-xs font-medium text-slate-600">
-                        Progreso: {completed} de 6 pasos
-                      </span>
-                      <div className="h-2 flex-1 min-w-[120px] max-w-[240px] rounded-full bg-slate-200 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-emerald-500 transition-all duration-300"
-                          style={{ width: `${(completed / 6) * 100}%` }}
-                        />
-                      </div>
+                {/* BLOQUE 3 — Después de esto sigue… */}
+                {nextCommercialStep < 6 && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+                    <p className="text-xs font-semibold text-slate-600">Después de esto sigue</p>
+                    <p className="mt-0.5 text-sm text-slate-700">
+                      {nextCommercialStep === 1 && "Paso 2: Diagnóstico comercial — documento consultivo para presentar al lead."}
+                      {nextCommercialStep === 2 && "Paso 3: Estrategia de crecimiento — visión estratégica que conecta diagnóstico con el plan."}
+                      {nextCommercialStep === 3 && "Paso 4: Estructura de servicios — tabla de servicios y costos en el tab Consultor."}
+                      {nextCommercialStep === 4 && "Paso 5: Propuesta comercial — documento integral con narrativa y estructura económica."}
+                      {nextCommercialStep === 5 && "Paso 6: Presentación — vista final para compartir con el cliente."}
+                    </p>
+                  </div>
+                )}
+
+                {/* Tarjeta Paso 6 — Presentación para el cliente (visible cuando la propuesta económica está confirmada) */}
+                {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && id && (
+                  <div className="mt-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/70 p-4">
+                    <p className="text-sm font-semibold text-emerald-800">
+                      Propuesta confirmada ✔
+                    </p>
+                    <p className="mt-0.5 text-sm text-emerald-700">
+                      Podés generar la presentación para el cliente.
+                    </p>
+                    <p className="mt-3 text-sm font-semibold text-slate-900">Paso 6 — Presentación para el cliente</p>
+                    <p className="mt-0.5 text-sm text-slate-600">
+                      Usa la propuesta aprobada para generar la presentación final para el cliente.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Tooltip content="Abre la presentación generada a partir de la propuesta confirmada." maxWidth="300px">
+                        <Link
+                          href={`/admin/leads/${id}/presentacion`}
+                          className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700"
+                        >
+                          Ver presentación
+                        </Link>
+                      </Tooltip>
+                      <Tooltip content="Genera el PDF final listo para enviar al cliente. Abre la sección de informe y propuesta para descargar." maxWidth="320px">
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                          className="inline-flex items-center justify-center rounded-lg border-2 border-emerald-600 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+                        >
+                          Descargar PDF
+                        </button>
+                      </Tooltip>
                     </div>
-                  );
-                })()}
+                  </div>
+                )}
 
-                {/* Pipeline de 6 pasos */}
-                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 overflow-visible">
-                  {/* Paso 1 — Análisis del Lead */}
-                  {(() => {
-                    const done = hasAnalysisInternal;
-                    const actual = nextCommercialStep === 1;
-                    const blocked = false;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-red-100 bg-red-50/30" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 1</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">📋 Análisis del Lead</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Completado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Análisis interno con IA que alimenta el diagnóstico comercial.</p>
-                        {done ? (
-                          <p className="mt-2 text-xs text-emerald-700">Análisis generado. Podés verlo en Herramientas del diagnóstico (Paso 1) debajo.</p>
-                        ) : (
-                          <Tooltip content="Ejecuta el análisis interno con IA. No reemplaza el diagnóstico comercial: lo prepara y lo alimenta." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" onClick={() => { const el = document.getElementById("ia-report-block"); el?.scrollIntoView({ behavior: "smooth" }); (el as HTMLDetailsElement)?.setAttribute("open", "true"); }} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
-                                Generar Análisis Comercial
-                              </button>
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {/* Paso 2 — Diagnóstico Comercial */}
-                  {(() => {
-                    const done = hasDiagnosticGenerated;
-                    const actual = nextCommercialStep === 2;
-                    const blocked = !hasAnalysisInternal;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-slate-100 bg-slate-100/80" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 2</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">🔍 Diagnóstico Comercial</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Generado" : blocked ? "🔒 Bloqueado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Documento consultivo del diagnóstico para presentar al lead.</p>
-                        {commercialDocUrls.diagnostic ? (
-                          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-                            <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5"><span className="text-emerald-600">✓</span> Diagnóstico comercial generado</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <button type="button" onClick={() => window.open(commercialDocUrls.diagnostic!, "_blank")} className="inline-flex rounded-lg border-2 border-emerald-700 bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-700">Abrir diagnóstico</button>
-                              <button type="button" onClick={() => generateCommercialDoc("diagnostic")} disabled={!id || commercialDocLoading !== null} className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">Regenerar diagnóstico</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Tooltip content="Genera el documento comercial del Paso 2. Presenta el diagnóstico consultivo del lead de forma clara y profesional." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" onClick={() => generateCommercialDoc("diagnostic")} disabled={!id || commercialDocLoading !== null || blocked} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                                {commercialDocLoading === "diagnostic" ? "Generando…" : "Generar Diagnóstico"}
-                              </button>
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {/* Paso 3 — Estrategia de Crecimiento */}
-                  {(() => {
-                    const done = hasStrategyGenerated;
-                    const actual = nextCommercialStep === 3;
-                    const blocked = !hasDiagnosticGenerated;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-slate-100 bg-slate-100/80" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 3</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">🎯 Estrategia de Crecimiento</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Generado" : blocked ? "🔒 Bloqueado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Visión estratégica que conecta diagnóstico con el plan de crecimiento.</p>
-                        {commercialDocUrls.strategy ? (
-                          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-                            <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5"><span className="text-emerald-600">✓</span> Visión estratégica generada</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <button type="button" onClick={() => window.open(commercialDocUrls.strategy!, "_blank")} className="inline-flex rounded-lg border-2 border-emerald-700 bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-700">Abrir visión estratégica</button>
-                              <button type="button" onClick={() => generateCommercialDoc("strategy")} disabled={!id || commercialDocLoading !== null || blocked} className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">Regenerar visión estratégica</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Tooltip content="Genera el documento de estrategia de crecimiento a partir del diagnóstico y la información del lead." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" onClick={() => generateCommercialDoc("strategy")} disabled={!id || commercialDocLoading !== null || blocked} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                                {commercialDocLoading === "strategy" ? "Generando…" : "Generar Visión Estratégica"}
-                              </button>
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {/* Paso 4 — Estructura de Servicios */}
-                  {(() => {
-                    const done = hasStructureReady;
-                    const actual = nextCommercialStep === 4;
-                    const blocked = !hasStrategyGenerated;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-slate-100 bg-slate-100/80" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 4</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">📊 Estructura de Servicios</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Completado" : blocked ? "🔒 Bloqueado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Tabla de servicios, alcance y costos en el tab Consultor.</p>
-                        {done ? (
-                          <p className="mt-2 text-xs text-emerald-700">Estructura definida o confirmada. Podés editarla en Consultor → Estructura de servicios.</p>
-                        ) : id ? (
-                          <Tooltip content="Aquí se arma la propuesta económica real: servicios, meses y precios. Se define en el tab Consultor." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" onClick={() => router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)} disabled={blocked} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-white border-2 border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                                Ir a estructura de servicios
-                              </button>
-                            </span>
-                          </Tooltip>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
-                  {/* Paso 5 — Propuesta Comercial */}
-                  {(() => {
-                    const done = hasProposalGenerated;
-                    const actual = nextCommercialStep === 5;
-                    const blocked = !hasStructureReady;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-slate-100 bg-slate-100/80" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 5</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">📄 Propuesta Comercial</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Generado" : blocked ? "🔒 Bloqueado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Propuesta integral con narrativa y estructura económica (usa el Paso 4).</p>
-                        {commercialDocUrls.proposal ? (
-                          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
-                            <p className="text-xs font-semibold text-slate-800 flex items-center gap-1.5"><span className="text-emerald-600">✓</span> Propuesta comercial generada</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              <button type="button" onClick={() => window.open(commercialDocUrls.proposal!, "_blank")} className="inline-flex rounded-lg border-2 border-emerald-700 bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-700">Abrir propuesta</button>
-                              <button type="button" onClick={() => generateCommercialDoc("proposal")} disabled={!id || commercialDocLoading !== null || !hasStrategyGenerated} className="inline-flex rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50">Regenerar propuesta</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Tooltip content="Genera la propuesta comercial final con servicios, inversión y condiciones para presentar al cliente." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" onClick={() => generateCommercialDoc("proposal")} disabled={!id || commercialDocLoading !== null || blocked} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
-                                {commercialDocLoading === "proposal" ? "Generando…" : "Generar Propuesta Comercial"}
-                              </button>
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  {/* Paso 6 — Presentación para el Cliente */}
-                  {(() => {
-                    const done = allDocsGenerated;
-                    const actual = nextCommercialStep === 6;
-                    const blocked = !hasProposalGenerated;
-                    return (
-                      <div className={`rounded-xl border-2 p-4 ${done ? "border-emerald-200 bg-emerald-50/50" : blocked ? "border-slate-100 bg-slate-100/80" : actual ? "border-emerald-300 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"}`}>
-                        <span className="inline-block rounded bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700">Paso 6</span>
-                        <h3 className="mt-2 text-sm font-semibold text-slate-900">🎬 Presentación para el Cliente</h3>
-                        <p className="mt-1 text-xs font-medium text-slate-600">{done ? "✓ Listo" : blocked ? "🔒 Bloqueado" : actual ? "Siguiente paso" : "○ Pendiente"}</p>
-                        <p className="mt-1.5 text-xs text-slate-500">Salida final cliente-ready para compartir con el lead.</p>
-                        {done && id ? (
-                          <div className="mt-3">
-                            <Link href={`/admin/leads/${id}/presentacion`} className="inline-flex w-full items-center justify-center rounded-lg border-2 border-emerald-700 bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-700">
-                              Presentar al cliente
-                            </Link>
-                          </div>
-                        ) : (
-                          <Tooltip content="Cuando los tres documentos (diagnóstico, estrategia, propuesta) estén generados, podrás abrir la vista de presentación." maxWidth="300px">
-                            <span className="block mt-3 w-full">
-                              <button type="button" disabled className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500 cursor-not-allowed">
-                                Presentar al cliente
-                              </button>
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
+                {/* Bloque final de cierre: propuesta lista para enviar al cliente (cuando propuesta confirmada) */}
+                {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && id && (
+                  <div className="mt-4 rounded-xl border-2 border-slate-300 bg-slate-50/80 p-4">
+                    <h3 className="text-base font-semibold text-slate-900">Propuesta lista para enviar al cliente</h3>
+                    <p className="mt-1 text-sm text-slate-600">
+                      La propuesta económica ya fue confirmada y la presentación está disponible para compartir con el cliente.
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {(lead as { proposal_sent_at?: string | null } | undefined)?.proposal_sent_at && (
+                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-800">Propuesta enviada ✔</span>
+                      )}
+                      <Tooltip content="Abre la presentación generada a partir de la propuesta confirmada." maxWidth="300px">
+                        <Link
+                          href={`/admin/leads/${id}/presentacion`}
+                          className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+                        >
+                          Ver presentación
+                        </Link>
+                      </Tooltip>
+                      <Tooltip content="Genera el PDF final listo para enviar al cliente." maxWidth="300px">
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                          className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Descargar PDF
+                        </button>
+                      </Tooltip>
+                      {!(lead as { proposal_sent_at?: string | null } | undefined)?.proposal_sent_at && (
+                        <Tooltip content="Registra que la propuesta fue enviada al cliente y comienza la etapa de seguimiento." maxWidth="320px">
+                          <button
+                            type="button"
+                            onClick={handleMarkProposalSent}
+                            disabled={proposalSentSaving}
+                            className="inline-flex items-center justify-center rounded-lg border-2 border-emerald-600 bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            {proposalSentSaving ? "Guardando…" : "Marcar como enviada al cliente"}
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </div>
+                )}
 
-                {/* Herramientas por paso (colapsables) */}
-                <div className="mt-6 space-y-4">
-                  <details id="ia-report-block" className="rounded-lg border border-slate-200 bg-white">
+                {/* BLOQUE 4 — Herramientas avanzadas (colapsado por defecto) */}
+                <details className="mt-6 rounded-lg border border-slate-200 bg-slate-50/50">
+                  <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">
+                    <Tooltip content="Abre herramientas por paso: informe IA, diagnóstico, estrategia, exportación PDF, copiar texto, prompt en uso y acciones secundarias." maxWidth="320px">
+                      <span className="inline-block">▼ Ver herramientas avanzadas de este flujo</span>
+                    </Tooltip>
+                  </summary>
+                  <div className="mt-2 space-y-4 px-0">
+                  <details id="ia-report-block" className="rounded-lg border border-slate-200 bg-white mx-0">
                     <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                      ▼ Herramientas del Paso 1 — Análisis del Lead (IA)
+                      <Tooltip content="Generar análisis con IA, ver informe comercial, editar prompt y exportar. Todo lo del paso 1 en un solo lugar." maxWidth="300px">
+                        <span className="inline-block">▼ Herramientas del Paso 1 — Análisis del Lead (IA)</span>
+                      </Tooltip>
                     </summary>
                     <div className="border-t border-slate-100 px-3 pb-3 pt-2">
                       {allowedProfiles.includes("comercial") && (
@@ -3960,19 +3955,25 @@ export default function LeadDetailPage() {
                   </details>
                   <details className="rounded-lg border border-slate-200 bg-white">
                     <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                      ▼ Herramientas del Paso 2 y 3 — Diagnóstico y Estrategia
+                      <Tooltip content="Enlaces a los documentos de diagnóstico y visión estratégica generados en los pasos 2 y 3." maxWidth="300px">
+                        <span className="inline-block">▼ Herramientas del Paso 2 y 3 — Diagnóstico y Estrategia</span>
+                      </Tooltip>
                     </summary>
                     <div className="border-t border-slate-100 px-3 pb-3 pt-2">
                       <p className="mb-2 text-xs text-slate-500">El documento de visión estratégica se genera con el botón de arriba.</p>
                       {hasStrategyGenerated && commercialDocUrls.strategy && (
-                        <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                          Abrir documento generado
-                        </a>
+                        <Tooltip content="Abre el documento de visión estratégica generado en el paso 3 en una nueva pestaña." maxWidth="280px">
+                          <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                            Abrir documento generado
+                          </a>
+                        </Tooltip>
                       )}
                     </div>
                   </details>
                   <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <p className="text-xs font-medium text-slate-600 uppercase tracking-wide mb-2">Herramientas del Paso 4, 5 y 6 — Estructura, Propuesta y Presentación</p>
+                    <Tooltip content="Estado de propuesta confirmada, material final y acciones: PDF, copiar texto, CTAs para el cliente." maxWidth="320px">
+                      <p className="text-xs font-medium text-slate-600 uppercase tracking-wide mb-2 cursor-help">Herramientas del Paso 4, 5 y 6 — Estructura, Propuesta y Presentación</p>
+                    </Tooltip>
                     <div className="flex flex-wrap items-center gap-2">
                       {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
                         <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
@@ -3991,18 +3992,23 @@ export default function LeadDetailPage() {
                       </details>
                     )}
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                        Descargar PDF propuesta
-                      </button>
-                      <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                        Copiar versión texto
-                      </button>
+                      <Tooltip content="Descarga un PDF con la propuesta y el informe comercial. Abre la sección del informe en este tab." maxWidth="280px">
+                        <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                          Descargar PDF propuesta
+                        </button>
+                      </Tooltip>
+                      <Tooltip content="Abre la versión en texto del resultado para revisar o copiar antes de exportar o regenerar." maxWidth="280px">
+                        <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                          Copiar versión texto
+                        </button>
+                      </Tooltip>
                     </div>
                     <div className="mt-4 pt-3 border-t border-slate-200">
                       <ProposalClientActions showPrint={false} proposalDocumentUrl={commercialDocUrls.proposal ?? null} />
                     </div>
                   </div>
-                </div>
+                  </div>
+                </details>
 
               </div>
             </div>
@@ -4057,20 +4063,24 @@ export default function LeadDetailPage() {
                     Incluye: investigación digital, redes, posicionamiento, competencia, FODA, oportunidades, acciones 72h, plan 30–90 días.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Descargar PDF informe comercial
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Copiar informe comercial
-                    </button>
+                    <Tooltip content="Descarga un PDF con el informe comercial (análisis, investigación digital, FODA, oportunidades). Abre el tab Comercial para generarlo si hace falta." maxWidth="300px">
+                      <button
+                        type="button"
+                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Descargar PDF informe comercial
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Abre la versión en texto del informe comercial para copiar o revisar. Se genera en el tab Comercial." maxWidth="280px">
+                      <button
+                        type="button"
+                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Copiar informe comercial
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
 
@@ -4084,31 +4094,37 @@ export default function LeadDetailPage() {
                     Incluye: lectura global, oportunidades de crecimiento, foco estratégico, riesgos, dirección recomendada.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Descargar PDF visión estratégica
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Copiar visión estratégica
-                    </button>
+                    <Tooltip content="Descarga un PDF con el documento de visión estratégica. Se genera en el tab Comercial (paso 3 del proceso)." maxWidth="300px">
+                      <button
+                        type="button"
+                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Descargar PDF visión estratégica
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Abre la versión en texto de la visión estratégica para copiar o revisar." maxWidth="280px">
+                      <button
+                        type="button"
+                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
+                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Copiar visión estratégica
+                      </button>
+                    </Tooltip>
                   </div>
                 </div>
 
                 <div>
-                  <button
-                    type="button"
-                    onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=proceso-comercial`)}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Ir a proceso comercial (tab Comercial)
-                  </button>
+                  <Tooltip content="Lleva al tab Comercial para ver el proceso de 6 pasos: análisis, diagnóstico, estrategia, estructura, propuesta y presentación." maxWidth="300px">
+                    <button
+                      type="button"
+                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=proceso-comercial`)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Ir a proceso comercial (tab Comercial)
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
 

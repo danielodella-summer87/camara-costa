@@ -39,7 +39,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
 
     // Intento principal: tabla "leads" con join a empresas
     const selectLead =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
     const q1 = await sb
       .from("leads")
@@ -69,7 +69,7 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     // Si no existe la tabla o falla por esquema: fallback suave a "lead"
     // (por si el proyecto tiene naming diferente)
     const selectLeadFallback =
-      "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
     const q2 = await sb
       .from("lead")
       .select(selectLeadFallback)
@@ -241,6 +241,9 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     if (body.proposal_confirmed_at !== undefined) {
       updateData.proposal_confirmed_at = body.proposal_confirmed_at === null || body.proposal_confirmed_at === "" ? null : body.proposal_confirmed_at;
     }
+    if (body.proposal_sent_at !== undefined) {
+      updateData.proposal_sent_at = body.proposal_sent_at === null || body.proposal_sent_at === "" ? null : body.proposal_sent_at;
+    }
     if (body.score !== undefined) {
       updateData.score = body.score === null ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null);
     }
@@ -284,7 +287,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
     // Incluir otros campos del body (excepto force_unlink_entity, ai_custom_prompt ya normalizado, e instagram que no existe en leads)
     for (const [key, value] of Object.entries(body)) {
-      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram" && key !== "ai_custom_prompt" && key !== "proposal_draft_json" && key !== "proposal_confirmed_at") {
+      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram" && key !== "ai_custom_prompt" && key !== "proposal_draft_json" && key !== "proposal_confirmed_at" && key !== "proposal_sent_at") {
         updateData[key] = value;
       }
     }
@@ -516,7 +519,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     
     if (!updateResult.error && updateResult.data) {
       // Re-hidratar el lead completo con el mismo select que el GET (incluyendo empresas)
-      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
       
       // Intento principal: tabla "leads"
       const refreshed = await sb
