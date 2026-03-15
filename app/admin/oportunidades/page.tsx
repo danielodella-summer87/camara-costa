@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
-import { OportunidadWorkspace } from "./components/OportunidadWorkspace";
 
 type LeadOption = {
   id: string;
@@ -20,6 +20,31 @@ function norm(s: string | null | undefined): string {
   return (s ?? "").trim().toLowerCase();
 }
 
+/** Normaliza pipeline para agrupar (minúsculas, sin acentos). */
+function normPipeline(s: string | null | undefined): string {
+  if (!s || typeof s !== "string") return "";
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+const KANBAN_COLUMNS = ["Nuevo", "Contactado", "Investigación", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Seguimiento"] as const;
+
+/** Mapeo pipeline normalizado → nombre de columna kanban. */
+const NORM_TO_KANBAN_COLUMN: Record<string, string> = {
+  nuevo: "Nuevo",
+  contactado: "Contactado",
+  investigacion: "Investigación",
+  diagnostico: "Diagnóstico",
+  estrategia: "Estrategia",
+  servicios: "Servicios",
+  propuesta: "Propuesta",
+  presentacion: "Presentación",
+  seguimiento: "Seguimiento",
+};
+
 function leadLabel(l: LeadOption): string {
   const empresa = l.empresas?.nombre?.trim();
   const contacto = l.contacto?.trim();
@@ -29,11 +54,24 @@ function leadLabel(l: LeadOption): string {
   return part;
 }
 
+function cell(value: string | null | undefined): string {
+  const v = value?.trim();
+  return v ?? "—";
+}
+
+type ViewMode = "kanban" | "listado";
+
+const PIPELINE_FILTER_OPTIONS = ["Todos", ...KANBAN_COLUMNS];
+
 export default function OportunidadesPage() {
   const router = useRouter();
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [loadingLeads, setLoadingLeads] = useState(true);
   const [selectedLeadId, setSelectedLeadId] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("listado");
+  const [selectedPipeline, setSelectedPipeline] = useState("Todos");
+  const [searchText, setSearchText] = useState("");
+  const [onlyMine, setOnlyMine] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,11 +104,64 @@ export default function OportunidadesPage() {
     router.push(`/admin/oportunidades/${encodeURIComponent(selectedLeadId)}`);
   };
 
+  const filteredLeads = useMemo(() => {
+    let list = leads;
+    if (selectedPipeline !== "Todos") {
+      const targetNorm = normPipeline(selectedPipeline);
+      list = list.filter((l) => normPipeline(l.pipeline) === targetNorm);
+    }
+    if (searchText.trim()) {
+      const q = searchText.trim().toLowerCase();
+      list = list.filter((l) => {
+        const empresa = (l.empresas?.nombre ?? l.nombre ?? "").toLowerCase();
+        const contacto = (l.contacto ?? "").toLowerCase();
+        const email = (l.email ?? "").toLowerCase();
+        return empresa.includes(q) || contacto.includes(q) || email.includes(q);
+      });
+    }
+    if (onlyMine) {
+      // Placeholder: no hay owner en LeadOption por ahora; no filtrar
+    }
+    return list;
+  }, [leads, selectedPipeline, searchText, onlyMine]);
+
+  const leadsByColumn = useMemo(() => {
+    const map: Record<string, LeadOption[]> = {};
+    KANBAN_COLUMNS.forEach((col) => {
+      map[col] = [];
+    });
+    map["Otros"] = [];
+    for (const l of filteredLeads) {
+      const key = NORM_TO_KANBAN_COLUMN[normPipeline(l.pipeline)] ?? "Otros";
+      if (!map[key]) map[key] = [];
+      map[key].push(l);
+    }
+    return map;
+  }, [filteredLeads]);
+
+  const summaryMetrics = useMemo(() => {
+    let enPropuesta = 0;
+    let enSeguimiento = 0;
+    let nuevas = 0;
+    for (const l of filteredLeads) {
+      const n = normPipeline(l.pipeline);
+      if (n === "nuevo") nuevas++;
+      else if (n === "propuesta") enPropuesta++;
+      else if (n === "seguimiento") enSeguimiento++;
+    }
+    return {
+      activas: filteredLeads.length,
+      enPropuesta,
+      enSeguimiento,
+      nuevas,
+    };
+  }, [filteredLeads]);
+
   return (
     <PageContainer>
       <div className="border-b border-slate-200 pb-5">
         <h1 className="text-2xl font-semibold text-slate-900">Oportunidades</h1>
-        <p className="mt-2 text-sm text-slate-600">Workspace estratégico comercial</p>
+        <p className="mt-2 text-sm text-slate-600">Vista maestra comercial</p>
       </div>
 
       {/* Abrir oportunidad */}
@@ -86,7 +177,7 @@ export default function OportunidadesPage() {
             <option value="">
               {loadingLeads ? "Cargando leads..." : "Seleccioná un lead activo"}
             </option>
-            {leads.map((l) => (
+            {filteredLeads.map((l) => (
               <option key={l.id} value={l.id}>
                 {leadLabel(l)}
               </option>
@@ -103,7 +194,218 @@ export default function OportunidadesPage() {
         </div>
       </div>
 
-      <OportunidadWorkspace lead={null} id={null} />
+      {/* Barra de control: vista Kanban / Listado + Nuevo lead */}
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setViewMode("kanban")}
+            className={`rounded-lg px-3 py-2 text-sm font-medium transition ${viewMode === "kanban" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+          >
+            Kanban
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("listado")}
+            className={`rounded-lg px-3 py-2 text-sm font-medium transition ${viewMode === "listado" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+          >
+            Listado
+          </button>
+        </div>
+        {/* Mismo flujo que Leads: ruta dedicada /admin/leads/nuevo */}
+        <Link
+          href="/admin/leads/nuevo"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          title="Crear lead (formulario de Leads)"
+        >
+          Nuevo lead
+        </Link>
+      </div>
+
+      {/* Resumen de métricas */}
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Oportunidades activas</p>
+          <p className="mt-1 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : summaryMetrics.activas}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
+          <p className="mt-1 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : summaryMetrics.enPropuesta}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
+          <p className="mt-1 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : summaryMetrics.enSeguimiento}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
+          <p className="mt-1 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : summaryMetrics.nuevas}</p>
+        </div>
+      </div>
+
+      {/* Filtros rápidos */}
+      <div className="mt-6 flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-xs font-medium text-slate-600">Pipeline</label>
+          <select
+            value={selectedPipeline}
+            onChange={(e) => setSelectedPipeline(e.target.value)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+          >
+            {PIPELINE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <input
+            type="text"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Buscar empresa, contacto o email"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
+          />
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyMine}
+            onChange={(e) => setOnlyMine(e.target.checked)}
+            className="rounded border-slate-300 text-slate-800 focus:ring-slate-400"
+          />
+          <span className="text-sm text-slate-700">Solo mis leads</span>
+        </label>
+      </div>
+
+      {/* Contenido según vista activa */}
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        {viewMode === "kanban" && (
+          <>
+            {loadingLeads ? (
+              <div className="p-8 text-sm text-slate-600">Cargando oportunidades...</div>
+            ) : filteredLeads.length === 0 ? (
+              <div className="p-8 text-sm text-slate-600">Ninguna oportunidad coincide con los filtros.</div>
+            ) : (
+              <div className="flex gap-4 overflow-x-auto p-4 min-h-[320px]">
+                {KANBAN_COLUMNS.map((col) => {
+                  const columnLeads = leadsByColumn[col] ?? [];
+                  return (
+                    <div
+                      key={col}
+                      className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                        <h3 className="text-sm font-semibold text-slate-800">{col}</h3>
+                        <span className="text-xs text-slate-500">{columnLeads.length}</span>
+                      </div>
+                      <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh]">
+                        {columnLeads.map((l) => (
+                          <div
+                            key={l.id}
+                            className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                          >
+                            <p className="text-sm font-medium text-slate-800 truncate" title={cell(l.empresas?.nombre ?? l.nombre)}>
+                              {cell(l.empresas?.nombre ?? l.nombre)}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.contacto)}>
+                              {cell(l.contacto)}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.email)}>
+                              {cell(l.email)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">{cell(l.pipeline)}</p>
+                            <Link
+                              href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
+                              className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700"
+                            >
+                              Abrir oportunidad
+                            </Link>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {(leadsByColumn["Otros"]?.length ?? 0) > 0 && (
+                  <div className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80">
+                    <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                      <h3 className="text-sm font-semibold text-slate-800">Otros</h3>
+                      <span className="text-xs text-slate-500">{leadsByColumn["Otros"].length}</span>
+                    </div>
+                    <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh]">
+                      {leadsByColumn["Otros"].map((l) => (
+                        <div
+                          key={l.id}
+                          className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                        >
+                          <p className="text-sm font-medium text-slate-800 truncate" title={cell(l.empresas?.nombre ?? l.nombre)}>
+                            {cell(l.empresas?.nombre ?? l.nombre)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.contacto)}>
+                            {cell(l.contacto)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.email)}>
+                            {cell(l.email)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">{cell(l.pipeline)}</p>
+                          <Link
+                            href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
+                            className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700"
+                          >
+                            Abrir oportunidad
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+        {viewMode === "listado" && (
+          <>
+            {loadingLeads ? (
+              <div className="p-8 text-sm text-slate-600">Cargando oportunidades...</div>
+            ) : filteredLeads.length === 0 ? (
+              <div className="p-8 text-sm text-slate-600">Sin oportunidades activas o ninguna coincide con los filtros.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Empresa</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Contacto</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Email</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Pipeline</th>
+                      <th className="px-4 py-3 text-left font-semibold text-slate-700">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {filteredLeads.map((l) => (
+                      <tr key={l.id} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-slate-800">{cell(l.empresas?.nombre ?? l.nombre)}</td>
+                        <td className="px-4 py-3 text-slate-600">{cell(l.contacto)}</td>
+                        <td className="px-4 py-3 text-slate-600">{cell(l.email)}</td>
+                        <td className="px-4 py-3 text-slate-600">{cell(l.pipeline)}</td>
+                        <td className="px-4 py-3">
+                          <Link
+                            href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
+                            className="inline-flex rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+                          >
+                            Abrir oportunidad
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </PageContainer>
   );
 }
