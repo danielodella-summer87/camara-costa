@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 /** Forma mínima del lead (misma que /admin/oportunidades/[id]). */
 export type OportunidadLeadProp = {
@@ -47,6 +47,9 @@ const PIPELINE_TO_STAGE: Record<string, number> = {
 const MAP_STEP_LABELS = ["Lead", "Investigación", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Cierre"];
 const PASO_ACTUAL_LABELS = ["Contexto del lead", "Análisis del lead", "Diagnóstico comercial", "Estrategia de crecimiento", "Estructura de servicios", "Propuesta comercial", "Presentación", "Seguimiento y cierre"];
 
+/** Nombres de pipeline para cada etapa (0..7). Usado al avanzar: siguiente etapa = NEXT_PIPELINE_NAMES[currentIndex + 1]. */
+const NEXT_PIPELINE_NAMES = ["Nuevo", "Contactado", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Seguimiento"];
+
 const WORKSPACE_TABS = [
   { id: "contexto", label: "Contexto" },
   { id: "investigacion", label: "Investigación" },
@@ -61,10 +64,16 @@ function format(value: string | null | undefined): string {
   return v ? v : "—";
 }
 
-type Props = { lead: OportunidadLeadProp; id: string | null };
+type Props = {
+  lead: OportunidadLeadProp;
+  id: string | null;
+  /** Llamado tras actualizar la etapa del lead para que el padre refresque los datos. */
+  onLeadUpdated?: () => void;
+};
 
-export function OportunidadWorkspace({ lead, id: _id }: Props) {
+export function OportunidadWorkspace({ lead, id, onLeadUpdated }: Props) {
   const [workspaceTab, setWorkspaceTab] = useState<(typeof WORKSPACE_TABS)[number]["id"]>("contexto");
+  const [updatingStage, setUpdatingStage] = useState(false);
 
   const currentStageIndex = useMemo((): number | null => {
     if (!lead?.pipeline) return null;
@@ -72,6 +81,27 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
     const idx = PIPELINE_TO_STAGE[key];
     return typeof idx === "number" ? idx : null;
   }, [lead?.pipeline]);
+
+  const handleMarkStageComplete = useCallback(async () => {
+    if (!id || !lead?.id || currentStageIndex === null || currentStageIndex >= 7) return;
+    const nextPipeline = NEXT_PIPELINE_NAMES[currentStageIndex + 1];
+    if (!nextPipeline) return;
+    setUpdatingStage(true);
+    try {
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify({ pipeline: nextPipeline }),
+      });
+      const json = (await res.json()) as { data?: OportunidadLeadProp; error?: string };
+      if (!res.ok) throw new Error(json?.error ?? "Error actualizando etapa");
+      onLeadUpdated?.();
+    } catch {
+      // El padre puede mostrar error; solo dejamos de cargar
+    } finally {
+      setUpdatingStage(false);
+    }
+  }, [id, lead?.id, currentStageIndex, onLeadUpdated]);
 
   return (
     <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -328,6 +358,23 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
           <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Paso actual:</span> {currentStageIndex !== null ? PASO_ACTUAL_LABELS[currentStageIndex] : "Análisis del lead"}</p>
           <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Siguiente paso:</span> {currentStageIndex !== null ? (currentStageIndex < 7 ? PASO_ACTUAL_LABELS[currentStageIndex + 1] : "Cierre") : "Diagnóstico comercial"}</p>
         </div>
+
+        {lead && (
+          <div className="mt-4">
+            {currentStageIndex !== null && currentStageIndex >= 7 ? (
+              <p className="text-sm font-medium text-emerald-700">Proceso comercial finalizado.</p>
+            ) : (
+              <button
+                type="button"
+                onClick={handleMarkStageComplete}
+                disabled={updatingStage || currentStageIndex === null}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:pointer-events-none disabled:opacity-60"
+              >
+                {updatingStage ? "Actualizando…" : "Marcar etapa como completada"}
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="mt-5 space-y-3">
           <div className="rounded-lg border border-slate-200 bg-white p-3">

@@ -1,7 +1,7 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { OportunidadWorkspace } from "../components/OportunidadWorkspace";
 import Link from "next/link";
@@ -36,6 +36,29 @@ export default function OportunidadDetailPage() {
   const [lead, setLead] = useState<LeadMinimal | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const refetchLead = useCallback(() => {
+    if (!id) return;
+    fetch(`/api/admin/leads/${id}`, {
+      method: "GET",
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store" },
+    })
+      .then(async (res) => {
+        const json = (await res.json()) as { data?: LeadMinimal; error?: string };
+        if (!res.ok) {
+          setError(json?.error ?? "Error cargando lead");
+          setLead(null);
+          return;
+        }
+        setLead(json?.data ?? null);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Error cargando oportunidad");
+        setLead(null);
+      });
+  }, [id]);
 
   useEffect(() => {
     if (!id) {
@@ -134,7 +157,7 @@ export default function OportunidadDetailPage() {
       )}
 
       {!loading && lead && (
-        <OportunidadWorkspace lead={lead} id={id} />
+        <OportunidadWorkspace lead={lead} id={id} onLeadUpdated={refetchLead} />
       )}
     </PageContainer>
   );
