@@ -72,6 +72,7 @@ export default function OportunidadesPage() {
   const [selectedPipeline, setSelectedPipeline] = useState("Todos");
   const [searchText, setSearchText] = useState("");
   const [onlyMine, setOnlyMine] = useState(false);
+  const [dragError, setDragError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +103,46 @@ export default function OportunidadesPage() {
   const handleOpen = () => {
     if (!selectedLeadId?.trim()) return;
     router.push(`/admin/oportunidades/${encodeURIComponent(selectedLeadId)}`);
+  };
+
+  const handleKanbanDragStart = (e: React.DragEvent, leadId: string, sourcePipeline: string | null) => {
+    setDragError(null);
+    e.dataTransfer.setData("application/json", JSON.stringify({ leadId, sourcePipeline }));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleKanbanDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleKanbanDrop = async (e: React.DragEvent, targetColumn: string) => {
+    e.preventDefault();
+    let data: { leadId: string; sourcePipeline: string | null };
+    try {
+      data = JSON.parse(e.dataTransfer.getData("application/json"));
+    } catch {
+      return;
+    }
+    const { leadId, sourcePipeline } = data;
+    if (!leadId || !targetColumn) return;
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) return;
+    if (normPipeline(lead.pipeline) === normPipeline(targetColumn)) return;
+
+    const previousLeads = leads.slice();
+    setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, pipeline: targetColumn } : l)));
+
+    const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      body: JSON.stringify({ pipeline: targetColumn }),
+    });
+    const json = (await res.json()) as { error?: string };
+    if (!res.ok) {
+      setLeads(previousLeads);
+      setDragError(json?.error ?? "Error al actualizar la etapa");
+    }
   };
 
   const filteredLeads = useMemo(() => {
@@ -287,37 +328,85 @@ export default function OportunidadesPage() {
             ) : filteredLeads.length === 0 ? (
               <div className="p-8 text-sm text-slate-600">Ninguna oportunidad coincide con los filtros.</div>
             ) : (
-              <div className="flex gap-4 overflow-x-auto p-4 min-h-[320px]">
-                {KANBAN_COLUMNS.map((col) => {
-                  const columnLeads = leadsByColumn[col] ?? [];
-                  return (
-                    <div
-                      key={col}
-                      className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-                        <h3 className="text-sm font-semibold text-slate-800">{col}</h3>
-                        <span className="text-xs text-slate-500">{columnLeads.length}</span>
+              <>
+                {dragError && (
+                  <div className="mx-4 mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    {dragError}
+                  </div>
+                )}
+                <div className="flex gap-4 overflow-x-auto p-4 min-h-[320px] select-none">
+                  {KANBAN_COLUMNS.map((col) => {
+                    const columnLeads = leadsByColumn[col] ?? [];
+                    return (
+                      <div
+                        key={col}
+                        className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80 select-none"
+                        onDragOver={handleKanbanDragOver}
+                        onDrop={(e) => handleKanbanDrop(e, col)}
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 select-none">
+                          <h3 className="text-sm font-semibold text-slate-800 select-none">{col}</h3>
+                          <span className="text-xs text-slate-500 select-none">{columnLeads.length}</span>
+                        </div>
+                        <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
+                          {columnLeads.map((l) => (
+                            <div
+                              key={l.id}
+                              draggable
+                              onDragStart={(e) => handleKanbanDragStart(e, l.id, l.pipeline)}
+                              className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none cursor-grab active:cursor-grabbing"
+                            >
+                              <p className="text-sm font-medium text-slate-800 truncate select-none" title={cell(l.empresas?.nombre ?? l.nombre)}>
+                                {cell(l.empresas?.nombre ?? l.nombre)}
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-600 truncate select-none" title={cell(l.contacto)}>
+                                {cell(l.contacto)}
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-600 truncate select-none" title={cell(l.email)}>
+                                {cell(l.email)}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500 select-none">{cell(l.pipeline)}</p>
+                              <Link
+                                href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
+                                draggable={false}
+                                className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700 select-none"
+                              >
+                                Abrir oportunidad
+                              </Link>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh]">
-                        {columnLeads.map((l) => (
+                    );
+                  })}
+                  {(leadsByColumn["Otros"]?.length ?? 0) > 0 && (
+                    <div className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80 select-none">
+                      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 select-none">
+                        <h3 className="text-sm font-semibold text-slate-800 select-none">Otros</h3>
+                        <span className="text-xs text-slate-500 select-none">{leadsByColumn["Otros"].length}</span>
+                      </div>
+                      <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
+                        {leadsByColumn["Otros"].map((l) => (
                           <div
                             key={l.id}
-                            className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
+                            draggable
+                            onDragStart={(e) => handleKanbanDragStart(e, l.id, l.pipeline)}
+                            className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none cursor-grab active:cursor-grabbing"
                           >
-                            <p className="text-sm font-medium text-slate-800 truncate" title={cell(l.empresas?.nombre ?? l.nombre)}>
+                            <p className="text-sm font-medium text-slate-800 truncate select-none" title={cell(l.empresas?.nombre ?? l.nombre)}>
                               {cell(l.empresas?.nombre ?? l.nombre)}
                             </p>
-                            <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.contacto)}>
+                            <p className="mt-0.5 text-xs text-slate-600 truncate select-none" title={cell(l.contacto)}>
                               {cell(l.contacto)}
                             </p>
-                            <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.email)}>
+                            <p className="mt-0.5 text-xs text-slate-600 truncate select-none" title={cell(l.email)}>
                               {cell(l.email)}
                             </p>
-                            <p className="mt-1 text-xs text-slate-500">{cell(l.pipeline)}</p>
+                            <p className="mt-1 text-xs text-slate-500 select-none">{cell(l.pipeline)}</p>
                             <Link
                               href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
-                              className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700"
+                              draggable={false}
+                              className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700 select-none"
                             >
                               Abrir oportunidad
                             </Link>
@@ -325,42 +414,9 @@ export default function OportunidadesPage() {
                         ))}
                       </div>
                     </div>
-                  );
-                })}
-                {(leadsByColumn["Otros"]?.length ?? 0) > 0 && (
-                  <div className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80">
-                    <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
-                      <h3 className="text-sm font-semibold text-slate-800">Otros</h3>
-                      <span className="text-xs text-slate-500">{leadsByColumn["Otros"].length}</span>
-                    </div>
-                    <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh]">
-                      {leadsByColumn["Otros"].map((l) => (
-                        <div
-                          key={l.id}
-                          className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm"
-                        >
-                          <p className="text-sm font-medium text-slate-800 truncate" title={cell(l.empresas?.nombre ?? l.nombre)}>
-                            {cell(l.empresas?.nombre ?? l.nombre)}
-                          </p>
-                          <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.contacto)}>
-                            {cell(l.contacto)}
-                          </p>
-                          <p className="mt-0.5 text-xs text-slate-600 truncate" title={cell(l.email)}>
-                            {cell(l.email)}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-500">{cell(l.pipeline)}</p>
-                          <Link
-                            href={`/admin/oportunidades/${encodeURIComponent(l.id)}`}
-                            className="mt-2 inline-block rounded bg-slate-800 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700"
-                          >
-                            Abrir oportunidad
-                          </Link>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              </>
             )}
           </>
         )}
