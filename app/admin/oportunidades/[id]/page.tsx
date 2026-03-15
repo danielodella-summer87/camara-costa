@@ -16,6 +16,7 @@ type LeadMinimal = {
   website?: string | null;
   linkedin_empresa?: string | null;
   linkedin_director?: string | null;
+  pipeline?: string | null;
   empresas?: {
     nombre?: string | null;
     rubros?: { nombre?: string | null } | null;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 /** Forma mínima del lead (misma que /admin/oportunidades/[id]). */
 export type OportunidadLeadProp = {
@@ -12,11 +12,40 @@ export type OportunidadLeadProp = {
   website?: string | null;
   linkedin_empresa?: string | null;
   linkedin_director?: string | null;
+  pipeline?: string | null;
   empresas?: {
     nombre?: string | null;
     rubros?: { nombre?: string | null } | null;
   } | null;
 } | null;
+
+/** Normaliza pipeline para mapear a etapa (minúsculas, sin acentos). */
+function normPipeline(s: string | null | undefined): string {
+  if (!s || typeof s !== "string") return "";
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/** Mapeo pipeline → índice de etapa (0–7). */
+const PIPELINE_TO_STAGE: Record<string, number> = {
+  nuevo: 0,
+  contactado: 1,
+  investigacion: 1,
+  analisis: 2,
+  diagnostico: 2,
+  estrategia: 3,
+  servicios: 4,
+  propuesta: 5,
+  presentacion: 6,
+  seguimiento: 7,
+  cierre: 7,
+};
+
+const MAP_STEP_LABELS = ["Lead", "Investigación", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Cierre"];
+const PASO_ACTUAL_LABELS = ["Contexto del lead", "Análisis del lead", "Diagnóstico comercial", "Estrategia de crecimiento", "Estructura de servicios", "Propuesta comercial", "Presentación", "Seguimiento y cierre"];
 
 const WORKSPACE_TABS = [
   { id: "contexto", label: "Contexto" },
@@ -37,15 +66,22 @@ type Props = { lead: OportunidadLeadProp; id: string | null };
 export function OportunidadWorkspace({ lead, id: _id }: Props) {
   const [workspaceTab, setWorkspaceTab] = useState<(typeof WORKSPACE_TABS)[number]["id"]>("contexto");
 
+  const currentStageIndex = useMemo((): number | null => {
+    if (!lead?.pipeline) return null;
+    const key = normPipeline(lead.pipeline);
+    const idx = PIPELINE_TO_STAGE[key];
+    return typeof idx === "number" ? idx : null;
+  }, [lead?.pipeline]);
+
   return (
     <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Guía estratégica del proceso */}
       <div className="rounded-xl border-2 border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold text-slate-800">Guía estratégica del proceso</h2>
         <div className="mt-5 space-y-3.5">
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 0 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 0 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Contexto del lead
+              {currentStageIndex !== null && 0 < currentStageIndex && "✓ "}{currentStageIndex !== null && 0 === currentStageIndex && "→ "}Contexto del lead
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -73,9 +109,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 1 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 1 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Investigación comercial
+              {currentStageIndex !== null && 1 < currentStageIndex && "✓ "}{currentStageIndex !== null && 1 === currentStageIndex && "→ "}Investigación comercial
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -100,9 +136,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 2 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 2 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Diagnóstico estratégico
+              {currentStageIndex !== null && 2 < currentStageIndex && "✓ "}{currentStageIndex !== null && 2 === currentStageIndex && "→ "}Diagnóstico estratégico
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -127,9 +163,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 3 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 3 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Estrategia de crecimiento
+              {currentStageIndex !== null && 3 < currentStageIndex && "✓ "}{currentStageIndex !== null && 3 === currentStageIndex && "→ "}Estrategia de crecimiento
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -154,9 +190,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 4 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 4 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Servicios recomendados
+              {currentStageIndex !== null && 4 < currentStageIndex && "✓ "}{currentStageIndex !== null && 4 === currentStageIndex && "→ "}Servicios recomendados
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -181,9 +217,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 5 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 5 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Propuesta comercial
+              {currentStageIndex !== null && 5 < currentStageIndex && "✓ "}{currentStageIndex !== null && 5 === currentStageIndex && "→ "}Propuesta comercial
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -208,9 +244,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 6 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 6 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Presentación
+              {currentStageIndex !== null && 6 < currentStageIndex && "✓ "}{currentStageIndex !== null && 6 === currentStageIndex && "→ "}Presentación
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -235,9 +271,9 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
             </div>
           </details>
 
-          <details className="rounded-lg border border-slate-200 bg-slate-50/50">
+          <details className={`rounded-lg border bg-slate-50/50 ${currentStageIndex !== null && 7 < currentStageIndex ? "border-emerald-300 bg-emerald-50/30" : ""} ${currentStageIndex !== null && 7 === currentStageIndex ? "border-slate-400 ring-1 ring-slate-300" : "border-slate-200"}`}>
             <summary className="cursor-pointer select-none rounded-lg px-3 py-2.5 font-medium text-slate-800 hover:bg-slate-100/50">
-              Seguimiento y cierre
+              {currentStageIndex !== null && 7 < currentStageIndex && "✓ "}{currentStageIndex !== null && 7 === currentStageIndex && "→ "}Seguimiento y cierre
             </summary>
             <div className="border-t border-slate-200 px-3 pb-3 pt-2 text-sm text-slate-600 space-y-3">
               <div>
@@ -269,27 +305,28 @@ export function OportunidadWorkspace({ lead, id: _id }: Props) {
         <h2 className="text-sm font-semibold text-slate-800">Mapa técnico del proceso</h2>
 
         <div className="mt-5 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Lead</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-emerald-100 px-2 py-1 font-medium text-emerald-800">Investigación</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Diagnóstico</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Estrategia</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Servicios</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Propuesta</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Presentación</span>
-          <span className="text-slate-400">→</span>
-          <span className="rounded bg-slate-100 px-2 py-1 font-medium text-slate-700">Cierre</span>
+          {MAP_STEP_LABELS.map((label, i) => {
+            const completed = currentStageIndex !== null && i < currentStageIndex;
+            const current = currentStageIndex !== null && i === currentStageIndex;
+            const staticHighlight = currentStageIndex === null && i === 1;
+            const cn = completed
+              ? "rounded bg-emerald-100 px-2 py-1 font-medium text-emerald-800"
+              : current || staticHighlight
+                ? "rounded bg-emerald-100 px-2 py-1 font-medium text-emerald-800"
+                : "rounded bg-slate-100 px-2 py-1 font-medium text-slate-700";
+            return (
+              <span key={i} className="inline-flex items-center gap-1.5">
+                {i > 0 && <span className="text-slate-400">→</span>}
+                <span className={cn}>{label}</span>
+              </span>
+            );
+          })}
         </div>
 
         <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50/80 p-3">
-          <p className="text-sm text-slate-600"><span className="font-medium text-slate-700">Etapa actual:</span> Investigación</p>
-          <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Paso actual:</span> Análisis del lead</p>
-          <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Siguiente paso:</span> Diagnóstico comercial</p>
+          <p className="text-sm text-slate-600"><span className="font-medium text-slate-700">Etapa actual:</span> {currentStageIndex !== null ? MAP_STEP_LABELS[currentStageIndex] : "Investigación"}</p>
+          <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Paso actual:</span> {currentStageIndex !== null ? PASO_ACTUAL_LABELS[currentStageIndex] : "Análisis del lead"}</p>
+          <p className="mt-1 text-sm text-slate-600"><span className="font-medium text-slate-700">Siguiente paso:</span> {currentStageIndex !== null ? (currentStageIndex < 7 ? PASO_ACTUAL_LABELS[currentStageIndex + 1] : "Cierre") : "Diagnóstico comercial"}</p>
         </div>
 
         <div className="mt-5 space-y-3">
