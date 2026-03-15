@@ -1,10 +1,18 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { List, LayoutGrid, FileText, ChevronRight, CheckCircle2 } from "lucide-react";
 import { getLeadsOkMacroFlow, type LeadForLeadsOkMacro, type LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
 import { getLeadsOkMicroFlow } from "@/lib/crm/leadsOkMicroFlow";
+import {
+  getPresentationPrimaryUrl,
+  isLikelyEmbedBlocked,
+  PRESENTATION_POPUP_FEATURES,
+  PRESENTATION_POPUP_NAME,
+} from "@/lib/leads/presentationUtils";
 import { AiLeadReport } from "@/components/leads/AiLeadReport";
 
 type LeadListItem = { id: string; nombre: string | null };
@@ -18,8 +26,8 @@ function getWorkspaceFrameSrc(leadId: string, microStepId: number): string {
 }
 
 export default function LeadsOkPage() {
+  const pathname = usePathname();
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const [viewMode, setViewMode] = useState<"lista" | "kanban" | "ficha">("lista");
   const [leadsList, setLeadsList] = useState<LeadListItem[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | "">("");
   const [fullLead, setFullLead] = useState<LeadForLeadsOkMacro | null>(null);
@@ -32,6 +40,19 @@ export default function LeadsOkPage() {
     setActiveWorkspaceStep(stepId);
     setTimeout(() => workspaceRef.current?.scrollIntoView({ behavior: "smooth" }), 0);
   }, []);
+
+  const handleStepAction = useCallback(
+    (stepId: number) => {
+      if (stepId === 6 && documents) {
+        const primaryUrl = getPresentationPrimaryUrl(documents);
+        if (primaryUrl && isLikelyEmbedBlocked(primaryUrl)) {
+          window.open(primaryUrl, PRESENTATION_POPUP_NAME, PRESENTATION_POPUP_FEATURES);
+        }
+      }
+      goToWorkspace(stepId);
+    },
+    [documents, goToWorkspace]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -149,22 +170,27 @@ export default function LeadsOkPage() {
         {/* B) Selector Lista | Kanban | Ficha */}
         <div className="mt-4 flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50/80 p-1">
           {[
-            { id: "lista" as const, label: "Lista", Icon: List },
-            { id: "kanban" as const, label: "Kanban", Icon: LayoutGrid },
-            { id: "ficha" as const, label: "Ficha", Icon: FileText },
-          ].map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setViewMode(id)}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                viewMode === id ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:bg-slate-100/80"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {label}
-            </button>
-          ))}
+            { id: "lista" as const, label: "Lista", Icon: List, href: "/admin/leads" },
+            { id: "kanban" as const, label: "Kanban", Icon: LayoutGrid, href: "/admin/leads/kanban" },
+            { id: "ficha" as const, label: "Ficha", Icon: FileText, href: "/admin/leadsok" },
+          ].map(({ id, label, Icon, href }) => {
+            const isActive =
+              (id === "ficha" && pathname?.startsWith("/admin/leadsok")) ||
+              (id === "lista" && pathname === "/admin/leads") ||
+              (id === "kanban" && pathname === "/admin/leads/kanban");
+            return (
+              <Link
+                key={id}
+                href={href}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:bg-slate-100/80"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </Link>
+            );
+          })}
         </div>
       </div>
 
@@ -210,7 +236,7 @@ export default function LeadsOkPage() {
                     disabled={!selectedLeadId || isComplete}
                     onClick={() => {
                       if (!selectedLeadId || isComplete || !activeMicro) return;
-                      goToWorkspace(activeMicro.id);
+                      handleStepAction(activeMicro.id);
                     }}
                     className={`mt-3 w-full rounded-lg px-4 py-3 text-base font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed ${
                       isComplete || !selectedLeadId
@@ -424,7 +450,7 @@ export default function LeadsOkPage() {
                   <div className="mt-3">
                     <button
                       type="button"
-                      onClick={() => goToWorkspace(step.id)}
+                      onClick={() => handleStepAction(step.id)}
                       className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-offset-2"
                     >
                       {step.id === 2 && "Ir al diagnóstico comercial"}

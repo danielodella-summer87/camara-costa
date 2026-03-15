@@ -26,7 +26,7 @@ const NAV: NavItem[] = [
   { label: "Dashboard comercial", href: "/admin/dashboard" },
   { label: "Leads", href: "/admin/leads" },
   { label: "LeadsOk", href: "/admin/leadsok" },
-  { label: "socios", href: "/admin/socios" },
+  { label: "Socios", href: "/admin/socios" },
   { label: "Agenda", href: "/admin/agenda" },
   { label: "Reuniones", href: "/admin/reuniones" },
   { label: "Operaciones", href: "/admin/operaciones" },

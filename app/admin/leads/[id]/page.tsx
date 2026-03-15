@@ -17,12 +17,26 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import Acciones from "@/components/acciones/Acciones";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { List, LayoutGrid, FileText } from "lucide-react";
+import { List, LayoutGrid, FileText, Search, Share2, Megaphone, Target, Compass, Star, Wrench, Lightbulb } from "lucide-react";
 import { useSetBreadcrumbSegment } from "@/app/admin/context/BreadcrumbContext";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
 import { usePermissions } from "@/lib/rbac/usePermissions";
+import {
+  computeCurrentStep,
+  isStepActual,
+  isStepDone,
+  type CommercialStep,
+} from "@/lib/leads/computeCommercialStep";
+import {
+  getPresentationPrimaryUrl,
+  isLikelyEmbedBlocked,
+  PRESENTATION_POPUP_FEATURES,
+  PRESENTATION_POPUP_NAME,
+  isPdfUrl,
+  isSameOriginPdfUrl,
+} from "@/lib/leads/presentationUtils";
 
 type Empresa = {
   id: string;
@@ -716,8 +730,9 @@ export default function LeadDetailPage() {
       const el = document.getElementById(sectionFromUrl);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
-        if (sectionFromUrl === "ia-report-block" && el instanceof HTMLDetailsElement) {
-          el.setAttribute("open", "open");
+        if (sectionFromUrl === "ia-report-block") {
+          const details = el instanceof HTMLDetailsElement ? el : el.querySelector("details");
+          if (details instanceof HTMLDetailsElement) details.setAttribute("open", "open");
         }
       }
     }, 200);
@@ -744,12 +759,69 @@ export default function LeadDetailPage() {
   /** Generación de documentos comerciales (Diagnóstico, Visión, Propuesta). */
   const [commercialDocLoading, setCommercialDocLoading] = useState<"diagnostic" | "strategy" | "proposal" | null>(null);
   const [commercialDocError, setCommercialDocError] = useState<string | null>(null);
-  /** URLs de documentos generados en esta sesión (persistido en sessionStorage por lead). */
-  const [commercialDocUrls, setCommercialDocUrls] = useState<{ diagnostic: string | null; strategy: string | null; proposal: string | null }>({
+  /** URLs de documentos generados (diagnostic, strategy, proposal, presentation). presentation es opcional; si no existe se usa proposal como documento final. */
+  const [commercialDocUrls, setCommercialDocUrls] = useState<{ diagnostic: string | null; strategy: string | null; proposal: string | null; presentation: string | null }>({
     diagnostic: null,
     strategy: null,
     proposal: null,
+    presentation: null,
   });
+  /** Feedback "Copiado" en botones Copiar (informe / visión). */
+  const [copiedWhich, setCopiedWhich] = useState<"informe" | "informe-paso46" | "vision" | null>(null);
+  /** Mostrar/ocultar contenido del informe comercial en la pestaña Consultor (por defecto visible, se puede colapsar). */
+  const [showCommercialReport, setShowCommercialReport] = useState(true);
+  /** Mostrar/ocultar contenido de visión estratégica en la pestaña Consultor (por defecto visible, se puede colapsar). */
+  const [showStrategicVision, setShowStrategicVision] = useState(true);
+
+  /** Secciones del informe comercial (TAB:xxx) para render con iconos. */
+  const commercialReportSections = useMemo(() => {
+    const raw = (lead as { ai_report?: string | null })?.ai_report;
+    if (typeof raw !== "string" || !raw.trim()) return { intro: "", sections: [] as { id: string; label: string; Icon: React.ComponentType<{ className?: string }>; content: string }[] };
+    const TAB_MAP: Record<string, { label: string; Icon: React.ComponentType<{ className?: string }> }> = {
+      INVESTIGACION_DIGITAL: { label: "Investigación digital", Icon: Search },
+      REDES_SOCIALES: { label: "Redes sociales", Icon: Share2 },
+      PAUTA_PUBLICITARIA: { label: "Pauta publicitaria", Icon: Megaphone },
+      POSICIONAMIENTO: { label: "Posicionamiento", Icon: Target },
+      NORTH_STAR_METRIC: { label: "North Star Metric", Icon: Compass },
+      north_star_metric: { label: "North Star Metric", Icon: Compass },
+      PRODUCTO_SERVICIO_ESTRELLA: { label: "Producto / servicio estrella", Icon: Star },
+      producto_servicio_estrella: { label: "Producto / servicio estrella", Icon: Star },
+      AUDITORIA_TECNICA_BASICA: { label: "Auditoría técnica básica", Icon: Wrench },
+      auditoria_tecnica_basica: { label: "Auditoría técnica básica", Icon: Wrench },
+      VISION_ESTRATEGICA: { label: "Visión estratégica", Icon: Lightbulb },
+      vision_estrategica: { label: "Visión estratégica", Icon: Lightbulb },
+    };
+    const parts = raw.split(/\n###\s*TAB:([^\n]+)\n?/i);
+    let intro = parts[0]?.trim() ?? "";
+    const sections: { id: string; label: string; Icon: React.ComponentType<{ className?: string }>; content: string }[] = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = (parts[i] ?? "").trim();
+      const content = (parts[i + 1] ?? "").trim();
+      const key = name.toUpperCase().replace(/-/g, "_");
+      const config = TAB_MAP[key] ?? TAB_MAP[name] ?? { label: name.replace(/_/g, " "), Icon: FileText };
+      sections.push({ id: name, label: config.label, Icon: config.Icon, content });
+    }
+    if (sections.length === 0 && intro) {
+      sections.push({ id: "content", label: "Contenido", Icon: FileText, content: intro });
+      intro = "";
+    }
+    return { intro, sections };
+  }, [lead]);
+
+  /** Texto de visión estratégica: sección TAB:vision_estrategica del ai_report (misma fuente que el informe). */
+  const strategicVisionText = useMemo(() => {
+    const { sections } = commercialReportSections;
+    const vision = sections.find((s) => s.id === "vision_estrategica" || s.label === "Visión estratégica");
+    return vision?.content?.trim() ?? "";
+  }, [commercialReportSections]);
+
+  const hasStrategicVisionText = strategicVisionText.length > 0;
+
+  useEffect(() => {
+    if (!copiedWhich) return;
+    const t = setTimeout(() => setCopiedWhich(null), 2000);
+    return () => clearTimeout(t);
+  }, [copiedWhich]);
 
   /** Pasos del flujo y paso actual (recalculan con lead, leadServices, proposal_confirmed_at, presentationSignals). */
   const flowSteps = useMemo(
@@ -783,12 +855,6 @@ export default function LeadDetailPage() {
     [lead, leadServices]
   );
 
-  useEffect(() => {
-    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
-      console.log("[PROPOSAL PAYLOAD DEBUG]", proposalExportPayload);
-    }
-  }, [proposalExportPayload]);
-
   const COMMERCIAL_DOCS_STORAGE_KEY = "lead_commercial_docs";
 
   /** Cargar documentos desde API (DB). Fallback opcional: sessionStorage. */
@@ -796,23 +862,25 @@ export default function LeadDetailPage() {
     if (!id?.trim() || typeof window === "undefined") return;
     fetch(`/api/admin/leads/${id}/documents`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((data: { ok?: boolean; documents?: { diagnostic?: string; strategy?: string; proposal?: string } }) => {
+      .then((data: { ok?: boolean; documents?: { diagnostic?: string; strategy?: string; proposal?: string; presentation?: string } }) => {
         if (data?.ok && data.documents) {
           setCommercialDocUrls({
             diagnostic: data.documents.diagnostic ?? null,
             strategy: data.documents.strategy ?? null,
             proposal: data.documents.proposal ?? null,
+            presentation: data.documents.presentation ?? null,
           });
           return;
         }
         try {
           const raw = sessionStorage.getItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`);
           if (raw) {
-            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null };
+            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null; presentation?: string | null };
             setCommercialDocUrls({
               diagnostic: parsed.diagnostic ?? null,
               strategy: parsed.strategy ?? null,
               proposal: parsed.proposal ?? null,
+              presentation: parsed.presentation ?? null,
             });
           }
         } catch {
@@ -823,11 +891,12 @@ export default function LeadDetailPage() {
         try {
           const raw = sessionStorage.getItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`);
           if (raw) {
-            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null };
+            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null; presentation?: string | null };
             setCommercialDocUrls({
               diagnostic: parsed.diagnostic ?? null,
               strategy: parsed.strategy ?? null,
               proposal: parsed.proposal ?? null,
+              presentation: parsed.presentation ?? null,
             });
           }
         } catch {
@@ -904,6 +973,7 @@ export default function LeadDetailPage() {
             const url = statusJson?.pdfUrl ?? statusJson?.gammaUrl ?? null;
             if (url) {
               await persistCommercialDocUrl(docType, url, generationId);
+              loadCommercialDocuments();
               window.open(url, "_blank");
             }
             break;
@@ -918,7 +988,7 @@ export default function LeadDetailPage() {
         setCommercialDocLoading(null);
       }
     },
-    [id, persistCommercialDocUrl]
+    [id, persistCommercialDocUrl, loadCommercialDocuments]
   );
 
   const hasDiagnosticGenerated = Boolean(commercialDocUrls.diagnostic);
@@ -935,19 +1005,20 @@ export default function LeadDetailPage() {
     ((leadServices?.length ?? 0) > 0 && ((proposalExportPayload?.monthlyTable?.rows?.length ?? 0) > 0))
   );
 
-  /** Siguiente paso recomendado del pipeline comercial (1–6). */
-  const nextCommercialStep = useMemo((): 1 | 2 | 3 | 4 | 5 | 6 => {
-    if (!hasAnalysisInternal) return 1;
-    if (!hasDiagnosticGenerated) return 2;
-    if (!hasStrategyGenerated) return 3;
-    if (!hasStructureReady) return 4;
-    if (!hasProposalGenerated) return 5;
-    return 6;
-  }, [hasAnalysisInternal, hasDiagnosticGenerated, hasStrategyGenerated, hasStructureReady, hasProposalGenerated]);
+  /** Paso actual del proceso comercial (1–5). Fuente única de verdad para barra, siguiente paso y botones. */
+  const currentStep = useMemo(
+    (): CommercialStep =>
+      computeCurrentStep({
+        lead: lead ?? null,
+        documents: commercialDocUrls,
+        structureReady: hasStructureReady,
+      }),
+    [lead, commercialDocUrls, hasStructureReady]
+  );
 
-  /** Config del siguiente paso para el bloque "Siguiente paso recomendado". */
+  /** Config del paso actual para el bloque "Siguiente paso recomendado" (flujo de 5 pasos). */
   const nextStepConfig = useMemo(() => {
-    const steps: Record<number, { title: string; description: string; ctaLabel: string }> = {
+    const steps: Record<CommercialStep, { title: string; description: string; ctaLabel: string }> = {
       1: {
         title: "Análisis del Lead",
         description: "Generá el análisis interno con IA para detectar oportunidades y preparar la base del diagnóstico comercial.",
@@ -969,18 +1040,62 @@ export default function LeadDetailPage() {
         ctaLabel: "Ir a estructura de servicios",
       },
       5: {
-        title: "Propuesta Comercial",
-        description: "Generá la propuesta comercial integral (narrativa + estructura económica) para el cliente.",
+        title: "Propuesta final para cliente",
+        description: "Revisá la propuesta, compartí el documento final con el cliente y marcá el envío cuando corresponda.",
         ctaLabel: "Generar Propuesta Comercial",
       },
-      6: {
-        title: "Presentación para el Cliente",
-        description: "Los documentos están listos. Abrí la presentación final para compartir con el cliente.",
-        ctaLabel: "Presentar al cliente",
-      },
     };
-    return steps[nextCommercialStep];
-  }, [nextCommercialStep]);
+    return steps[currentStep];
+  }, [currentStep]);
+
+  /** Bloque de contexto del proceso comercial para section=... (orientación al usuario). */
+  const processStepContext = useMemo(() => {
+    if (activeTab === "consultor" && sectionFromUrl === "proposal-export") {
+      return {
+        title: "Paso 5 — Propuesta comercial",
+        description: "Aquí revisás la propuesta integral, validás la narrativa y preparás la salida final para el cliente.",
+        nextStep: "Cierre del proceso",
+      };
+    }
+    if (activeTab === "consultor" && sectionFromUrl === "services-proposal") {
+      return {
+        title: "Paso 4 — Estructura de servicios",
+        description: "Definí y confirmá la base económica de la propuesta.",
+        nextStep: "Paso 5 — Propuesta comercial",
+      };
+    }
+    if (activeTab === "comercial" && sectionFromUrl === "ia-report-block") {
+      const step = currentStep <= 1 ? 1 : currentStep === 2 ? 2 : 3;
+      const config: Record<number, { title: string; description: string; nextStep: string }> = {
+        1: {
+          title: "Paso 1 — Análisis del lead",
+          description: "Generá el análisis interno con IA para detectar oportunidades y preparar la base del diagnóstico comercial.",
+          nextStep: "Paso 2 — Diagnóstico comercial",
+        },
+        2: {
+          title: "Paso 2 — Diagnóstico comercial",
+          description: "El análisis ya está listo. Aquí generás el documento consultivo del diagnóstico para presentar al lead.",
+          nextStep: "Paso 3 — Estrategia de crecimiento",
+        },
+        3: {
+          title: "Paso 3 — Estrategia de crecimiento",
+          description: "Generá la visión estratégica que conecta el diagnóstico con el plan de crecimiento.",
+          nextStep: "Paso 4 — Estructura de servicios",
+        },
+      };
+      return config[step];
+    }
+    return null;
+  }, [activeTab, sectionFromUrl, currentStep]);
+
+  const presentationPrimaryUrl = useMemo(
+    () => getPresentationPrimaryUrl(commercialDocUrls),
+    [commercialDocUrls]
+  );
+  const presentationEmbedBlocked = useMemo(
+    () => isLikelyEmbedBlocked(presentationPrimaryUrl),
+    [presentationPrimaryUrl]
+  );
 
   // ✅ Usuario actual (app_user.id, comercial_id cuando la API lo exponga)
   const [currentAppUserId, setCurrentAppUserId] = useState<string | null>(null);
@@ -1685,6 +1800,26 @@ export default function LeadDetailPage() {
       setProposalSentSaving(false);
     }
   }
+
+  /** Descarga real de PDF por fetch+blob+objectURL (solo same-origin). En CORS falla y no se debe usar para externos. */
+  const handleDownloadPdf = useCallback(async (url: string, filename: string) => {
+    try {
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }, []);
 
   async function handleAddSuggestedService(suggestion: SuggestedService) {
     if (!id) return;
@@ -3032,12 +3167,22 @@ export default function LeadDetailPage() {
                               {id && (
                                 <div className="mt-3">
                                   {isPresentacion ? (
-                                    <Link
-                                      href={`/admin/leads/${id}/presentacion`}
-                                      className="inline-block rounded-xl border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 shadow-sm"
-                                    >
-                                      {display.cta}
-                                    </Link>
+                                    presentationEmbedBlocked && presentationPrimaryUrl ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => window.open(presentationPrimaryUrl, PRESENTATION_POPUP_NAME, PRESENTATION_POPUP_FEATURES)}
+                                        className="inline-block rounded-xl border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 shadow-sm"
+                                      >
+                                        {display.cta}
+                                      </button>
+                                    ) : (
+                                      <Link
+                                        href={`/admin/leads/${id}/presentacion`}
+                                        className="inline-block rounded-xl border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 shadow-sm"
+                                      >
+                                        {display.cta}
+                                      </Link>
+                                    )
                                   ) : (
                                     <button
                                       type="button"
@@ -3441,22 +3586,6 @@ export default function LeadDetailPage() {
                         <div className="mt-1 text-xs text-slate-500">Cargando comerciales…</div>
                       )}
                     </div>
-
-                    <Field
-                      label="LinkedIn Empresa"
-                      editing={editing}
-                      value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
-                      onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
-                      placeholder="https://linkedin.com/..."
-                    />
-
-                    <Field
-                      label="LinkedIn Director"
-                      editing={editing}
-                      value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
-                      onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
-                      placeholder="https://linkedin.com/..."
-                    />
                   </div>
                 </div>
                 )}
@@ -3542,6 +3671,21 @@ export default function LeadDetailPage() {
                       )}
                     </div>
                   </div>
+
+                  <Field
+                    label="LinkedIn Empresa"
+                    editing={editing}
+                    value={(editing ? (draft.linkedin_empresa as any) : lead?.linkedin_empresa) ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_empresa: v }))}
+                    placeholder="https://linkedin.com/..."
+                  />
+                  <Field
+                    label="LinkedIn Director"
+                    editing={editing}
+                    value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
+                    placeholder="https://linkedin.com/..."
+                  />
 
                   <div>
                     <div className="text-xs text-slate-500">Objetivo</div>
@@ -3679,9 +3823,9 @@ export default function LeadDetailPage() {
                   </p>
                 )}
 
-                {/* BLOQUE 1 — Barra de progreso */}
+                {/* BLOQUE 1 — Barra de progreso (lineal: completados = pasos anteriores al actual) */}
                 {(() => {
-                  const completed = [hasAnalysisInternal, hasDiagnosticGenerated, hasStrategyGenerated, hasStructureReady, hasProposalGenerated, allDocsGenerated].filter(Boolean).length;
+                  const completed = Math.max(0, currentStep - 1);
                   return (
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       <span className="text-xs font-medium text-slate-600">
@@ -3697,59 +3841,61 @@ export default function LeadDetailPage() {
                   );
                 })()}
 
-                {/* BLOQUE 1 — Tarjetas de pasos 1–6 (completado / actual / siguiente / bloqueado) */}
+                {/* BLOQUE 1 — Tarjetas de pasos 1–5 (completado / actual / bloqueado según currentStep único) */}
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {[
-                    { n: 1, label: "Análisis", done: hasAnalysisInternal, actual: nextCommercialStep === 1, tip: "Análisis del lead con IA. Entrada: datos del lead. Salida: informe interno que alimenta diagnóstico y estrategia." },
-                    { n: 2, label: "Diagnóstico", done: hasDiagnosticGenerated, actual: nextCommercialStep === 2, tip: "Documento consultivo del diagnóstico. Usa el análisis interno. Salida: diagnóstico listo para presentar al lead." },
-                    { n: 3, label: "Estrategia", done: hasStrategyGenerated, actual: nextCommercialStep === 3, tip: "Visión estratégica de crecimiento. Usa el diagnóstico. Salida: documento de estrategia." },
-                    { n: 4, label: "Estructura", done: hasStructureReady, actual: nextCommercialStep === 4, tip: "Estructura de servicios y costos. Se define en Consultor. Base económica de la propuesta." },
-                    { n: 5, label: "Propuesta", done: hasProposalGenerated, actual: nextCommercialStep === 5, tip: "Propuesta comercial integral. Usa estrategia y estructura. Salida: documento listo para el cliente." },
-                    { n: 6, label: "Presentación", done: allDocsGenerated, actual: nextCommercialStep === 6, tip: "Vista final para compartir con el cliente. Agrupa diagnóstico, estrategia y propuesta." },
-                  ].map(({ n, label, done, actual, tip }) => (
-                    <Tooltip key={n} content={tip} maxWidth="300px">
-                      <div
-                        className={`rounded-lg border-2 px-3 py-2 min-w-[100px] text-center cursor-help ${
-                          done ? "border-emerald-200 bg-emerald-50/70" : actual ? "border-emerald-400 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"
-                        }`}
-                      >
-                        <span className="text-xs font-semibold text-slate-700">Paso {n}</span>
-                        <p className="text-xs font-medium text-slate-800 mt-0.5">{label}</p>
-                        <p className="text-[10px] mt-0.5 text-slate-500">{done ? "Completado ✓" : actual ? "Actual" : "Bloqueado"}</p>
-                      </div>
-                    </Tooltip>
-                  ))}
+                  {([
+                    { n: 1, label: "Análisis", tip: "Análisis del lead con IA. Entrada: datos del lead. Salida: informe interno que alimenta diagnóstico y estrategia." },
+                    { n: 2, label: "Diagnóstico", tip: "Documento consultivo del diagnóstico. Usa el análisis interno. Salida: diagnóstico listo para presentar al lead." },
+                    { n: 3, label: "Estrategia", tip: "Visión estratégica de crecimiento. Usa el diagnóstico. Salida: documento de estrategia." },
+                    { n: 4, label: "Estructura", tip: "Estructura de servicios y costos. Se define en Consultor. Base económica de la propuesta." },
+                    { n: 5, label: "Propuesta final", tip: "Propuesta comercial y documento final para el cliente. Revisar, compartir y marcar envío." },
+                  ] as const).map(({ n, label, tip }) => {
+                    const done = isStepDone(n, currentStep);
+                    const actual = isStepActual(n, currentStep);
+                    return (
+                      <Tooltip key={n} content={tip} maxWidth="300px">
+                        <div
+                          className={`rounded-lg border-2 px-3 py-2 min-w-[100px] text-center cursor-help ${
+                            done ? "border-emerald-200 bg-emerald-50/70" : actual ? "border-emerald-400 bg-white ring-2 ring-emerald-200" : "border-slate-200 bg-slate-50/50"
+                          }`}
+                        >
+                          <span className="text-xs font-semibold text-slate-700">Paso {n}</span>
+                          <p className="text-xs font-medium text-slate-800 mt-0.5">{label}</p>
+                          <p className="text-[10px] mt-0.5 text-slate-500">{done ? "Completado ✓" : actual ? "Actual" : "Bloqueado"}</p>
+                        </div>
+                      </Tooltip>
+                    );
+                  })}
                 </div>
 
                 {/* BLOQUE 2 — Paso actual / acción principal */}
                 <div className="mt-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/60 p-4">
-                  {nextCommercialStep === 1 && !hasAnalysisInternal && (
+                  {currentStep === 1 && !hasAnalysisInternal && (
                     <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Paso actual</p>
                   )}
-                  {(nextCommercialStep > 1 || hasAnalysisInternal) && (
+                  {(currentStep > 1 || hasAnalysisInternal) && (
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Siguiente paso recomendado</p>
                   )}
-                  {nextCommercialStep > 1 && (
-                    <p className="mt-0.5 text-xs font-medium text-emerald-700">Paso {nextCommercialStep - 1} completado ✓</p>
+                  {currentStep > 1 && (
+                    <p className="mt-0.5 text-xs font-medium text-emerald-700">Paso {currentStep - 1} completado ✓</p>
                   )}
                   <p className="mt-1 text-sm font-semibold text-slate-900">{nextStepConfig.title}</p>
                   <p className="mt-0.5 text-sm text-slate-600">{nextStepConfig.description}</p>
                   <p className="mt-2 text-xs font-medium text-slate-500">
                     Qué obtiene:{" "}
-                    {nextCommercialStep === 1 && "Informe interno del lead que servirá de base para diagnóstico y estrategia."}
-                    {nextCommercialStep === 2 && "Documento consultivo del diagnóstico listo para presentar al lead."}
-                    {nextCommercialStep === 3 && "Documento de visión estratégica que conecta diagnóstico con el plan de crecimiento."}
-                    {nextCommercialStep === 4 && "Tabla de servicios, alcance y costos definida en Consultor (base de la propuesta)."}
-                    {nextCommercialStep === 5 && "Propuesta comercial integral lista para compartir con el cliente."}
-                    {nextCommercialStep === 6 && "Vista de presentación final con todos los documentos para el cliente."}
+                    {currentStep === 1 && "Informe interno del lead que servirá de base para diagnóstico y estrategia."}
+                    {currentStep === 2 && "Documento consultivo del diagnóstico listo para presentar al lead."}
+                    {currentStep === 3 && "Documento de visión estratégica que conecta diagnóstico con el plan de crecimiento."}
+                    {currentStep === 4 && "Tabla de servicios, alcance y costos definida en Consultor (base de la propuesta)."}
+                    {currentStep === 5 && "Documento final para compartir con el cliente, descargar PDF y marcar como enviada."}
                   </p>
                   <div className="mt-3">
-                    {nextCommercialStep === 1 && (
+                    {currentStep === 1 && (
                       <Tooltip content="Crea el análisis interno del lead con IA. Este resultado alimenta el diagnóstico comercial y la estrategia. Abre las herramientas del paso 1 para ejecutarlo." maxWidth="320px">
                         <span className="inline-block">
                           <button
                             type="button"
-                            onClick={() => { const el = document.getElementById("ia-report-block"); el?.scrollIntoView({ behavior: "smooth" }); (el as HTMLDetailsElement)?.setAttribute("open", "true"); }}
+                            onClick={() => { const wrapper = document.getElementById("ia-report-block"); wrapper?.scrollIntoView({ behavior: "smooth" }); const details = wrapper?.querySelector("details"); if (details instanceof HTMLDetailsElement) details.setAttribute("open", "open"); }}
                             className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
                           >
                             {nextStepConfig.ctaLabel}
@@ -3757,7 +3903,7 @@ export default function LeadDetailPage() {
                         </span>
                       </Tooltip>
                     )}
-                    {nextCommercialStep === 2 && (
+                    {currentStep === 2 && (
                       <Tooltip content="Genera el documento comercial del Paso 2. Este archivo presenta el diagnóstico consultivo del lead de forma clara y profesional." maxWidth="300px">
                         <span className="inline-block">
                           <button
@@ -3771,7 +3917,7 @@ export default function LeadDetailPage() {
                         </span>
                       </Tooltip>
                     )}
-                    {nextCommercialStep === 3 && (
+                    {currentStep === 3 && (
                       <Tooltip content="Genera el documento de estrategia de crecimiento a partir del diagnóstico y la información disponible del lead." maxWidth="300px">
                         <span className="inline-block">
                           <button
@@ -3785,7 +3931,7 @@ export default function LeadDetailPage() {
                         </span>
                       </Tooltip>
                     )}
-                    {nextCommercialStep === 4 && id && (
+                    {currentStep === 4 && id && (
                       <Tooltip content="Lleva al tab Consultor para definir la tabla de servicios, alcance y costos. Es la base económica de la propuesta comercial." maxWidth="320px">
                         <span className="inline-block">
                           <button
@@ -3798,91 +3944,57 @@ export default function LeadDetailPage() {
                         </span>
                       </Tooltip>
                     )}
-                    {nextCommercialStep === 5 && (
-                      <Tooltip content="Genera la propuesta comercial final con servicios, inversión y condiciones para presentar al cliente." maxWidth="300px">
-                        <span className="inline-block">
+                    {currentStep === 5 && (
+                      <span className="inline-block flex flex-wrap items-center gap-2">
+                        {!commercialDocUrls.proposal && (
+                          <Tooltip content="Genera la propuesta comercial final con servicios, inversión y condiciones para presentar al cliente." maxWidth="300px">
+                            <button
+                              type="button"
+                              onClick={() => generateCommercialDoc("proposal")}
+                              disabled={!id || commercialDocLoading !== null || !hasStrategyGenerated}
+                              className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700 disabled:opacity-50 disabled:animate-none"
+                            >
+                              {commercialDocLoading === "proposal" ? "Generando…" : nextStepConfig.ctaLabel}
+                            </button>
+                          </Tooltip>
+                        )}
+                        <Tooltip content="Baja al bloque del Paso 5 para ver la propuesta, descargar PDF o marcar como enviada." maxWidth="280px">
                           <button
                             type="button"
-                            onClick={() => generateCommercialDoc("proposal")}
-                            disabled={!id || commercialDocLoading !== null || !hasStrategyGenerated}
-                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700 disabled:opacity-50 disabled:animate-none"
+                            onClick={() => document.getElementById("bloque-paso-5")?.scrollIntoView({ behavior: "smooth" })}
+                            className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
                           >
-                            {commercialDocLoading === "proposal" ? "Generando…" : nextStepConfig.ctaLabel}
+                            Ir al bloque del paso 5
                           </button>
-                        </span>
-                      </Tooltip>
-                    )}
-                    {nextCommercialStep === 6 && allDocsGenerated && id && (
-                      <Tooltip content="Abre la vista de presentación final con diagnóstico, estrategia y propuesta listos para compartir con el cliente." maxWidth="320px">
-                        <span className="inline-block">
-                          <Link
-                            href={`/admin/leads/${id}/presentacion`}
-                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md animate-pulse hover:bg-emerald-700"
-                          >
-                            {nextStepConfig.ctaLabel}
-                          </Link>
-                        </span>
-                      </Tooltip>
+                        </Tooltip>
+                      </span>
                     )}
                   </div>
                 </div>
 
-                {/* BLOQUE 3 — Después de esto sigue… */}
-                {nextCommercialStep < 6 && (
+                {/* BLOQUE 3 — Después de esto sigue… (solo hasta paso 4) */}
+                {currentStep < 5 && (
                   <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/50 p-3">
                     <p className="text-xs font-semibold text-slate-600">Después de esto sigue</p>
                     <p className="mt-0.5 text-sm text-slate-700">
-                      {nextCommercialStep === 1 && "Paso 2: Diagnóstico comercial — documento consultivo para presentar al lead."}
-                      {nextCommercialStep === 2 && "Paso 3: Estrategia de crecimiento — visión estratégica que conecta diagnóstico con el plan."}
-                      {nextCommercialStep === 3 && "Paso 4: Estructura de servicios — tabla de servicios y costos en el tab Consultor."}
-                      {nextCommercialStep === 4 && "Paso 5: Propuesta comercial — documento integral con narrativa y estructura económica."}
-                      {nextCommercialStep === 5 && "Paso 6: Presentación — vista final para compartir con el cliente."}
+                      {currentStep === 1 && "Paso 2: Diagnóstico comercial — documento consultivo para presentar al lead."}
+                      {currentStep === 2 && "Paso 3: Estrategia de crecimiento — visión estratégica que conecta diagnóstico con el plan."}
+                      {currentStep === 3 && "Paso 4: Estructura de servicios — tabla de servicios y costos en el tab Consultor."}
+                      {currentStep === 4 && "Paso 5: Propuesta final para cliente — documento integral, compartir y marcar envío."}
                     </p>
                   </div>
                 )}
 
-                {/* Tarjeta Paso 6 — Presentación para el cliente (visible cuando la propuesta económica está confirmada) */}
-                {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && id && (
-                  <div className="mt-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/70 p-4">
-                    <p className="text-sm font-semibold text-emerald-800">
-                      Propuesta confirmada ✔
-                    </p>
-                    <p className="mt-0.5 text-sm text-emerald-700">
-                      Podés generar la presentación para el cliente.
-                    </p>
-                    <p className="mt-3 text-sm font-semibold text-slate-900">Paso 6 — Presentación para el cliente</p>
-                    <p className="mt-0.5 text-sm text-slate-600">
-                      Usa la propuesta aprobada para generar la presentación final para el cliente.
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Tooltip content="Abre la presentación generada a partir de la propuesta confirmada." maxWidth="300px">
-                        <Link
-                          href={`/admin/leads/${id}/presentacion`}
-                          className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-emerald-700"
-                        >
-                          Ver presentación
-                        </Link>
-                      </Tooltip>
-                      <Tooltip content="Genera el PDF final listo para enviar al cliente. Abre la sección de informe y propuesta para descargar." maxWidth="320px">
-                        <button
-                          type="button"
-                          onClick={() => router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                          className="inline-flex items-center justify-center rounded-lg border-2 border-emerald-600 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
-                        >
-                          Descargar PDF
-                        </button>
-                      </Tooltip>
-                    </div>
-                  </div>
-                )}
-
-                {/* Bloque final de cierre: propuesta lista para enviar al cliente (cuando propuesta confirmada) */}
-                {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && id && (
-                  <div className="mt-4 rounded-xl border-2 border-slate-300 bg-slate-50/80 p-4">
-                    <h3 className="text-base font-semibold text-slate-900">Propuesta lista para enviar al cliente</h3>
+                {/* Bloque único de cierre: Paso 5 — Propuesta final para cliente (ver documento, descargar PDF, marcar enviada) */}
+                {currentStep === 5 && id && (
+                  <div id="bloque-paso-5" className="mt-4 rounded-xl border-2 border-slate-300 bg-slate-50/80 p-4">
+                    <h3 className="text-base font-semibold text-slate-900">Paso 5 — Propuesta final para cliente</h3>
                     <p className="mt-1 text-sm text-slate-600">
-                      La propuesta económica ya fue confirmada y la presentación está disponible para compartir con el cliente.
+                      Revisá la propuesta, compartí el documento final con el cliente y marcá como enviada cuando corresponda.
                     </p>
+                    {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
+                      <p className="mt-2 text-sm font-medium text-emerald-700">Propuesta confirmada ✔</p>
+                    )}
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {(lead as { proposal_sent_at?: string | null } | undefined)?.proposal_sent_at && (
                         <div className="flex flex-col gap-0.5">
@@ -3892,23 +4004,43 @@ export default function LeadDetailPage() {
                           </p>
                         </div>
                       )}
-                      <Tooltip content="Abre la presentación generada a partir de la propuesta confirmada." maxWidth="300px">
-                        <Link
-                          href={`/admin/leads/${id}/presentacion`}
-                          className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
-                        >
-                          Ver presentación
-                        </Link>
-                      </Tooltip>
-                      <Tooltip content="Genera el PDF final listo para enviar al cliente." maxWidth="300px">
-                        <button
-                          type="button"
-                          onClick={() => router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                          className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          Descargar PDF
-                        </button>
-                      </Tooltip>
+                      {commercialDocUrls.proposal && (
+                        <>
+                          <Tooltip content="Abre la propuesta comercial en nueva pestaña." maxWidth="280px">
+                            <a
+                              href={commercialDocUrls.proposal}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+                            >
+                              Ver propuesta comercial
+                            </a>
+                          </Tooltip>
+                          {isPdfUrl(commercialDocUrls.proposal) &&
+                            (typeof window !== "undefined" && isSameOriginPdfUrl(commercialDocUrls.proposal, window.location.origin) ? (
+                              <Tooltip content="Descarga el PDF de la propuesta." maxWidth="280px">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadPdf(commercialDocUrls.proposal!, "propuesta-comercial.pdf")}
+                                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                                >
+                                  Descargar PDF
+                                </button>
+                              </Tooltip>
+                            ) : (
+                              <Tooltip content="Abre el PDF en el navegador (documento externo)." maxWidth="280px">
+                                <a
+                                  href={commercialDocUrls.proposal}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                                >
+                                  Abrir PDF
+                                </a>
+                              </Tooltip>
+                            ))}
+                        </>
+                      )}
                       {!(lead as { proposal_sent_at?: string | null } | undefined)?.proposal_sent_at && (
                         <Tooltip content="Registra que la propuesta fue enviada al cliente y comienza la etapa de seguimiento." maxWidth="320px">
                           <button
@@ -3933,7 +4065,16 @@ export default function LeadDetailPage() {
                     </Tooltip>
                   </summary>
                   <div className="mt-2 space-y-4 px-0">
-                  <details id="ia-report-block" className="rounded-lg border border-slate-200 bg-white mx-0">
+                    <div id="ia-report-block">
+                      {activeTab === "comercial" && sectionFromUrl === "ia-report-block" && processStepContext && (
+                        <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Proceso comercial</p>
+                          <h3 className="mt-1 text-lg font-semibold text-slate-900">{processStepContext.title}</h3>
+                          <p className="mt-1.5 text-sm text-slate-600">{processStepContext.description}</p>
+                          <p className="mt-3 border-t border-slate-200 pt-3 text-xs font-medium text-slate-600">Después sigue: {processStepContext.nextStep}</p>
+                        </div>
+                      )}
+                      <details className="rounded-lg border border-slate-200 bg-white mx-0">
                     <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
                       <Tooltip content="Generar análisis con IA, ver informe comercial, editar prompt y exportar. Todo lo del paso 1 en un solo lugar." maxWidth="300px">
                         <span className="inline-block">▼ Herramientas del Paso 1 — Análisis del Lead (IA)</span>
@@ -3958,27 +4099,89 @@ export default function LeadDetailPage() {
                       )}
                     </div>
                   </details>
+                  </div>
                   <details className="rounded-lg border border-slate-200 bg-white">
                     <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                      <Tooltip content="Enlaces a los documentos de diagnóstico y visión estratégica generados en los pasos 2 y 3." maxWidth="300px">
+                      <Tooltip content="Documentos de diagnóstico y visión estratégica (pasos 2 y 3). En todos: Ver, Descargar, Copiar." maxWidth="300px">
                         <span className="inline-block">▼ Herramientas del Paso 2 y 3 — Diagnóstico y Estrategia</span>
                       </Tooltip>
                     </summary>
-                    <div className="border-t border-slate-100 px-3 pb-3 pt-2">
-                      <p className="mb-2 text-xs text-slate-500">El documento de visión estratégica se genera con el botón de arriba.</p>
-                      {hasStrategyGenerated && commercialDocUrls.strategy && (
-                        <Tooltip content="Abre el documento de visión estratégica generado en el paso 3 en una nueva pestaña." maxWidth="280px">
-                          <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                            Abrir documento generado
-                          </a>
-                        </Tooltip>
-                      )}
+                    <div className="border-t border-slate-100 px-3 pb-3 pt-2 space-y-4">
+                      <div>
+                        <p className="text-xs font-medium text-slate-600 mb-1.5">Diagnóstico comercial</p>
+                        <div className="flex flex-wrap gap-2">
+                          {commercialDocUrls.diagnostic ? (
+                            <Tooltip content="Abre el documento generado para revisión." maxWidth="260px">
+                              <a href={commercialDocUrls.diagnostic} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Ver diagnóstico comercial
+                              </a>
+                            </Tooltip>
+                          ) : null}
+                          {commercialDocUrls.diagnostic && isPdfUrl(commercialDocUrls.diagnostic)
+                            ? (typeof window !== "undefined" && isSameOriginPdfUrl(commercialDocUrls.diagnostic, window.location.origin) ? (
+                                <Tooltip content="Descarga el PDF ya generado del documento." maxWidth="260px">
+                                  <button type="button" onClick={() => handleDownloadPdf(commercialDocUrls.diagnostic!, "diagnostico-comercial.pdf")} className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                    Descargar PDF diagnóstico comercial
+                                  </button>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip content="Abre el PDF en el navegador (documento externo)." maxWidth="260px">
+                                  <a href={commercialDocUrls.diagnostic} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                    Abrir PDF diagnóstico comercial
+                                  </a>
+                                </Tooltip>
+                              ))
+                            : id ? (
+                            <Tooltip content="Abre el área correspondiente para generar el PDF del documento." maxWidth="260px">
+                              <Link href={`/admin/leads/${id}?tab=comercial&section=ia-report-block`} className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Ir a generar PDF
+                              </Link>
+                            </Tooltip>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-slate-600 mb-1.5">Visión estratégica</p>
+                        <div className="flex flex-wrap gap-2">
+                          {commercialDocUrls.strategy ? (
+                            <Tooltip content="Abre el documento generado para revisión." maxWidth="260px">
+                              <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Ver visión estratégica
+                              </a>
+                            </Tooltip>
+                          ) : null}
+                          {commercialDocUrls.strategy && isPdfUrl(commercialDocUrls.strategy)
+                            ? (typeof window !== "undefined" && isSameOriginPdfUrl(commercialDocUrls.strategy, window.location.origin) ? (
+                                <Tooltip content="Descarga el PDF ya generado del documento." maxWidth="260px">
+                                  <button type="button" onClick={() => handleDownloadPdf(commercialDocUrls.strategy!, "vision-estrategica.pdf")} className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                    Descargar PDF visión estratégica
+                                  </button>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip content="Abre el PDF en el navegador (documento externo)." maxWidth="260px">
+                                  <a href={commercialDocUrls.strategy} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                    Abrir PDF visión estratégica
+                                  </a>
+                                </Tooltip>
+                              ))
+                            : id ? (
+                            <Tooltip content="Abre el área correspondiente para generar el PDF del documento." maxWidth="260px">
+                              <Link href={`/admin/leads/${id}?tab=comercial&section=ia-report-block`} className="inline-block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Ir a generar PDF
+                              </Link>
+                            </Tooltip>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </details>
-                  <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <Tooltip content="Estado de propuesta confirmada, material final y acciones: PDF, copiar texto, CTAs para el cliente." maxWidth="320px">
-                      <p className="text-xs font-medium text-slate-600 uppercase tracking-wide mb-2 cursor-help">Herramientas del Paso 4, 5 y 6 — Estructura, Propuesta y Presentación</p>
-                    </Tooltip>
+                  <details className="rounded-lg border border-slate-200 bg-white">
+                    <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                      <Tooltip content="Estado de propuesta confirmada, material final y acciones: PDF, copiar texto, CTAs para el cliente." maxWidth="320px">
+                        <span className="inline-block">▼ Herramientas del Paso 4, 5 y 6 — Estructura, Propuesta y Presentación</span>
+                      </Tooltip>
+                    </summary>
+                    <div className="border-t border-slate-100 p-3">
                     <div className="flex flex-wrap items-center gap-2">
                       {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
                         <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
@@ -3997,21 +4200,61 @@ export default function LeadDetailPage() {
                       </details>
                     )}
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <Tooltip content="Descarga un PDF con la propuesta y el informe comercial. Abre la sección del informe en este tab." maxWidth="280px">
-                        <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                          Descargar PDF propuesta
-                        </button>
-                      </Tooltip>
-                      <Tooltip content="Abre la versión en texto del resultado para revisar o copiar antes de exportar o regenerar." maxWidth="280px">
-                        <button type="button" onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
-                          Copiar versión texto
-                        </button>
-                      </Tooltip>
+                      {commercialDocUrls.proposal ? (
+                        <Tooltip content="Abre el documento generado para revisión." maxWidth="280px">
+                          <a href={commercialDocUrls.proposal} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                            Ver propuesta comercial
+                          </a>
+                        </Tooltip>
+                      ) : null}
+                      {commercialDocUrls.proposal && isPdfUrl(commercialDocUrls.proposal)
+                        ? (typeof window !== "undefined" && isSameOriginPdfUrl(commercialDocUrls.proposal, window.location.origin) ? (
+                            <Tooltip content="Descarga el PDF ya generado del documento." maxWidth="280px">
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadPdf(commercialDocUrls.proposal!, "propuesta-comercial.pdf")}
+                                className="inline-block rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Descargar PDF propuesta comercial
+                              </button>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip content="Abre el PDF en el navegador (documento externo)." maxWidth="280px">
+                              <a href={commercialDocUrls.proposal} target="_blank" rel="noreferrer noopener" className="inline-block rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Abrir PDF propuesta comercial
+                              </a>
+                            </Tooltip>
+                          ))
+                        : id ? (
+                        <Tooltip content="Abre el área correspondiente para generar el PDF del documento." maxWidth="280px">
+                          <Link href={`/admin/leads/${id}?tab=comercial&section=ia-report-block`} className="inline-block rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                            Ir a generar PDF
+                          </Link>
+                        </Tooltip>
+                      ) : null}
+                      {hasAnalysisInternal && (
+                        <Tooltip content="Copia el contenido textual del informe (base de la propuesta)." maxWidth="280px">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const text = (lead as { ai_report?: string | null })?.ai_report;
+                              if (typeof text === "string" && text.trim()) {
+                                void navigator.clipboard.writeText(text.trim());
+                                setCopiedWhich("informe-paso46");
+                              }
+                            }}
+                            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            {copiedWhich === "informe-paso46" ? "Copiado" : "Copiar informe"}
+                          </button>
+                        </Tooltip>
+                      )}
                     </div>
                     <div className="mt-4 pt-3 border-t border-slate-200">
                       <ProposalClientActions showPrint={false} proposalDocumentUrl={commercialDocUrls.proposal ?? null} />
                     </div>
-                  </div>
+                    </div>
+                  </details>
                   </div>
                 </details>
 
@@ -4022,7 +4265,7 @@ export default function LeadDetailPage() {
           {activeTab === "tecnico" && (
             <div className="mt-5 grid grid-cols-1 gap-4">
               {allowedProfiles.includes("tecnico") ? (
-                <details className="rounded-2xl border bg-white" open>
+                <details className="rounded-2xl border bg-white">
                   <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-slate-900">
                     IA — Informe técnico
                   </summary>
@@ -4058,7 +4301,7 @@ export default function LeadDetailPage() {
             <div className="mt-5 grid grid-cols-1 gap-6">
               {/* Documentos de respaldo (análisis interno) */}
               <div className="space-y-6">
-                {/* BLOQUE B — Informe comercial (respaldo analítico) */}
+                {/* BLOQUE B — Informe comercial (documento interno CRM: ai_report). Generar/Regenerar → tab Comercial; Ver/Copiar cuando hay contenido; contenido colapsado por defecto. */}
                 <div className="rounded-2xl border border-slate-200 bg-white p-6">
                   <h2 className="text-lg font-semibold text-slate-900">Informe comercial</h2>
                   <p className="mt-1 text-sm text-slate-600">
@@ -4068,28 +4311,108 @@ export default function LeadDetailPage() {
                     Incluye: investigación digital, redes, posicionamiento, competencia, FODA, oportunidades, acciones 72h, plan 30–90 días.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Tooltip content="Descarga un PDF con el informe comercial (análisis, investigación digital, FODA, oportunidades). Abre el tab Comercial para generarlo si hace falta." maxWidth="300px">
-                      <button
-                        type="button"
-                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Descargar PDF informe comercial
-                      </button>
-                    </Tooltip>
-                    <Tooltip content="Abre la versión en texto del informe comercial para copiar o revisar. Se genera en el tab Comercial." maxWidth="280px">
-                      <button
-                        type="button"
-                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Copiar informe comercial
-                      </button>
-                    </Tooltip>
+                    {id && (
+                      <Tooltip content={hasAnalysisInternal ? "Ir al paso de análisis con IA para regenerar el informe." : "Ir al paso de análisis con IA para generar el informe."} maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!lead?.id) return;
+                            window.location.href = `/admin/leads/${lead.id}?tab=comercial&section=ia-report-block`;
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {hasAnalysisInternal ? "Regenerar informe comercial" : "Generar informe comercial"}
+                        </button>
+                      </Tooltip>
+                    )}
+                    {hasAnalysisInternal && (
+                      <Tooltip content={showCommercialReport ? "Oculta el contenido del informe." : "Muestra el contenido del informe debajo."} maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={() => setShowCommercialReport((v) => !v)}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {showCommercialReport ? "Ocultar informe comercial" : "Ver informe comercial"}
+                        </button>
+                      </Tooltip>
+                    )}
+                    {hasAnalysisInternal && (
+                      <Tooltip content="Copia el contenido textual del informe al portapapeles." maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const text = (lead as { ai_report?: string | null })?.ai_report;
+                            if (typeof text !== "string" || !text.trim()) return;
+                            try {
+                              await navigator.clipboard.writeText(text.trim());
+                              setCopiedWhich("informe");
+                            } catch {
+                              setNotice("No se pudo copiar al portapapeles.");
+                            }
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {copiedWhich === "informe" ? "Copiado" : "Copiar informe comercial"}
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
+                  {showCommercialReport && hasAnalysisInternal && (() => {
+                    const SUBTITLE_KEYS = ["Fortalezas", "Debilidades", "Oportunidades", "Amenazas", "Siguientes pasos", "LA JUGADA MÁS RENTABLE", "Resumen", "Conclusiones"];
+                    const renderReportContent = (content: string) => {
+                      return (
+                        <div className="space-y-2 text-sm text-slate-700">
+                          {content.split(/\n\n+/).map((block, i) => {
+                            const trimmed = block.trim();
+                            if (!trimmed) return null;
+                            const isSubtitle = SUBTITLE_KEYS.some((k) => trimmed === k || trimmed.startsWith(k + ":") || trimmed.startsWith(k + "\n"));
+                            const firstLine = trimmed.split("\n")[0] ?? "";
+                            const isList = /^[\s]*[-*•]\s/.test(trimmed) || /^[\s]*\d+[.)]\s/.test(trimmed);
+                            if (isSubtitle || SUBTITLE_KEYS.some((k) => firstLine === k)) {
+                              return (
+                                <p key={i} className="mt-3 font-semibold text-slate-800">
+                                  {trimmed}
+                                </p>
+                              );
+                            }
+                            if (isList) {
+                              const items = trimmed.split(/\n/).filter((l) => l.trim());
+                              return (
+                                <ul key={i} className="list-disc pl-5 space-y-1">
+                                  {items.map((line, j) => (
+                                    <li key={j}>{line.replace(/^[\s]*[-*•]\s|^\d+[.)]\s/, "").trim()}</li>
+                                  ))}
+                                </ul>
+                              );
+                            }
+                            return (
+                              <p key={i} className="whitespace-pre-wrap">
+                                {trimmed}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    };
+                    const { intro, sections } = commercialReportSections;
+                    return (
+                      <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/50 p-5 space-y-6">
+                        {intro ? <div className="text-sm text-slate-700 whitespace-pre-wrap">{intro}</div> : null}
+                        {sections.map(({ id, label, Icon, content }) => (
+                          <div key={id} className="rounded-lg border border-slate-200 bg-white p-4">
+                            <div className="flex items-center gap-2 mb-3">
+                              <Icon className="h-4 w-4 text-slate-500 shrink-0" />
+                              <h3 className="text-sm font-semibold text-slate-800">{label}</h3>
+                            </div>
+                            {content ? renderReportContent(content) : null}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
 
-                {/* BLOQUE C — Visión estratégica (documento ejecutivo complementario) */}
+                {/* BLOQUE C — Visión estratégica. Generar/Regenerar = gamma strategy; Ver/Copiar cuando hay contenido; contenido colapsado por defecto. */}
                 <div className="rounded-2xl border border-slate-200 bg-white p-6">
                   <h2 className="text-lg font-semibold text-slate-900">Visión estratégica</h2>
                   <p className="mt-1 text-sm text-slate-600">
@@ -4099,38 +4422,117 @@ export default function LeadDetailPage() {
                     Incluye: lectura global, oportunidades de crecimiento, foco estratégico, riesgos, dirección recomendada.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Tooltip content="Descarga un PDF con el documento de visión estratégica. Se genera en el tab Comercial (paso 3 del proceso)." maxWidth="300px">
-                      <button
-                        type="button"
-                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Descargar PDF visión estratégica
-                      </button>
-                    </Tooltip>
-                    <Tooltip content="Abre la versión en texto de la visión estratégica para copiar o revisar." maxWidth="280px">
-                      <button
-                        type="button"
-                        onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=ia-report-block`)}
-                        className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        Copiar visión estratégica
-                      </button>
-                    </Tooltip>
+                    {id && (
+                      <Tooltip content={hasStrategicVisionText || commercialDocUrls.strategy ? "Vuelve a generar el documento de visión estratégica (Gamma)." : "Genera el documento de visión estratégica con Gamma."} maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={() => generateCommercialDoc("strategy")}
+                          disabled={commercialDocLoading === "strategy"}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {commercialDocLoading === "strategy" ? "Generando…" : (hasStrategicVisionText || commercialDocUrls.strategy ? "Regenerar visión estratégica" : "Generar visión estratégica")}
+                        </button>
+                      </Tooltip>
+                    )}
+                    {hasStrategicVisionText && (
+                      <Tooltip content={showStrategicVision ? "Oculta el contenido." : "Muestra el contenido debajo."} maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={() => setShowStrategicVision((v) => !v)}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {showStrategicVision ? "Ocultar visión estratégica" : "Ver visión estratégica"}
+                        </button>
+                      </Tooltip>
+                    )}
+                    {hasStrategicVisionText && (
+                      <Tooltip content="Copia el contenido al portapapeles." maxWidth="280px">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!strategicVisionText) return;
+                            try {
+                              await navigator.clipboard.writeText(strategicVisionText);
+                              setCopiedWhich("vision");
+                            } catch {
+                              setNotice("No se pudo copiar al portapapeles.");
+                            }
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          {copiedWhich === "vision" ? "Copiado" : "Copiar visión estratégica"}
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
+                  {showStrategicVision && hasStrategicVisionText && (() => {
+                    const VISION_SUBTITLES = ["Posicionamiento Potencial", "Expansión de Servicios", "Crecimiento Digital", "Diferenciación Frente a Competidores", "Conclusión", "Resumen", "Fortalezas", "Debilidades", "Oportunidades", "Siguientes pasos"];
+                    const renderVisionContent = (content: string) => {
+                      return (
+                        <div className="space-y-2 text-sm text-slate-700">
+                          {content.split(/\n\n+/).map((block, i) => {
+                            const trimmed = block.trim();
+                            if (!trimmed) return null;
+                            const firstLine = trimmed.split("\n")[0] ?? "";
+                            const isSubtitle = VISION_SUBTITLES.some((k) => trimmed === k || firstLine === k || trimmed.startsWith(k + ":") || trimmed.startsWith(k + "\n"));
+                            const isList = /^[\s]*[-*•]\s/.test(trimmed) || /^[\s]*\d+[.)]\s/.test(trimmed);
+                            if (isSubtitle) {
+                              return (
+                                <p key={i} className="mt-3 font-semibold text-slate-800">
+                                  {trimmed}
+                                </p>
+                              );
+                            }
+                            if (isList) {
+                              const items = trimmed.split(/\n/).filter((l) => l.trim());
+                              return (
+                                <ul key={i} className="list-disc pl-5 space-y-1">
+                                  {items.map((line, j) => (
+                                    <li key={j}>{line.replace(/^[\s]*[-*•]\s|^\d+[.)]\s/, "").trim()}</li>
+                                  ))}
+                                </ul>
+                              );
+                            }
+                            return (
+                              <p key={i} className="whitespace-pre-wrap">
+                                {trimmed}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    };
+                    return (
+                      <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/50 p-5">
+                        <div className="rounded-lg border border-slate-200 bg-white p-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Lightbulb className="h-4 w-4 text-slate-500 shrink-0" />
+                            <h3 className="text-sm font-semibold text-slate-800">Visión estratégica</h3>
+                          </div>
+                          {renderVisionContent(strategicVisionText)}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {!hasStrategicVisionText && (
+                    <p className="mt-3 text-sm text-slate-500">
+                      El contenido de visión estratégica aparece aquí cuando el informe comercial incluye la sección correspondiente.
+                    </p>
+                  )}
                 </div>
 
-                <div>
-                  <Tooltip content="Lleva al tab Comercial para ver el proceso de 6 pasos: análisis, diagnóstico, estrategia, estructura, propuesta y presentación." maxWidth="300px">
-                    <button
-                      type="button"
-                      onClick={() => id && router.push(`/admin/leads/${id}?tab=comercial&section=proceso-comercial`)}
-                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Ir a proceso comercial (tab Comercial)
-                    </button>
-                  </Tooltip>
-                </div>
+                {id && (
+                  <div>
+                    <Tooltip content="Lleva al tab Comercial para ver el proceso de 6 pasos: análisis, diagnóstico, estrategia, estructura, propuesta y presentación." maxWidth="300px">
+                      <Link
+                        href={`/admin/leads/${id}?tab=comercial&section=proceso-comercial`}
+                        className="inline-block rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Ir a proceso comercial (tab Comercial)
+                      </Link>
+                    </Tooltip>
+                  </div>
+                )}
               </div>
 
               {/* Servicios sugeridos para este lead */}
@@ -4207,8 +4609,25 @@ export default function LeadDetailPage() {
                 })()}
               </div>
 
-              {/* Sección 4: Propuesta Comercial Inteligente */}
-              <div id="services-proposal" className="rounded-2xl border bg-white p-6">
+              {/* Sección 4: Propuesta Comercial Inteligente (Paso 4 estructura / Paso 5 propuesta) */}
+              <div id="proposal-export">
+                {activeTab === "consultor" && sectionFromUrl === "proposal-export" && processStepContext && (
+                  <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Proceso comercial</p>
+                    <h3 className="mt-1 text-lg font-semibold text-slate-900">{processStepContext.title}</h3>
+                    <p className="mt-1.5 text-sm text-slate-600">{processStepContext.description}</p>
+                    <p className="mt-3 border-t border-slate-200 pt-3 text-xs font-medium text-slate-600">Después sigue: {processStepContext.nextStep}</p>
+                  </div>
+                )}
+                <div id="services-proposal" className="rounded-2xl border bg-white p-6">
+                  {activeTab === "consultor" && sectionFromUrl === "services-proposal" && processStepContext && (
+                    <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Proceso comercial</p>
+                      <h3 className="mt-1 text-lg font-semibold text-slate-900">{processStepContext.title}</h3>
+                      <p className="mt-1.5 text-sm text-slate-600">{processStepContext.description}</p>
+                      <p className="mt-3 border-t border-slate-200 pt-3 text-xs font-medium text-slate-600">Después sigue: {processStepContext.nextStep}</p>
+                    </div>
+                  )}
                 <h2 className="text-lg font-semibold text-slate-900">Propuesta Comercial Inteligente</h2>
                 <p className="mt-1 text-sm text-slate-600">
                   Selecciona servicios EASY, organízalos por mes y prepara una propuesta comercial editable para este lead.
@@ -4310,12 +4729,22 @@ export default function LeadDetailPage() {
                         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Propuesta en construcción</span>
                       )}
                       {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && currentFlowStep?.id === "presentacion" && id && (
-                        <Link
-                          href={`/admin/leads/${id}/presentacion`}
-                          className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                        >
-                          Ir a generar propuesta para el cliente
-                        </Link>
+                        presentationEmbedBlocked && presentationPrimaryUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => window.open(presentationPrimaryUrl, PRESENTATION_POPUP_NAME, PRESENTATION_POPUP_FEATURES)}
+                            className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            Ver presentación
+                          </button>
+                        ) : (
+                          <Link
+                            href={`/admin/leads/${id}/presentacion`}
+                            className="inline-block rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            Ver presentación
+                          </Link>
+                        )
                       )}
                     </div>
                     <div className="flex items-center gap-2">
@@ -4778,6 +5207,7 @@ export default function LeadDetailPage() {
                     })()}
                   </div>
                 )}
+                </div>
               </div>
             </div>
           )}

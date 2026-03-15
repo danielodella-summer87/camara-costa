@@ -398,7 +398,7 @@ export function AiLeadReport({
   const [savingPrompt, setSavingPrompt] = useState(false);
   const [promptSavedMessage, setPromptSavedMessage] = useState<string | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
-  const [reportExpanded, setReportExpanded] = useState(false);
+  const [reportExpanded, setReportExpanded] = useState(true);
   const [activeReportTab, setActiveReportTab] = useState<string>(TABS_CONFIG[0].id);
   const [regeneratingTab, setRegeneratingTab] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1274,252 +1274,135 @@ export function AiLeadReport({
           {status === "done" && "Informe generado correctamente."}
         </div>
       )}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-900">
-            {titleLabel ?? "Agente IA · Informe del Lead"}
-          </div>
-          <div className="mt-1 text-xs text-slate-500">
-            {subtitleLabel ?? "Genera informe técnico de oportunidades con análisis estratégico."}
-          </div>
-        </div>
 
-        <div className="space-y-4">
-          {/* ETAPA 1 — Generación */}
-          <div>
-            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 1 — Generación</div>
-            <div className="flex flex-wrap gap-2">
-              {canUseCommercial && (
-                <div className="flex flex-col items-start">
-                  {buttonTooltipContent ? (
-                    <Tooltip content={buttonTooltipContent} maxWidth="320px">
-                      <span className="inline-block">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setReportProfile("comercial");
-                            runFullAiGeneration();
-                          }}
-                          disabled={aiLoading}
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                            aiLoading
-                              ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
-                              : "bg-blue-600 text-white hover:bg-blue-700"
-                          }`}
-                        >
-                          {aiLoading ? (
-                            <span className="inline-flex items-center gap-2">
-                              <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
-                              Generando...
-                            </span>
-                          ) : (
-                            "Generar Análisis Comercial"
-                          )}
-                        </button>
-                      </span>
-                    </Tooltip>
-                  ) : (
+      {/* Zona A — Acción principal */}
+      <div className="mb-4">
+        <div className="text-sm font-semibold text-slate-900">
+          {titleLabel ?? "Agente IA · Informe del Lead"}
+        </div>
+        <div className="mt-1 text-xs text-slate-500">
+          {subtitleLabel ?? "Genera informe técnico de oportunidades con análisis estratégico."}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {canUseCommercial && (
+            <div className="flex flex-col items-start">
+              {buttonTooltipContent ? (
+                <Tooltip content={buttonTooltipContent} maxWidth="320px">
+                  <span className="inline-block">
                     <button
                       type="button"
-                      onClick={() => {
-                        setReportProfile("comercial");
-                        runFullAiGeneration();
-                      }}
+                      onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
                       disabled={aiLoading}
-                      className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                        aiLoading
-                          ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait"
-                          : "bg-blue-600 text-white hover:bg-blue-700"
-                      }`}
+                      className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${aiLoading ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait" : "bg-blue-600 text-white hover:bg-blue-700"}`}
                     >
-                      {aiLoading ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />
-                          Generando...
-                        </span>
-                      ) : (
-                        "Generar Análisis Comercial"
-                      )}
+                      {aiLoading ? (<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />Generando...</span>) : "Generar Análisis Comercial"}
                     </button>
-                  )}
-                  {buttonHelperText && (
-                    <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>
-                  )}
-                </div>
-              )}
-              {canUseTechnical && (
+                  </span>
+                </Tooltip>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    setReportProfile("tecnico");
-                    runFullAiGeneration();
-                  }}
+                  onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
                   disabled={aiLoading}
-                  className="rounded-xl px-4 py-2 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+                  className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${aiLoading ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait" : "bg-blue-600 text-white hover:bg-blue-700"}`}
                 >
-                  Generar Técnico
+                  {aiLoading ? (<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />Generando...</span>) : "Generar Análisis Comercial"}
                 </button>
               )}
-              {report.trim() && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveReportTab("vision_estrategica");
-                    regenerateTab("vision_estrategica");
-                  }}
-                  disabled={aiLoading || regeneratingTab === "vision_estrategica"}
-                  className="rounded-xl border px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                  title="Generar Visión Estratégica basada en el informe completo"
-                >
-                  {regeneratingTab === "VISION_ESTRATEGICA" ? (
-                    <>
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"></span>
-                      Generando...
-                    </>
-                  ) : (
-                    <>Generar Visión Estratégica</>
-                  )}
-                </button>
-              )}
+              {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
             </div>
-          </div>
+          )}
+          {canUseTechnical && (
+            <button
+              type="button"
+              onClick={() => { setReportProfile("tecnico"); runFullAiGeneration(); }}
+              disabled={aiLoading}
+              className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              Generar Técnico
+            </button>
+          )}
+        </div>
+      </div>
 
-          {/* ETAPA 2 — Informes (vista) */}
-          <div>
-            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 2 — Informes</div>
-            <div className="flex flex-wrap gap-2">
-              {canUseCommercial && report.trim() && (
-                <button
-                  type="button"
-                  onClick={() => { setReportProfile("comercial"); const firstModuleId = getReportProfile("comercial").moduleIds[0]; const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId); setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id); }}
-                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium bg-slate-50 text-slate-700 hover:bg-slate-100"
-                  title="Ver informe comercial"
-                >
-                  Informe Comercial
-                </button>
-              )}
-              {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setActiveReportTab("vision_estrategica")}
-                  className="rounded-xl border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  title="Ver Visión Estratégica"
-                >
-                  Informe Visión Estratégica
-                </button>
-              )}
-            </div>
-          </div>
+      {/* Zona B — Documentos generados */}
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Documentos generados</p>
+        <div className="flex flex-wrap gap-2">
+          {canUseCommercial && report.trim() && (
+            <button type="button" onClick={() => { setReportProfile("comercial"); const firstModuleId = getReportProfile("comercial").moduleIds[0]; const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId); setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50" title="Ver informe comercial">Informe Comercial</button>
+          )}
+          {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
+            <button type="button" onClick={() => setActiveReportTab("vision_estrategica")} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100" title="Ver Visión Estratégica">Informe Visión Estratégica</button>
+          )}
+          {canUseCommercial && (
+            <button type="button" onClick={() => handleExportPdf("comercial")} disabled={!leadId || aiLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Descargar PDF Informe Comercial">PDF Informe Comercial</button>
+          )}
+          {canUseTechnical && (
+            <button type="button" onClick={() => handleExportPdf("tecnico")} disabled={!leadId || aiLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Descargar PDF Informe Técnico">PDF Informe Técnico</button>
+          )}
+          {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
+            <button type="button" onClick={handleExportPdfVision} disabled={!leadId || aiLoading} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50" title="Descargar PDF Visión Estratégica">PDF Visión Estratégica</button>
+          )}
+          {report.trim() && (
+            <button type="button" onClick={() => { setActiveReportTab("vision_estrategica"); regenerateTab("vision_estrategica"); }} disabled={aiLoading || regeneratingTab === "vision_estrategica"} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 flex items-center gap-1.5" title="Regenerar Visión Estratégica">
+              {regeneratingTab === "vision_estrategica" ? (<><span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />Generando...</>) : "Generar Visión Estratégica"}
+            </button>
+          )}
+          {canUseCommercial && (
+            <button type="button" onClick={() => generateGammaProposal("comercial")} disabled={!leadId || gammaLoading} className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Crear propuesta en Gamma">Generar Gamma Comercial</button>
+          )}
+          {canUseTechnical && (
+            <button type="button" onClick={() => generateGammaProposal("tecnico")} disabled={!leadId || gammaLoading} className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Crear propuesta en Gamma">Generar Gamma Técnico</button>
+          )}
+          <button type="button" onClick={copy} disabled={!report.trim()} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Copiar al portapapeles">Copiar</button>
+          {report.trim() && (
+            <button type="button" onClick={() => setViewMode(viewMode === "rendered" ? "raw" : "rendered")} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50" title={viewMode === "rendered" ? "Ver texto crudo" : "Vista renderizada"}>{viewMode === "rendered" ? "Ver Texto" : "Vista"}</button>
+          )}
+        </div>
+      </div>
 
-          {/* ETAPA 3 — Exportación (PDF + Gamma) */}
-          <div>
-            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 3 — Exportación</div>
-            <div className="flex flex-wrap gap-2">
-              {canUseCommercial && (
-                <button
-                  type="button"
-                  onClick={() => handleExportPdf("comercial")}
-                  disabled={!leadId || aiLoading}
-                  className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                  title="Descargar PDF Informe Comercial"
-                >
-                  PDF Informe Comercial
-                </button>
-              )}
-              {canUseTechnical && (
-                <button
-                  type="button"
-                  onClick={() => handleExportPdf("tecnico")}
-                  disabled={!leadId || aiLoading}
-                  className="rounded-xl px-4 py-2 text-sm font-medium bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
-                  title="Descargar PDF Informe Técnico"
-                >
-                  PDF Informe Técnico
-                </button>
-              )}
-              {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleExportPdfVision}
-                  disabled={!leadId || aiLoading}
-                  className="rounded-xl px-4 py-2 text-sm font-medium bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-                  title="Descargar PDF Visión Estratégica"
-                >
-                  PDF Visión Estratégica
-                </button>
-              )}
-              {canUseCommercial && (
-                <button
-                  type="button"
-                  onClick={() => fetchGammaPrompt("comercial")}
-                  disabled={!leadId || gammaPromptLoading}
-                  className="rounded-xl border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                  title="Editar prompt para Gamma (presentación comercial)"
-                >
-                  {gammaPromptLoading ? "..." : "Editar Prompt Gamma Comercial"}
-                </button>
-              )}
-              {canUseTechnical && (
-                <button
-                  type="button"
-                  onClick={() => fetchGammaPrompt("tecnico")}
-                  disabled={!leadId || gammaPromptLoading}
-                  className="rounded-xl border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50"
-                  title="Editar prompt para Gamma (presentación técnica)"
-                >
-                  {gammaPromptLoading ? "..." : "Editar Prompt Gamma Técnico"}
-                </button>
-              )}
-              {canUseCommercial && (
-                <button
-                  type="button"
-                  onClick={() => generateGammaProposal("comercial")}
-                  disabled={!leadId || gammaLoading}
-                  className="rounded-xl border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
-                  title="Crear propuesta en Gamma desde plantilla comercial"
-                >
-                  {gammaLoading ? "Generando…" : "Generar Gamma Comercial"}
-                </button>
-              )}
-              {canUseTechnical && (
-                <button
-                  type="button"
-                  onClick={() => generateGammaProposal("tecnico")}
-                  disabled={!leadId || gammaLoading}
-                  className="rounded-xl border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
-                  title="Crear propuesta en Gamma desde plantilla técnica"
-                >
-                  {gammaLoading ? "Generando…" : "Generar Gamma Técnico"}
-                </button>
-              )}
-            </div>
+      {/* Bloque separado: Personalización IA */}
+      <details className="mb-4 rounded-lg border border-violet-200 bg-violet-50/30">
+        <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-violet-800 hover:bg-violet-100/50 rounded-lg">
+          Personalización IA
+        </summary>
+        <div className="border-t border-violet-100 p-3 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {canUseCommercial && (
+              <button type="button" onClick={() => fetchGammaPrompt("comercial")} disabled={!leadId || gammaPromptLoading} className="rounded-lg border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50" title="Ver/editar prompt para Gamma comercial">{gammaPromptLoading ? "..." : "Editar Prompt Gamma Comercial"}</button>
+            )}
+            {canUseTechnical && (
+              <button type="button" onClick={() => fetchGammaPrompt("tecnico")} disabled={!leadId || gammaPromptLoading} className="rounded-lg border border-violet-200 px-3 py-2 text-sm font-medium bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-50" title="Ver/editar prompt para Gamma técnico">{gammaPromptLoading ? "..." : "Editar Prompt Gamma Técnico"}</button>
+            )}
           </div>
-
-          {/* ETAPA 4 — Utilidades */}
           <div>
-            <div className="text-xs font-semibold text-slate-500 mb-2">ETAPA 4 — Utilidades</div>
-            <div className="flex flex-wrap gap-2">
+            <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700 mb-1">Instrucciones adicionales para el análisis (opcional)</label>
+            <textarea id="ai-prompt-extra" value={aiPromptExtra} onChange={(e) => setAiPromptExtra(e.target.value)} disabled={aiLoading} placeholder="Ejemplo: Enfocarse en oportunidades de membresía premium y eventos corporativos." className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-y min-h-[72px] disabled:opacity-50" rows={2} />
+          </div>
+        </div>
+      </details>
+
+      {/* Bloque: Módulos del análisis (único selector de módulos; no se repite debajo de "Ver informe") */}
+      <div ref={tabsBarRef} className="mb-4 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Módulos del análisis</p>
+        <div className="flex flex-wrap gap-2">
+          {visibleTabs.map((tab) => {
+            const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
+            const isActive = activeReportTab === tab.id;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                onClick={copy}
-                disabled={!report.trim()}
-                className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
-                title="Copiar al portapapeles"
+                onClick={() => setActiveReportTab(tab.id)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isActive ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"}`}
+                title={tab.label}
               >
-                Copiar
+                {tab.label}
+                {hasMissingData && <span className="ml-1 text-amber-500" title="Faltan datos">⚠</span>}
               </button>
-              {report.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setViewMode(viewMode === "rendered" ? "raw" : "rendered")}
-                  className="rounded-xl border px-3 py-2 text-sm hover:bg-slate-50"
-                  title={viewMode === "rendered" ? "Ver texto crudo" : "Ver vista renderizada"}
-                >
-                  {viewMode === "rendered" ? "Ver Texto" : "Vista"}
-                </button>
-              )}
-            </div>
-          </div>
+            );
+          })}
         </div>
       </div>
 
@@ -1596,30 +1479,6 @@ export function AiLeadReport({
         </div>
       )}
 
-      {/* Campo de personalización IA */}
-      <div className="mt-4">
-        <div className="flex items-center justify-between mb-1">
-          <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700">
-            Personalización IA (opcional)
-          </label>
-          {savingPrompt && (
-            <span className="text-xs text-slate-400">Guardando…</span>
-          )}
-        </div>
-        <textarea
-          id="ai-prompt-extra"
-          value={aiPromptExtra}
-          onChange={(e) => setAiPromptExtra(e.target.value)}
-          disabled={aiLoading}
-          placeholder="Ejemplo: Enfocarse en oportunidades de membresía premium y eventos corporativos. Priorizar empresas del sector tecnológico."
-          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 resize-y min-h-[80px] disabled:opacity-50 disabled:cursor-not-allowed"
-          rows={3}
-        />
-        <p className="mt-1 text-xs text-slate-500">
-          Agrega instrucciones específicas para personalizar el análisis. Este texto se incluirá en el prompt de IA. Se guarda automáticamente.
-        </p>
-      </div>
-
       <div className="mt-4">
         {!report.trim() ? (
           <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
@@ -1637,41 +1496,7 @@ export function AiLeadReport({
 
             {reportExpanded ? (
               <div className="mt-4">
-                {/* Tabs del informe - barra de módulos (anchor para scroll) */}
-                <div ref={tabsBarRef} className="mb-4 flex flex-wrap gap-2">
-                  {visibleTabs.map((tab) => {
-                    const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
-                    const st = moduleStatus[tab.tabId] ?? "idle";
-                    const chipClass =
-                      st === "done"
-                        ? "bg-green-100 text-green-800 border-green-300"
-                        : st === "running"
-                          ? "bg-yellow-100 text-yellow-800 border-yellow-300"
-                          : st === "error"
-                            ? "bg-red-100 text-red-800 border-red-300"
-                            : activeReportTab === tab.id
-                              ? "bg-slate-900 text-white border-slate-900"
-                              : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50";
-                    return (
-                      <div key={tab.id} ref={(el) => { moduleRefs.current[tab.id] = el; }}>
-                        <button
-                          type="button"
-                          onClick={() => setActiveReportTab(tab.id)}
-                          className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition flex items-center gap-1.5 ${chipClass}`}
-                        >
-                          {tab.label}
-                          {hasMissingData && (
-                            <span className="text-amber-500" title="Faltan datos para mejorar precisión">
-                              ⚠️
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Contenido del tab activo */}
+                {/* Contenido del tab activo (selector de módulos está solo en el bloque "Módulos del análisis" más arriba) */}
                 <div ref={modulePanelRef} className="rounded-xl border bg-white p-6">
                   {/* Título del módulo: barra negra estilo consultoría premium */}
                   <div className="bg-black text-white font-semibold text-[15px] px-3 py-2 rounded-md mb-3">
