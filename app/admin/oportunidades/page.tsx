@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 
 type LeadOption = {
@@ -31,6 +31,7 @@ function normPipeline(s: string | null | undefined): string {
 }
 
 const KANBAN_COLUMNS = ["Nuevo", "Contactado", "Investigación", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Seguimiento"] as const;
+const KANBAN_COLUMN_SET = new Set<string>(KANBAN_COLUMNS);
 
 /** Mapeo pipeline normalizado → nombre de columna kanban. */
 const NORM_TO_KANBAN_COLUMN: Record<string, string> = {
@@ -63,16 +64,41 @@ type ViewMode = "kanban" | "listado";
 
 const PIPELINE_FILTER_OPTIONS = ["Todos", ...KANBAN_COLUMNS];
 
+function viewModeFromParam(param: string | null): ViewMode {
+  const v = (param ?? "").trim().toLowerCase();
+  if (v === "kanban" || v === "listado") return v;
+  return "listado";
+}
+
+function pipelineFromParam(param: string | null): string {
+  const p = (param ?? "").trim();
+  if (!p || p.toLowerCase() === "todos") return "Todos";
+  const normalized = normPipeline(p);
+  const found = KANBAN_COLUMNS.find((c) => normPipeline(c) === normalized);
+  return found ?? "Todos";
+}
+
+function mineFromParam(param: string | null): boolean {
+  const m = (param ?? "").trim().toLowerCase();
+  return m === "1" || m === "true";
+}
+
 export default function OportunidadesPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [loadingLeads, setLoadingLeads] = useState(true);
   const [selectedLeadId, setSelectedLeadId] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("listado");
-  const [selectedPipeline, setSelectedPipeline] = useState("Todos");
-  const [searchText, setSearchText] = useState("");
-  const [onlyMine, setOnlyMine] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => viewModeFromParam(searchParams.get("view")));
+  const [selectedPipeline, setSelectedPipeline] = useState(() => pipelineFromParam(searchParams.get("pipeline")));
+  const [searchText, setSearchText] = useState(() => (searchParams.get("search") ?? "").trim());
+  const [onlyMine, setOnlyMine] = useState(() => mineFromParam(searchParams.get("mine")));
   const [dragError, setDragError] = useState<string | null>(null);
+  const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+  const [savingLeadId, setSavingLeadId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,48 +126,90 @@ export default function OportunidadesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("view", viewMode);
+    if (selectedPipeline && selectedPipeline !== "Todos") params.set("pipeline", selectedPipeline);
+    if (searchText.trim()) params.set("search", searchText.trim());
+    if (onlyMine) params.set("mine", "1");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+  }, [viewMode, selectedPipeline, searchText, onlyMine, pathname, router]);
+
   const handleOpen = () => {
     if (!selectedLeadId?.trim()) return;
     router.push(`/admin/oportunidades/${encodeURIComponent(selectedLeadId)}`);
   };
 
   const handleKanbanDragStart = (e: React.DragEvent, leadId: string, sourcePipeline: string | null) => {
+    if (savingLeadId === leadId) {
+      e.preventDefault();
+      return;
+    }
     setDragError(null);
+    setDraggingLeadId(leadId);
     e.dataTransfer.setData("application/json", JSON.stringify({ leadId, sourcePipeline }));
     e.dataTransfer.effectAllowed = "move";
   };
 
-  const handleKanbanDragOver = (e: React.DragEvent) => {
+  const handleKanbanDragEnd = () => {
+    setDraggingLeadId(null);
+    setDragOverColumn(null);
+  };
+
+  const handleKanbanDragOver = (e: React.DragEvent, col: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    setDragOverColumn(col);
+  };
+
+  const handleKanbanDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverColumn(null);
+    }
   };
 
   const handleKanbanDrop = async (e: React.DragEvent, targetColumn: string) => {
     e.preventDefault();
+    setDragOverColumn(null);
+    setDraggingLeadId(null);
+
+    if (!KANBAN_COLUMN_SET.has(targetColumn)) return;
+
     let data: { leadId: string; sourcePipeline: string | null };
     try {
       data = JSON.parse(e.dataTransfer.getData("application/json"));
     } catch {
       return;
     }
-    const { leadId, sourcePipeline } = data;
-    if (!leadId || !targetColumn) return;
+    const { leadId } = data;
+    if (!leadId) return;
+    if (savingLeadId === leadId) return;
+
     const lead = leads.find((l) => l.id === leadId);
     if (!lead) return;
     if (normPipeline(lead.pipeline) === normPipeline(targetColumn)) return;
 
     const previousLeads = leads.slice();
     setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, pipeline: targetColumn } : l)));
+    setSavingLeadId(leadId);
 
-    const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-      body: JSON.stringify({ pipeline: targetColumn }),
-    });
-    const json = (await res.json()) as { error?: string };
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify({ pipeline: targetColumn }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setLeads(previousLeads);
+        setDragError("No se pudo actualizar la etapa. Reintentá.");
+      }
+    } catch {
       setLeads(previousLeads);
-      setDragError(json?.error ?? "Error al actualizar la etapa");
+      setDragError("No se pudo actualizar la etapa. Reintentá.");
+    } finally {
+      setSavingLeadId(null);
     }
   };
 
@@ -337,11 +405,17 @@ export default function OportunidadesPage() {
                 <div className="flex gap-4 overflow-x-auto p-4 min-h-[320px] select-none">
                   {KANBAN_COLUMNS.map((col) => {
                     const columnLeads = leadsByColumn[col] ?? [];
+                    const isDropTarget = draggingLeadId !== null && dragOverColumn === col;
                     return (
                       <div
                         key={col}
-                        className="flex-shrink-0 w-[280px] rounded-lg border border-slate-200 bg-slate-50/80 select-none"
-                        onDragOver={handleKanbanDragOver}
+                        className={`flex-shrink-0 w-[280px] rounded-lg border select-none transition-colors ${
+                          isDropTarget
+                            ? "border-slate-400 bg-slate-100/90 ring-2 ring-slate-300 ring-offset-1"
+                            : "border-slate-200 bg-slate-50/80"
+                        }`}
+                        onDragOver={(e) => handleKanbanDragOver(e, col)}
+                        onDragLeave={handleKanbanDragLeave}
                         onDrop={(e) => handleKanbanDrop(e, col)}
                       >
                         <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 select-none">
@@ -352,9 +426,12 @@ export default function OportunidadesPage() {
                           {columnLeads.map((l) => (
                             <div
                               key={l.id}
-                              draggable
+                              draggable={savingLeadId !== l.id}
                               onDragStart={(e) => handleKanbanDragStart(e, l.id, l.pipeline)}
-                              className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none cursor-grab active:cursor-grabbing"
+                              onDragEnd={handleKanbanDragEnd}
+                              className={`rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none ${
+                                savingLeadId === l.id ? "cursor-wait opacity-70" : "cursor-grab active:cursor-grabbing"
+                              } ${draggingLeadId === l.id ? "opacity-60" : ""}`}
                             >
                               <p className="text-sm font-medium text-slate-800 truncate select-none" title={cell(l.empresas?.nombre ?? l.nombre)}>
                                 {cell(l.empresas?.nombre ?? l.nombre)}
@@ -389,9 +466,12 @@ export default function OportunidadesPage() {
                         {leadsByColumn["Otros"].map((l) => (
                           <div
                             key={l.id}
-                            draggable
+                            draggable={savingLeadId !== l.id}
                             onDragStart={(e) => handleKanbanDragStart(e, l.id, l.pipeline)}
-                            className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none cursor-grab active:cursor-grabbing"
+                            onDragEnd={handleKanbanDragEnd}
+                            className={`rounded-lg border border-slate-200 bg-white p-3 shadow-sm select-none ${
+                              savingLeadId === l.id ? "cursor-wait opacity-70" : "cursor-grab active:cursor-grabbing"
+                            } ${draggingLeadId === l.id ? "opacity-60" : ""}`}
                           >
                             <p className="text-sm font-medium text-slate-800 truncate select-none" title={cell(l.empresas?.nombre ?? l.nombre)}>
                               {cell(l.empresas?.nombre ?? l.nombre)}
