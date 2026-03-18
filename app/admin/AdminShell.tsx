@@ -24,6 +24,8 @@ type MeResponse = {
 const NAV: NavItem[] = [
   { label: "Centro de control", href: "/admin" },
   { label: "Dashboard comercial", href: "/admin/dashboard" },
+  { label: "Oportunidades", href: "/admin/oportunidades" },
+  { label: "LEADS87", href: "/admin/leads87" },
   { label: "Leads", href: "/admin/leads" },
   { label: "LeadsOk", href: "/admin/leadsok" },
   { label: "Socios", href: "/admin/socios" },
@@ -31,7 +33,6 @@ const NAV: NavItem[] = [
   { label: "Reuniones", href: "/admin/reuniones" },
   { label: "Operaciones", href: "/admin/operaciones" },
   { label: "Reportes", href: "/admin/reportes" },
-  { label: "Oportunidades", href: "/admin/oportunidades" },
   { label: "Eventos", href: "/admin/eventos" },
   { label: "Mesa de ayuda", href: "/admin/mesa-de-ayuda" },
   { label: "Manual de neuroventas", href: "/admin/neuroventas" },
@@ -66,6 +67,11 @@ function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string |
     const last = breadcrumbSegment?.trim() || "Detalle";
     return ["Admin", "Leads", last];
   }
+  if (pathname.startsWith("/admin/leads87/") && segments[0] === "leads87" && segments.length >= 2) {
+    const last = breadcrumbSegment?.trim() || "Oportunidad";
+    return ["Admin", "LEADS87", last];
+  }
+  if (pathname.startsWith("/admin/leads87")) return ["Admin", "LEADS87"];
   if (pathname.startsWith("/admin/leads")) return ["Admin", "Leads", "Gestión operativa"];
   if (pathname.startsWith("/admin/leadsok")) return ["Admin", "LeadsOk"];
 
@@ -77,6 +83,7 @@ function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string |
     operaciones: "Operaciones",
     reportes: "Reportes",
     oportunidades: "Oportunidades",
+    leads87: "LEADS87",
     eventos: "Eventos",
     "mesa-de-ayuda": "Mesa de ayuda",
     neuroventas: "Manual de neuroventas",

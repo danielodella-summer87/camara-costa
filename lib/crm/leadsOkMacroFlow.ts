@@ -68,9 +68,9 @@ function hasContext(lead: LeadForLeadsOkMacro): boolean {
   );
 }
 
+/** Etapas 1–8 (sin Etapa 0). Etapa 1 fusiona lead creado + datos base. */
 const STAGE_DEFINITIONS: Omit<MacroStage, "status" | "checklist">[] = [
-  { id: 0, title: "Etapa 0 — Lead Creado", result: "El lead existe y puede empezar a completarse." },
-  { id: 1, title: "Etapa 1 — Datos completados", result: "Ya hay contexto para investigar." },
+  { id: 1, title: "Etapa 1 — Lead creado / datos base", result: "El lead existe con datos suficientes para investigar." },
   { id: 2, title: "Etapa 2 — Investigación", result: "Ya existe una base de lectura del negocio y su presencia digital." },
   { id: 3, title: "Etapa 3 — Diagnóstico comercial", result: "Queda claro el problema comercial y la oportunidad detectada." },
   { id: 4, title: "Etapa 4 — Estrategia", result: "Se define la dirección estratégica de crecimiento." },
@@ -97,8 +97,7 @@ export function getLeadsOkMacroFlow(
   const hasObjetivosAudiencia = hasStr(lead.objetivos) || hasStr(lead.audiencia) || hasStr(lead.tamano);
   const datosSuficientes = hasNombreOrEmpresa && hasContact && (hasObjetivosAudiencia || hasContext(lead));
 
-  const etapa0Done = true;
-  const etapa1Done = datosSuficientes;
+  const etapa1Done = datosSuficientes; // Lead creado + datos base
   const etapa2Done = hasStr(lead.ai_report);
   const etapa3Done = Boolean(documents?.diagnostic);
   const etapa4Done = Boolean(documents?.strategy);
@@ -108,7 +107,6 @@ export function getLeadsOkMacroFlow(
   const etapa8Done = Boolean(lead.proposal_sent_at);
 
   const completed = [
-    etapa0Done,
     etapa1Done,
     etapa2Done,
     etapa3Done,
@@ -120,17 +118,10 @@ export function getLeadsOkMacroFlow(
   ];
 
   let activeIndex = completed.findIndex((c) => !c);
-  if (activeIndex === -1) activeIndex = 9;
-
-  const checklist0: ChecklistItem[] = [
-    { label: "Alta del lead", done: true },
-    { label: "Datos básicos", done: hasStr(lead.nombre) || Boolean(lead.empresas?.nombre) },
-    { label: "Origen / canal", done: hasStr(lead.origen) },
-    { label: "Responsable comercial", done: Boolean(lead.comercial_id) },
-    { label: "Estado inicial", done: hasStr(lead.pipeline) },
-  ];
+  if (activeIndex === -1) activeIndex = 8;
 
   const checklist1: ChecklistItem[] = [
+    { label: "Alta del lead", done: true },
     { label: "Nombre / empresa", done: hasNombreOrEmpresa },
     { label: "Web / redes / contacto", done: hasContact },
     { label: "Objetivos", done: hasStr(lead.objetivos) },
@@ -141,8 +132,7 @@ export function getLeadsOkMacroFlow(
   return STAGE_DEFINITIONS.map((def, i) => {
     const status: MacroStageStatus =
       i < activeIndex ? "completed" : i === activeIndex ? "active" : "pending";
-    const checklist =
-      def.id === 0 ? checklist0 : def.id === 1 ? checklist1 : ([] as ChecklistItem[]);
+    const checklist = def.id === 1 ? checklist1 : ([] as ChecklistItem[]);
     return {
       ...def,
       checklist,

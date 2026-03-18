@@ -66,40 +66,8 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
       );
     }
 
-    // Si no existe la tabla o falla por esquema: fallback suave a "lead"
-    // (por si el proyecto tiene naming diferente)
-    const selectLeadFallback =
-      "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
-    const q2 = await sb
-      .from("lead")
-      .select(selectLeadFallback)
-      .eq("id", id)
-      .maybeSingle();
-
-    if (q2.error) {
-      // Si el primer query falló por "tabla no existe", reportamos el error real
-      const msg = q1.error?.message || q2.error.message || "Error";
-      return NextResponse.json({ data: null, error: msg } satisfies ApiResp<null>, { status: 500 });
-    }
-
-    if (!q2.data) {
-      return NextResponse.json({ data: null, error: "Lead no encontrado" } satisfies ApiResp<null>, { status: 404 });
-    }
-
-    const row = q2.data as any;
-    return NextResponse.json(
-      {
-        data: {
-          ...row,
-          comercial: null,
-          linkedin_empresa: row.linkedin_empresa ?? null,
-          linkedin_director: row.linkedin_director ?? null,
-          meet_url: row.meet_url ?? null,
-        },
-        error: null,
-      } satisfies ApiResp<any>,
-      { status: 200 }
-    );
+    const msg = q1.error?.message ?? "Error cargando lead";
+    return NextResponse.json({ data: null, error: msg } satisfies ApiResp<null>, { status: 500 });
   } catch (e: any) {
     return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
   }
@@ -551,36 +519,6 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         return NextResponse.json({ data: fullLead, error: null } satisfies ApiResp<any>, { status: 200 });
       }
       
-      // Fallback: tabla "lead" (por si hay naming diferente)
-      const refreshedFallback = await sb
-        .from("lead")
-        .select(selectQuery)
-        .eq("id", id)
-        .maybeSingle();
-      
-      if (!refreshedFallback.error && refreshedFallback.data) {
-        const row = refreshedFallback.data;
-        const fullLead = {
-          ...row,
-          linkedin_empresa: row.linkedin_empresa ?? null,
-          linkedin_director: row.linkedin_director ?? null,
-          meet_url: row.meet_url ?? null,
-        };
-        
-        // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia
-        if (socioCreationError) {
-          return NextResponse.json(
-            { 
-              data: fullLead, 
-              error: null,
-              warning: `Lead actualizado a Ganado, pero ${socioCreationError}. El lead quedó en Ganado pero no se creó el socio/cliente.` 
-            } satisfies ApiResp<any> & { warning?: string },
-            { status: 200 }
-          );
-        }
-        return NextResponse.json({ data: fullLead, error: null } satisfies ApiResp<any>, { status: 200 });
-      }
-      
       // Si falla el refresh, devolver el resultado del update (sin empresas, pero mejor que nada)
       if (socioCreationError) {
         return NextResponse.json(
@@ -627,18 +565,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
-    // Intento principal: "leads"
-    const d1 = await sb.from("leads").delete().eq("id", id);
-    if (!d1.error) {
-      return NextResponse.json({ data: { ok: true }, error: null } satisfies ApiResp<any>, { status: 200 });
+    const del = await sb.from("leads").delete().eq("id", id);
+    if (del.error) {
+      return NextResponse.json({ data: null, error: del.error.message } satisfies ApiResp<null>, { status: 500 });
     }
-
-    // Fallback: "lead"
-    const d2 = await sb.from("lead").delete().eq("id", id);
-    if (d2.error) {
-      return NextResponse.json({ data: null, error: d2.error.message } satisfies ApiResp<null>, { status: 500 });
-    }
-
     return NextResponse.json({ data: { ok: true }, error: null } satisfies ApiResp<any>, { status: 200 });
   } catch (e: any) {
     return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });

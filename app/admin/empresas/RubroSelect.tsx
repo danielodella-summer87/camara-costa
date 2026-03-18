@@ -2,6 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+/**
+ * Selector de rubro. Fuente única: catálogo de Configuración → Rubros (GET /api/admin/rubros).
+ * Reutilizar este componente en ficha del lead, tab Contexto y cualquier edición de oportunidad.
+ * El valor se persiste en empresa.rubro_id (PATCH /api/admin/empresas/[id]).
+ */
 type Rubro = { id: string; nombre: string; activo?: boolean };
 type RubrosApiResponse = { data?: Rubro[]; error?: string | null };
 

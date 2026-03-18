@@ -71,6 +71,14 @@ const formatLevels = (text: string) =>
 
 const formatBullets = (text: string) => text.replace(/^- /gm, "• ");
 
+/** Formatea segundos a "X min Y s" o "X s" para tiempo restante estimado */
+function formatTime(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)} s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return s > 0 ? `${m} min ${s} s` : `${m} min`;
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -358,6 +366,7 @@ export function AiLeadReport({
   allowedProfiles = ["comercial", "tecnico"],
   initialProfile,
   onPresentationSignalChange,
+  onReportGenerated,
   titleLabel,
   subtitleLabel,
   buttonHelperText,
@@ -375,6 +384,8 @@ export function AiLeadReport({
     lastGeneratedPdf?: boolean;
     exportReady?: boolean;
   }) => void;
+  /** Se llama cuando termina la generación del informe (para que el padre pueda refetch y actualizar el flujo). */
+  onReportGenerated?: () => void;
   /** Cuando se usa en el tab Comercial: título del bloque (ej. "Análisis interno del lead (IA)") */
   titleLabel?: string;
   /** Subtítulo explicativo del bloque */
@@ -389,6 +400,9 @@ export function AiLeadReport({
   const hasAnyProfile = canUseCommercial || canUseTechnical;
 
   const [aiLoading, setAiLoading] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisCurrentModule, setAnalysisCurrentModule] = useState("");
+  const [analysisTotalModules, setAnalysisTotalModules] = useState(0);
   const [report, setReport] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
@@ -420,6 +434,10 @@ export function AiLeadReport({
   const [gammaPromptLoading, setGammaPromptLoading] = useState(false);
   const [gammaPromptError, setGammaPromptError] = useState<string | null>(null);
   const [gammaLoading, setGammaLoading] = useState(false);
+  const [gammaProgress, setGammaProgress] = useState(0);
+  const [gammaStartTime, setGammaStartTime] = useState<number | null>(null);
+  const [gammaEstimatedRemaining, setGammaEstimatedRemaining] = useState<number | null>(null);
+  const [pdfExporting, setPdfExporting] = useState<"comercial" | "tecnico" | "vision" | null>(null);
   const [gammaUrl, setGammaUrl] = useState<string | null>(null);
   const [gammaPdfUrl, setGammaPdfUrl] = useState<string | null>(null);
   const [gammaError, setGammaError] = useState<string | null>(null);
@@ -440,6 +458,22 @@ export function AiLeadReport({
       });
     }
   }, [gammaUrl, gammaPdfUrl, onPresentationSignalChange]);
+
+  // Ocultar barra de progreso unos segundos después de "Análisis completado"
+  useEffect(() => {
+    if (
+      !aiLoading &&
+      analysisProgress === 100 &&
+      analysisCurrentModule === "Análisis completado"
+    ) {
+      const t = setTimeout(() => {
+        setAnalysisProgress(0);
+        setAnalysisCurrentModule("");
+        setAnalysisTotalModules(0);
+      }, 3000);
+      return () => clearTimeout(t);
+    }
+  }, [aiLoading, analysisProgress, analysisCurrentModule]);
 
   const fetchGammaPrompt = async (type: "comercial" | "tecnico") => {
     if (!leadId?.trim()) return;
@@ -467,8 +501,10 @@ export function AiLeadReport({
     setTimeout(() => setToastMessage(null), 2500);
   };
 
-  const pollGammaStatus = async (generationId: string) => {
-    for (let i = 0; i < 45; i++) {
+  const pollGammaStatus = async (generationId: string, startTime: number) => {
+    setGammaProgress(0);
+    const totalPolls = 45;
+    for (let i = 0; i < totalPolls; i++) {
       const res = await fetch(
         `/api/admin/leads/${leadId}/gamma-proposal/status?generationId=${encodeURIComponent(generationId)}`
       );
@@ -482,6 +518,9 @@ export function AiLeadReport({
         const gammaUrlVal = json?.gammaUrl ?? null;
         setGammaUrl(gammaUrlVal);
         setGammaPdfUrl(pdfUrl);
+        setGammaProgress(100);
+        setGammaEstimatedRemaining(null);
+        setGammaStartTime(null);
         setGammaLoading(false);
         setGammaError(null);
         onPresentationSignalChange?.({
@@ -489,34 +528,43 @@ export function AiLeadReport({
           pdfUrl: pdfUrl ?? null,
           exportReady: Boolean(gammaUrlVal || pdfUrl),
         });
-        if (pdfUrl) {
-          setToastMessage("PDF Gamma listo");
-          setTimeout(() => setToastMessage(null), 3000);
-          window.open(pdfUrl, "_blank");
-        } else if (gammaUrlVal) {
-          setToastMessage("Gamma lista");
-          setTimeout(() => setToastMessage(null), 3000);
-          window.open(gammaUrlVal, "_blank");
-        }
         return;
       }
 
       if (json?.status === "failed") {
         setGammaLoading(false);
+        setGammaProgress(0);
+        setGammaEstimatedRemaining(null);
+        setGammaStartTime(null);
         setGammaError("Gamma no pudo completar la propuesta.");
         return;
       }
 
+      const progress = Math.min(95, Math.round(((i + 1) / totalPolls) * 100));
+      setGammaProgress(progress);
+      if (progress > 15) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        const totalEstimated = elapsed / (progress / 100);
+        const remaining = Math.max(0, totalEstimated - elapsed);
+        setGammaEstimatedRemaining(Math.round(remaining));
+      }
       await new Promise((r) => setTimeout(r, 4000));
     }
 
     setGammaLoading(false);
+    setGammaProgress(0);
+    setGammaEstimatedRemaining(null);
+    setGammaStartTime(null);
     setGammaError("Gamma sigue procesando. Puedes reintentar abrir el estado en unos minutos.");
   };
 
   const generateGammaProposal = async (profile: "comercial" | "tecnico") => {
     if (!leadId?.trim()) return;
+    const startTime = Date.now();
+    setGammaStartTime(startTime);
+    setGammaEstimatedRemaining(null);
     setGammaLoading(true);
+    setGammaProgress(0);
     setGammaError(null);
     setGammaUrl(null);
     setGammaPdfUrl(null);
@@ -532,9 +580,11 @@ export function AiLeadReport({
       const generationId = (json as any)?.generationId ?? null;
       if (!generationId) throw new Error("No se recibió generationId");
       setGammaGenerationId(generationId);
-      await pollGammaStatus(generationId);
+      await pollGammaStatus(generationId, startTime);
     } catch (e: any) {
       setGammaError(e?.message ?? "Error generando propuesta en Gamma");
+      setGammaEstimatedRemaining(null);
+      setGammaStartTime(null);
       setGammaLoading(false);
     }
   };
@@ -1060,26 +1110,31 @@ export function AiLeadReport({
       return next;
     });
 
-    keepTabsInView();
+    const totalModules = uiModuleOrder.length;
+    setAnalysisTotalModules(totalModules);
+    setAnalysisProgress(0);
+    setAnalysisCurrentModule(uiModuleOrder[0]?.label ?? "Preparando…");
 
     const firstTab = uiModuleOrder[0];
     setActiveReportTab(firstTab.id);
 
     let currentReport = report;
-    for (const tab of uiModuleOrder) {
+    for (let i = 0; i < uiModuleOrder.length; i++) {
+      const tab = uiModuleOrder[i];
+      setAnalysisCurrentModule(tab.label);
+      setAnalysisProgress(totalModules > 0 ? Math.round((i / totalModules) * 100) : 0);
       setModuleStatus((s) => ({ ...s, [tab.tabId]: "running" }));
       setActiveReportTab(tab.id);
-      keepTabsInView();
       const result = await regenerateSingleModule(tab.tabId);
       if (result.ok && result.report) {
         currentReport = result.report;
         setReport(currentReport);
         setModuleStatus((s) => ({ ...s, [tab.tabId]: "done" }));
-        keepTabsInView();
       } else {
         setModuleStatus((s) => ({ ...s, [tab.tabId]: "error" }));
         if (result.error) setError(result.error);
       }
+      setAnalysisProgress(totalModules > 0 ? Math.round(((i + 1) / totalModules) * 100) : 0);
     }
 
     const visionInProfile = profile.moduleIds.some(
@@ -1090,12 +1145,14 @@ export function AiLeadReport({
     } else if (uiModuleOrder.length > 0) {
       setActiveReportTab(uiModuleOrder[uiModuleOrder.length - 1].id);
     }
-    keepTabsInView();
     modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
+    setAnalysisProgress(100);
+    setAnalysisCurrentModule("Análisis completado");
     setAiDoneMsg("✅ Informe IA completo.");
     setStatus("done");
     setAiLoading(false);
+    onReportGenerated?.();
   };
 
   const generateAI = async () => {
@@ -1189,6 +1246,7 @@ export function AiLeadReport({
         setError("Falta el lead.");
         return;
       }
+      setPdfExporting(profile);
       setToastMessage("Generando PDF…");
 
       const res = await fetch(
@@ -1207,6 +1265,8 @@ export function AiLeadReport({
     } catch (e: any) {
       setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
+    } finally {
+      setPdfExporting(null);
     }
   };
 
@@ -1222,6 +1282,7 @@ export function AiLeadReport({
         setError("No hay contenido de Visión Estratégica para exportar. Genera el informe primero.");
         return;
       }
+      setPdfExporting("vision");
       setToastMessage("Generando PDF Visión Estratégica…");
       const sections = [{ name: "Visión Estratégica", content: visionContent }];
       const doc = (
@@ -1242,6 +1303,8 @@ export function AiLeadReport({
     } catch (e: any) {
       setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
+    } finally {
+      setPdfExporting(null);
     }
   };
 
@@ -1260,6 +1323,14 @@ export function AiLeadReport({
     );
   }
 
+  const analysisAvailable = !!report.trim();
+  const lockIcon = (
+    <svg className="mr-1.5 h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden fill="currentColor" viewBox="0 0 20 20">
+      <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
+    </svg>
+  );
+  const lockedTitle = "Disponible después de generar el análisis";
+
   return (
     <div className="rounded-2xl border bg-white p-4">
       {aiDoneMsg && (
@@ -1267,11 +1338,36 @@ export function AiLeadReport({
           {aiDoneMsg}
         </div>
       )}
-      {status !== "idle" && !aiDoneMsg && (
+      {status !== "idle" && !aiDoneMsg && !(aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado")) && (
         <div className="mb-3 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
           {status === "saving" && "Guardando datos del lead…"}
           {status === "generating" && "Generando informe con IA…"}
           {status === "done" && "Informe generado correctamente."}
+        </div>
+      )}
+
+      {/* Barra de progreso del análisis (reemplaza "Generando..." por progreso real por módulos) */}
+      {(aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado")) && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+          <p className="text-sm font-medium text-slate-800">
+            {analysisProgress >= 100 ? "Análisis completado" : "Analizando el lead…"}
+          </p>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full rounded-full bg-blue-600 transition-[width] duration-500 ease-out"
+              style={{ width: `${Math.min(100, Math.max(0, analysisProgress))}%` }}
+              role="progressbar"
+              aria-valuenow={analysisProgress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label="Progreso del análisis por módulos"
+            />
+          </div>
+          {analysisCurrentModule && analysisProgress < 100 && (
+            <p className="mt-1.5 text-xs text-slate-600">
+              Procesando: {analysisCurrentModule}
+            </p>
+          )}
         </div>
       )}
 
@@ -1286,30 +1382,50 @@ export function AiLeadReport({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {canUseCommercial && (
             <div className="flex flex-col items-start">
-              {buttonTooltipContent ? (
-                <Tooltip content={buttonTooltipContent} maxWidth="320px">
-                  <span className="inline-block">
+              {aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado") ? (
+                <button
+                  type="button"
+                  disabled
+                  className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-300 text-slate-500 cursor-not-allowed"
+                >
+                  Generar Análisis Comercial
+                </button>
+              ) : report.trim() ? (
+                <span
+                  className="inline-flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-500 opacity-90"
+                  title="El análisis ya fue generado."
+                >
+                  <svg className="h-4 w-4 shrink-0" aria-hidden fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
+                  </svg>
+                  Análisis ya generado
+                </span>
+              ) : (
+                <>
+                  {buttonTooltipContent ? (
+                    <Tooltip content={buttonTooltipContent} maxWidth="320px">
+                      <span className="inline-block">
+                        <button
+                          type="button"
+                          onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
+                          className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
+                        >
+                          Generar Análisis Comercial
+                        </button>
+                      </span>
+                    </Tooltip>
+                  ) : (
                     <button
                       type="button"
                       onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
-                      disabled={aiLoading}
-                      className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${aiLoading ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+                      className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
                     >
-                      {aiLoading ? (<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />Generando...</span>) : "Generar Análisis Comercial"}
+                      Generar Análisis Comercial
                     </button>
-                  </span>
-                </Tooltip>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
-                  disabled={aiLoading}
-                  className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${aiLoading ? "bg-amber-400 text-slate-900 ring-4 ring-amber-200 animate-pulse cursor-wait" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-                >
-                  {aiLoading ? (<span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-slate-900 animate-ping" />Generando...</span>) : "Generar Análisis Comercial"}
-                </button>
+                  )}
+                  {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
+                </>
               )}
-              {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
             </div>
           )}
           {canUseTechnical && (
@@ -1317,7 +1433,7 @@ export function AiLeadReport({
               type="button"
               onClick={() => { setReportProfile("tecnico"); runFullAiGeneration(); }}
               disabled={aiLoading}
-              className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50"
+              className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Generar Técnico
             </button>
@@ -1325,39 +1441,258 @@ export function AiLeadReport({
         </div>
       </div>
 
-      {/* Zona B — Documentos generados */}
-      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Documentos generados</p>
-        <div className="flex flex-wrap gap-2">
-          {canUseCommercial && report.trim() && (
-            <button type="button" onClick={() => { setReportProfile("comercial"); const firstModuleId = getReportProfile("comercial").moduleIds[0]; const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId); setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50" title="Ver informe comercial">Informe Comercial</button>
+      {/* Zona B — Documentos generados (reorganizado: principal, módulos destacados, exportaciones) */}
+      <div className="mb-4 space-y-4">
+        {/* 1. BLOQUE PRINCIPAL — Informe comercial */}
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <h3 className="text-sm font-semibold text-slate-800">Informe comercial</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Documento principal generado a partir del análisis del lead.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {canUseCommercial && (
+              analysisAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportProfile("comercial");
+                    const firstModuleId = getReportProfile("comercial").moduleIds[0];
+                    const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId);
+                    setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id);
+                    setReportExpanded(true);
+                    requestAnimationFrame(() => {
+                      setTimeout(() => {
+                        modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }, 80);
+                    });
+                  }}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50"
+                  title="Expandir y ver el informe comercial debajo"
+                >
+                  Ver informe
+                </button>
+              ) : (
+                <span
+                  className="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500 opacity-60"
+                  title={lockedTitle}
+                >
+                  {lockIcon}
+                  Ver informe
+                </span>
+              )
+            )}
+            {canUseCommercial && (
+              analysisAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => handleExportPdf("comercial")}
+                  disabled={!leadId || pdfExporting !== null}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px]"
+                  title={pdfExporting === "comercial" ? "Generando PDF…" : "Descargar PDF del informe comercial"}
+                >
+                  {pdfExporting === "comercial" ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" aria-hidden />
+                      Generando PDF…
+                    </span>
+                  ) : (
+                    "PDF informe comercial"
+                  )}
+                </button>
+              ) : (
+                <span
+                  className="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500 opacity-60 min-w-[140px]"
+                  title={lockedTitle}
+                >
+                  {lockIcon}
+                  PDF informe comercial
+                </span>
+              )
+            )}
+          </div>
+        </div>
+
+        {/* 2. BLOQUE SECUNDARIO — Módulos destacados del análisis */}
+        {canUseCommercial && (!analysisAvailable || (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0) && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+            <h3 className="text-sm font-semibold text-slate-800">Módulos destacados del análisis</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Secciones clave derivadas del informe comercial.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {analysisAvailable && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 ? (
+                <button type="button" onClick={() => setActiveReportTab("vision_estrategica")} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100" title="Ver módulo Visión Estratégica">Ver visión estratégica</button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2 text-sm font-medium text-blue-600 opacity-60" title={lockedTitle}>{lockIcon}Ver visión estratégica</span>
+              )}
+              {analysisAvailable && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleExportPdfVision}
+                  disabled={!leadId || pdfExporting !== null}
+                  className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px]"
+                  title={pdfExporting === "vision" ? "Generando PDF…" : "Descargar PDF Visión Estratégica"}
+                >
+                  {pdfExporting === "vision" ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" aria-hidden />
+                      Generando PDF…
+                    </span>
+                  ) : (
+                    "PDF visión estratégica"
+                  )}
+                </button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2 text-sm font-medium text-blue-600 opacity-60 min-w-[140px]" title={lockedTitle}>{lockIcon}PDF visión estratégica</span>
+              )}
+              {analysisAvailable && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 ? (
+                <button type="button" onClick={() => { setActiveReportTab("vision_estrategica"); regenerateTab("vision_estrategica"); }} disabled={aiLoading || regeneratingTab === "vision_estrategica"} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 flex items-center gap-1.5" title="Regenerar módulo Visión Estratégica">
+                  {regeneratingTab === "vision_estrategica" ? (<><span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />Generando...</>) : "Regenerar visión estratégica"}
+                </button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2 text-sm font-medium text-blue-600 opacity-60" title={lockedTitle}>{lockIcon}Regenerar visión estratégica</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 3. BLOQUE TERCIARIO — Exportaciones y acciones (Gamma y PDF centralizados aquí) */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+          <h3 className="text-sm font-semibold text-slate-800">Exportaciones y acciones</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Exportar o reutilizar contenido en otros formatos.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {canUseCommercial && (
+              analysisAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => generateGammaProposal("comercial")}
+                  disabled={!leadId || gammaLoading}
+                  className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
+                  title={gammaLoading ? "Generando…" : "Crear propuesta en Gamma"}
+                >
+                  {gammaLoading ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-emerald-300 border-t-emerald-600" aria-hidden />
+                      Generando Gamma…
+                    </span>
+                  ) : (
+                    "Generar Gamma comercial"
+                  )}
+                </button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-sm font-medium text-emerald-700 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma comercial</span>
+              )
+            )}
+            {canUseTechnical && (
+              analysisAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => generateGammaProposal("tecnico")}
+                  disabled={!leadId || gammaLoading}
+                  className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
+                  title={gammaLoading ? "Generando…" : "Crear propuesta en Gamma"}
+                >
+                  {gammaLoading ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-emerald-300 border-t-emerald-600" aria-hidden />
+                      Generando Gamma…
+                    </span>
+                  ) : (
+                    "Generar Gamma técnico"
+                  )}
+                </button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-sm font-medium text-emerald-700 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma técnico</span>
+              )
+            )}
+            {canUseTechnical && (
+              analysisAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => handleExportPdf("tecnico")}
+                  disabled={!leadId || pdfExporting !== null}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px]"
+                  title={pdfExporting === "tecnico" ? "Generando PDF…" : "Descargar PDF Informe Técnico"}
+                >
+                  {pdfExporting === "tecnico" ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" aria-hidden />
+                      Generando PDF…
+                    </span>
+                  ) : (
+                    "PDF informe técnico"
+                  )}
+                </button>
+              ) : (
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500 opacity-60 min-w-[140px]" title={lockedTitle}>{lockIcon}PDF informe técnico</span>
+              )
+            )}
+          </div>
+
+          {/* Gamma: progreso y resultado solo dentro de este bloque */}
+          {gammaLoading && (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
+              <p className="text-sm font-medium text-emerald-800">Generando propuesta en Gamma…</p>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-emerald-100">
+                <div
+                  className="h-full rounded-full bg-emerald-600 transition-[width] duration-500 ease-out"
+                  style={{ width: `${Math.min(100, Math.max(0, gammaProgress))}%` }}
+                  role="progressbar"
+                  aria-valuenow={gammaProgress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Progreso de generación Gamma"
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-emerald-700">{gammaProgress}%</p>
+              <p className="mt-1 text-xs text-emerald-600">
+                {gammaProgress < 15
+                  ? "Calculando tiempo estimado…"
+                  : gammaProgress > 95
+                    ? "Finalizando…"
+                    : gammaEstimatedRemaining != null
+                      ? `Tiempo estimado restante: ${formatTime(gammaEstimatedRemaining)}`
+                      : "Calculando tiempo estimado…"}
+              </p>
+              {gammaGenerationId && (
+                <p className="mt-1 text-xs text-slate-500">ID: {gammaGenerationId}</p>
+              )}
+            </div>
           )}
-          {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
-            <button type="button" onClick={() => setActiveReportTab("vision_estrategica")} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100" title="Ver Visión Estratégica">Informe Visión Estratégica</button>
+          {gammaError && !gammaLoading && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {gammaError}
+            </div>
           )}
-          {canUseCommercial && (
-            <button type="button" onClick={() => handleExportPdf("comercial")} disabled={!leadId || aiLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Descargar PDF Informe Comercial">PDF Informe Comercial</button>
-          )}
-          {canUseTechnical && (
-            <button type="button" onClick={() => handleExportPdf("tecnico")} disabled={!leadId || aiLoading} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Descargar PDF Informe Técnico">PDF Informe Técnico</button>
-          )}
-          {report.trim() && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 && (
-            <button type="button" onClick={handleExportPdfVision} disabled={!leadId || aiLoading} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50" title="Descargar PDF Visión Estratégica">PDF Visión Estratégica</button>
-          )}
-          {report.trim() && (
-            <button type="button" onClick={() => { setActiveReportTab("vision_estrategica"); regenerateTab("vision_estrategica"); }} disabled={aiLoading || regeneratingTab === "vision_estrategica"} className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 flex items-center gap-1.5" title="Regenerar Visión Estratégica">
-              {regeneratingTab === "vision_estrategica" ? (<><span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />Generando...</>) : "Generar Visión Estratégica"}
-            </button>
-          )}
-          {canUseCommercial && (
-            <button type="button" onClick={() => generateGammaProposal("comercial")} disabled={!leadId || gammaLoading} className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Crear propuesta en Gamma">Generar Gamma Comercial</button>
-          )}
-          {canUseTechnical && (
-            <button type="button" onClick={() => generateGammaProposal("tecnico")} disabled={!leadId || gammaLoading} className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Crear propuesta en Gamma">Generar Gamma Técnico</button>
-          )}
-          <button type="button" onClick={copy} disabled={!report.trim()} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Copiar al portapapeles">Copiar</button>
-          {report.trim() && (
-            <button type="button" onClick={() => setViewMode(viewMode === "rendered" ? "raw" : "rendered")} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50" title={viewMode === "rendered" ? "Ver texto crudo" : "Vista renderizada"}>{viewMode === "rendered" ? "Ver Texto" : "Vista"}</button>
+          {(gammaPdfUrl || gammaUrl) && !gammaLoading && (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
+              <p className="text-sm font-medium text-emerald-800 mb-2">Propuesta Gamma lista</p>
+              <div className="flex flex-wrap gap-2">
+                {gammaUrl && (
+                  <button
+                    type="button"
+                    onClick={() => window.open(gammaUrl!, "_blank")}
+                    className="rounded-lg border border-emerald-400 bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-200"
+                  >
+                    Ver Gamma
+                  </button>
+                )}
+                {gammaUrl && (
+                  <button
+                    type="button"
+                    onClick={() => window.open(gammaUrl!, "_blank")}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Abrir presentación
+                  </button>
+                )}
+                {gammaPdfUrl && (
+                  <button
+                    type="button"
+                    onClick={() => window.open(gammaPdfUrl!, "_blank")}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Descargar
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -1420,62 +1755,6 @@ export function AiLeadReport({
       {error && (
         <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
-        </div>
-      )}
-
-      {gammaLoading && (
-        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          Generando propuesta en Gamma…
-        </div>
-      )}
-      {gammaGenerationId && !gammaUrl && !gammaPdfUrl && (
-        <div className="mt-2 text-xs text-slate-500">
-          ID de generación: {gammaGenerationId}
-        </div>
-      )}
-      {(gammaPdfUrl || gammaUrl) && !gammaLoading && (
-        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 flex items-center gap-3 flex-wrap">
-          {gammaPdfUrl ? (
-            <>
-              <span>PDF Gamma listo</span>
-              <a
-                href={gammaPdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                download="informe-gamma.pdf"
-                className="font-medium underline hover:no-underline"
-              >
-                Descargar PDF Gamma
-              </a>
-              {gammaUrl && (
-                <a
-                  href={gammaUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium underline hover:no-underline opacity-80"
-                >
-                  Abrir en Gamma
-                </a>
-              )}
-            </>
-          ) : (
-            <>
-              <span>Gamma lista</span>
-              <a
-                href={gammaUrl!}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium underline hover:no-underline"
-              >
-                Abrir Gamma
-              </a>
-            </>
-          )}
-        </div>
-      )}
-      {gammaError && (
-        <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {gammaError}
         </div>
       )}
 

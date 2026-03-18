@@ -48,25 +48,12 @@ export async function updateLeadSafe(
     console.log(`[updateLeadSafe] Lead ${leadId}: Actualizando empresa_id a ${payload.empresa_id} (cambio explícito)`);
   }
 
-  // Intentar actualizar en tabla "leads"
-  const u1 = await sb
+  const result = await sb
     .from("leads")
     .update(payload)
     .eq("id", leadId)
     .select("*")
     .maybeSingle();
 
-  if (!u1.error && u1.data) {
-    return u1;
-  }
-
-  // Fallback: intentar en tabla "lead" (por si hay naming diferente)
-  const u2 = await sb
-    .from("lead")
-    .update(payload)
-    .eq("id", leadId)
-    .select("*")
-    .maybeSingle();
-
-  return u2;
+  return result;
 }
