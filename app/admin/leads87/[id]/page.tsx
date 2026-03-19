@@ -178,7 +178,11 @@ export default function Leads87DetailPage() {
   const startEditingFicha = useCallback(() => {
     if (!fullLead) return;
     const lead = fullLead as LeadForLeadsOkMacro & {
+      empresa_id?: string | null;
       empresas?: { id?: string; nombre?: string | null; rubro_id?: string | null; rubros?: { id?: string | null } | null } | null;
+      website?: string | null;
+      linkedin_empresa?: string | null;
+      linkedin_director?: string | null;
       origen?: string | null;
       objetivos?: string | null;
       audiencia?: string | null;
@@ -284,6 +288,7 @@ export default function Leads87DetailPage() {
   }
 
   const leadWithExtras = fullLead as LeadForLeadsOkMacro & {
+    empresa_id?: string | null;
     empresas?: { nombre?: string | null; web?: string | null; rubros?: { nombre?: string | null } | null } | null;
     comerciales?: { id?: string; nombre?: string } | null;
     comercial?: { id?: string; nombre?: string } | null;

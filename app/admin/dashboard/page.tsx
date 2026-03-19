@@ -20,8 +20,18 @@ import { ActivityStateSummary } from "@/components/crm/dashboard/ActivityStateSu
 import { StalledLeads } from "@/components/crm/dashboard/StalledLeads";
 import { ConversionMetrics } from "@/components/crm/dashboard/ConversionMetrics";
 import { TopOpportunities } from "@/components/crm/dashboard/TopOpportunities";
-import { PropuestasEsperandoRespuesta } from "@/components/crm/dashboard/PropuestasEsperandoRespuesta";
+import {
+  PropuestasEsperandoRespuesta,
+  type PropuestaEnviadaLead,
+} from "@/components/crm/dashboard/PropuestasEsperandoRespuesta";
 import Link from "next/link";
+
+/** Normaliza string | null | undefined a string | null para tipos estrictos. */
+function normalizeNullableString(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim();
+  return s === "" ? null : s;
+}
 
 type Lead = {
   id: string;
@@ -114,7 +124,7 @@ export default function DashboardPage() {
   const conversionPairs = useMemo(() => getConversionMetrics(forMetrics), [forMetrics]);
   const topOpportunities = useMemo(() => getTopOpportunities(forMetrics, 5), [forMetrics]);
 
-  const propuestasEsperandoRespuesta = useMemo(() => {
+  const propuestasEsperandoRespuesta = useMemo((): PropuestaEnviadaLead[] => {
     return leads
       .filter(
         (l) =>
@@ -122,13 +132,16 @@ export default function DashboardPage() {
           l.proposal_sent_at &&
           !CLOSED_PIPELINES.has(norm(l.pipeline))
       )
-      .map((l) => ({
-        id: l.id,
-        nombre: l.nombre,
-        pipeline: l.pipeline,
-        proposal_sent_at: l.proposal_sent_at,
-        daysSinceSent: daysSinceSent(l.proposal_sent_at),
-      }))
+      .map((l): PropuestaEnviadaLead => {
+        const sentAt = normalizeNullableString(l.proposal_sent_at);
+        return {
+          id: String(l.id ?? ""),
+          nombre: normalizeNullableString(l.nombre),
+          pipeline: normalizeNullableString(l.pipeline),
+          proposal_sent_at: sentAt,
+          daysSinceSent: daysSinceSent(sentAt ?? l.proposal_sent_at),
+        };
+      })
       .slice(0, 10);
   }, [leads]);
 

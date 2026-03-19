@@ -122,11 +122,11 @@ export function getLeadsOkMacroFlow(
 
   const checklist1: ChecklistItem[] = [
     { label: "Alta del lead", done: true },
-    { label: "Nombre / empresa", done: hasNombreOrEmpresa },
-    { label: "Web / redes / contacto", done: hasContact },
-    { label: "Objetivos", done: hasStr(lead.objetivos) },
-    { label: "Audiencia / rubro", done: hasStr(lead.audiencia) || hasStr(lead.tamano) },
-    { label: "Datos suficientes para analizarlo", done: datosSuficientes },
+    { label: "Nombre / empresa", done: Boolean(hasNombreOrEmpresa) },
+    { label: "Web / redes / contacto", done: Boolean(hasContact) },
+    { label: "Objetivos", done: Boolean(hasStr(lead.objetivos)) },
+    { label: "Audiencia / rubro", done: Boolean(hasStr(lead.audiencia) || hasStr(lead.tamano)) },
+    { label: "Datos suficientes para analizarlo", done: Boolean(datosSuficientes) },
   ];
 
   return STAGE_DEFINITIONS.map((def, i) => {

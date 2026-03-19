@@ -112,7 +112,7 @@ export default function NuevoLeadPage() {
       const created = json?.data;
       if (!created?.id) throw new Error("No se recibió el id del lead creado");
 
-      router.push(`/admin/oportunidades/${created.id}`);
+      router.push(`/admin/leads/${created.id}`);
     } catch (e: any) {
       setError(e?.message ?? "Error creando lead");
     } finally {
