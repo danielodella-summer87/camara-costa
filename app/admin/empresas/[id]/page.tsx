@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import RubroSelect from "../RubroSelect";
 
 type Empresa = {
@@ -76,6 +76,7 @@ function normalizeWebUrl(web: string | null | undefined): string | null {
 }
 
 export default function EmpresaDetailPage() {
+  const router = useRouter();
   const params = useParams();
   const rawId = (params as any)?.id as string | string[] | undefined;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
@@ -312,7 +313,7 @@ export default function EmpresaDetailPage() {
         return;
       }
 
-      window.location.href = `/admin/leads/${leadId}`;
+      router.push(`/admin/leads87/${leadId}`);
     } catch (e: any) {
       setError(e.message || "Error");
     }

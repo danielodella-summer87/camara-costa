@@ -13,13 +13,15 @@ const DOC_LABELS: Record<"diagnostic" | "strategy" | "proposal", string> = {
 
 type DocUrls = { diagnostic: string | null; strategy: string | null; proposal: string | null };
 
-/** Orden: diagnostic, strategy, proposal. Solo los que existan. */
+/** Orden: diagnostic, strategy, proposal. Solo URLs que el CRM considera persistidas (no Gamma efímera / solo web). */
 function orderedUrlsFromDocs(docs: DocUrls): string[] {
-  return DOC_ORDER.map((t) => docs[t]).filter(Boolean) as string[];
+  return DOC_ORDER.map((t) => docs[t]).filter(
+    (u): u is string => typeof u === "string" && isOfficialCrmPersistedDocumentUrl(u)
+  );
 }
 
 function orderedTypesFromDocs(docs: DocUrls): ("diagnostic" | "strategy" | "proposal")[] {
-  return DOC_ORDER.filter((t) => docs[t]);
+  return DOC_ORDER.filter((t) => isOfficialCrmPersistedDocumentUrl(docs[t]));
 }
 
 /** True si la URL apunta a un PDF (por extensión o path). */
@@ -34,6 +36,7 @@ import {
   PRESENTATION_POPUP_FEATURES,
   PRESENTATION_POPUP_NAME,
 } from "@/lib/leads/presentationUtils";
+import { isOfficialCrmPersistedDocumentUrl } from "@/lib/leads/gammaDocumentPolicy";
 
 export default function LeadPresentacionPage() {
   const params = useParams();

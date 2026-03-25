@@ -36,7 +36,10 @@ import {
   PRESENTATION_POPUP_NAME,
   isPdfUrl,
   isSameOriginPdfUrl,
+  isTransientGammaExportPdfUrl,
 } from "@/lib/leads/presentationUtils";
+import { isOfficialPresentationDocumentUrl } from "@/lib/leads/commercialGammaDocuments";
+import { persistGammaCompletedStatus } from "@/lib/leads/mirrorGammaPdfClient";
 
 type Empresa = {
   id: string;
@@ -752,8 +755,6 @@ export default function LeadDetailPage() {
   const [presentationSignals, setPresentationSignals] = useState<{
     gammaUrl?: string | null;
     pdfUrl?: string | null;
-    lastGeneratedPdf?: boolean;
-    exportReady?: boolean;
   }>({});
 
   /** Generación de documentos comerciales (Diagnóstico, Visión, Propuesta). */
@@ -766,6 +767,10 @@ export default function LeadDetailPage() {
     proposal: null,
     presentation: null,
   });
+  /** Historial de versiones por tipo (lead_documents); la UI sigue usando solo URLs vigentes. */
+  const [documentVersionSummaries, setDocumentVersionSummaries] = useState<
+    { type: string; version_number: number; is_current: boolean; created_at: string; status: string | null }[]
+  >([]);
   /** Feedback "Copiado" en botones Copiar (informe / visión). */
   const [copiedWhich, setCopiedWhich] = useState<"informe" | "informe-paso46" | "vision" | null>(null);
   /** Mostrar/ocultar contenido del informe comercial en la pestaña Consultor (por defecto visible, se puede colapsar). */
@@ -817,6 +822,21 @@ export default function LeadDetailPage() {
 
   const hasStrategicVisionText = strategicVisionText.length > 0;
 
+  const documentVersionHistoryByType = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const v of documentVersionSummaries) {
+      const t = (v.type ?? "").trim();
+      if (!t) continue;
+      m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    return m;
+  }, [documentVersionSummaries]);
+
+  const hasMultipleDocumentVersions = useMemo(
+    () => [...documentVersionHistoryByType.values()].some((n) => n > 1),
+    [documentVersionHistoryByType]
+  );
+
   useEffect(() => {
     if (!copiedWhich) return;
     const t = setTimeout(() => setCopiedWhich(null), 2000);
@@ -833,6 +853,14 @@ export default function LeadDetailPage() {
     () => getLeadFlowSignals(lead ?? null, leadServices, presentationSignals),
     [lead, leadServices, presentationSignals]
   );
+
+  /** Material de presentación reconocido por el CRM solo si está archivado (no Gamma efímera / solo web). */
+  const hasOfficialArchivedPresentation = useMemo(() => {
+    const sig = presentationSignals?.pdfUrl?.trim();
+    if (sig && !isTransientGammaExportPdfUrl(sig) && isOfficialPresentationDocumentUrl(sig)) return true;
+    const pres = commercialDocUrls.presentation?.trim();
+    return Boolean(pres && isOfficialPresentationDocumentUrl(pres));
+  }, [presentationSignals?.pdfUrl, commercialDocUrls.presentation]);
   /** Paso que se recomienda en el bloque "Siguiente paso recomendado" (para enfoque y etiqueta). */
   const displayStepId = useMemo(() => {
     if (!currentFlowStep) return null;
@@ -855,61 +883,55 @@ export default function LeadDetailPage() {
     [lead, leadServices]
   );
 
-  const COMMERCIAL_DOCS_STORAGE_KEY = "lead_commercial_docs";
-
-  /** Cargar documentos desde API (DB). Fallback opcional: sessionStorage. */
+  /** Cargar documentos desde API (DB): solo URLs oficiales persistidas. */
   const loadCommercialDocuments = useCallback(() => {
     if (!id?.trim() || typeof window === "undefined") return;
     fetch(`/api/admin/leads/${id}/documents`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((data: { ok?: boolean; documents?: { diagnostic?: string; strategy?: string; proposal?: string; presentation?: string } }) => {
-        if (data?.ok && data.documents) {
-          setCommercialDocUrls({
-            diagnostic: data.documents.diagnostic ?? null,
-            strategy: data.documents.strategy ?? null,
-            proposal: data.documents.proposal ?? null,
-            presentation: data.documents.presentation ?? null,
-          });
-          return;
-        }
-        try {
-          const raw = sessionStorage.getItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`);
-          if (raw) {
-            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null; presentation?: string | null };
+      .then(
+        (data: {
+          ok?: boolean;
+          documents?: { diagnostic?: string; strategy?: string; proposal?: string; presentation?: string };
+          versionSummaries?: {
+            type?: string;
+            version_number?: number;
+            is_current?: boolean;
+            created_at?: string;
+            status?: string | null;
+          }[];
+        }) => {
+          if (data?.ok && data.documents) {
             setCommercialDocUrls({
-              diagnostic: parsed.diagnostic ?? null,
-              strategy: parsed.strategy ?? null,
-              proposal: parsed.proposal ?? null,
-              presentation: parsed.presentation ?? null,
+              diagnostic: data.documents.diagnostic ?? null,
+              strategy: data.documents.strategy ?? null,
+              proposal: data.documents.proposal ?? null,
+              presentation: data.documents.presentation ?? null,
             });
           }
-        } catch {
-          // ignorar
-        }
-      })
-      .catch(() => {
-        try {
-          const raw = sessionStorage.getItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`);
-          if (raw) {
-            const parsed = JSON.parse(raw) as { diagnostic?: string | null; strategy?: string | null; proposal?: string | null; presentation?: string | null };
-            setCommercialDocUrls({
-              diagnostic: parsed.diagnostic ?? null,
-              strategy: parsed.strategy ?? null,
-              proposal: parsed.proposal ?? null,
-              presentation: parsed.presentation ?? null,
-            });
+          const vs = data?.versionSummaries;
+          if (data?.ok && Array.isArray(vs)) {
+            setDocumentVersionSummaries(
+              vs.map((row) => ({
+                type: typeof row.type === "string" ? row.type : "",
+                version_number: typeof row.version_number === "number" ? row.version_number : 1,
+                is_current: row.is_current === true,
+                created_at: typeof row.created_at === "string" ? row.created_at : "",
+                status: row.status ?? null,
+              }))
+            );
+          } else if (data?.ok) {
+            setDocumentVersionSummaries([]);
           }
-        } catch {
-          // ignorar
         }
-      });
+      )
+      .catch(() => {});
   }, [id]);
 
   useEffect(() => {
     loadCommercialDocuments();
   }, [loadCommercialDocuments]);
 
-  /** Persistir documento en DB y actualizar estado local (y sessionStorage como fallback). */
+  /** Persistir documento en DB y actualizar estado local. */
   const persistCommercialDocUrl = useCallback(
     async (docType: "diagnostic" | "strategy" | "proposal", url: string, generationId: string | null) => {
       if (!id) return;
@@ -922,15 +944,7 @@ export default function LeadDetailPage() {
       } catch {
         // ignorar; estado local se actualiza igual
       }
-      setCommercialDocUrls((prev) => {
-        const next = { ...prev, [docType]: url };
-        try {
-          sessionStorage.setItem(`${COMMERCIAL_DOCS_STORAGE_KEY}_${id}`, JSON.stringify(next));
-        } catch {
-          // ignorar
-        }
-        return next;
-      });
+      setCommercialDocUrls((prev) => ({ ...prev, [docType]: url }));
     },
     [id]
   );
@@ -970,12 +984,28 @@ export default function LeadDetailPage() {
           const statusJson = await statusRes.json().catch(() => ({}));
           if (statusJson?.status === "completed") {
             completed = true;
-            const url = statusJson?.pdfUrl ?? statusJson?.gammaUrl ?? null;
-            if (url) {
-              await persistCommercialDocUrl(docType, url, generationId);
-              loadCommercialDocuments();
-              window.open(url, "_blank");
+            const persisted = await persistGammaCompletedStatus(
+              id.trim(),
+              docType,
+              generationId,
+              {
+                pdfUrl: statusJson?.pdfUrl ?? null,
+                gammaUrl: statusJson?.gammaUrl ?? null,
+              }
+            );
+            if (persisted.error) {
+              setCommercialDocError(persisted.error);
+            } else if (persisted.pendingMessage) {
+              setCommercialDocError(persisted.pendingMessage);
+            } else {
+              setCommercialDocError(null);
             }
+            if (persisted.crmArchivedUrl) {
+              setCommercialDocUrls((prev) => ({ ...prev, [docType]: persisted.crmArchivedUrl! }));
+            }
+            loadCommercialDocuments();
+            const openUrl = persisted.crmArchivedUrl || persisted.openUrl;
+            if (openUrl) window.open(openUrl, "_blank");
             break;
           }
           if (statusJson?.status === "failed") throw new Error("Gamma no pudo completar el documento.");
@@ -1088,10 +1118,11 @@ export default function LeadDetailPage() {
     return null;
   }, [activeTab, sectionFromUrl, currentStep]);
 
-  const presentationPrimaryUrl = useMemo(
-    () => getPresentationPrimaryUrl(commercialDocUrls),
-    [commercialDocUrls]
-  );
+  const presentationPrimaryUrl = useMemo(() => {
+    const raw = getPresentationPrimaryUrl(commercialDocUrls);
+    if (!raw?.trim()) return null;
+    return isOfficialPresentationDocumentUrl(raw) ? raw : null;
+  }, [commercialDocUrls]);
   const presentationEmbedBlocked = useMemo(
     () => isLikelyEmbedBlocked(presentationPrimaryUrl),
     [presentationPrimaryUrl]
@@ -4107,6 +4138,40 @@ export default function LeadDetailPage() {
                       </Tooltip>
                     </summary>
                     <div className="border-t border-slate-100 px-3 pb-3 pt-2 space-y-4">
+                      {documentVersionSummaries.length > 0 && (
+                        <details className="rounded-md border border-dashed border-slate-200 bg-slate-50/70 px-2 py-2">
+                          <summary className="cursor-pointer select-none text-xs font-medium text-slate-600">
+                            Historial de versiones en CRM
+                            {hasMultipleDocumentVersions ? " (varias versiones por tipo)" : ""}
+                          </summary>
+                          <p className="mt-1.5 text-[11px] text-slate-500">
+                            Los enlaces de arriba siempre apuntan a la versión vigente. Aquí se listan todas las filas
+                            guardadas por tipo (auditoría).
+                          </p>
+                          <ul className="mt-2 max-h-40 overflow-auto text-[11px] text-slate-600 space-y-1">
+                            {documentVersionSummaries.map((row, idx) => {
+                              const label =
+                                row.type === "diagnostic"
+                                  ? "Diagnóstico"
+                                  : row.type === "strategy"
+                                    ? "Estrategia"
+                                    : row.type === "proposal"
+                                      ? "Propuesta"
+                                      : row.type === "presentation"
+                                        ? "Presentación"
+                                        : row.type;
+                              const when = row.created_at ? new Date(row.created_at).toLocaleString() : "—";
+                              return (
+                                <li key={`${row.type}-${row.version_number}-${idx}`}>
+                                  <span className="font-medium">{label}</span> · v{row.version_number}
+                                  {row.is_current ? " · vigente" : ""}
+                                  {row.status ? ` · ${row.status}` : ""} · {when}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </details>
+                      )}
                       <div>
                         <p className="text-xs font-medium text-slate-600 mb-1.5">Diagnóstico comercial</p>
                         <div className="flex flex-wrap gap-2">
@@ -4186,8 +4251,10 @@ export default function LeadDetailPage() {
                       {(lead as { proposal_confirmed_at?: string | null } | undefined)?.proposal_confirmed_at && (
                         <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">Propuesta confirmada</span>
                       )}
-                      {(presentationSignals?.gammaUrl ?? presentationSignals?.pdfUrl ?? presentationSignals?.lastGeneratedPdf ?? presentationSignals?.exportReady) && (
-                        <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">Material final generado</span>
+                      {hasOfficialArchivedPresentation && (
+                        <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                          Presentación archivada en el CRM
+                        </span>
                       )}
                     </div>
                     {typeof process !== "undefined" && process.env.NODE_ENV === "development" && (

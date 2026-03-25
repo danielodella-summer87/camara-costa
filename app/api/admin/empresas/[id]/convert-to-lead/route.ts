@@ -20,6 +20,17 @@ function normalizeWebsite(url?: string | null) {
   return `https://${u}`;
 }
 
+function trimStr(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  return s.length ? s : null;
+}
+
+function isMissingColumnError(message: string | undefined, table: string, column: string): boolean {
+  const msg = (message ?? "").toLowerCase();
+  return msg.includes(`could not find the '${column.toLowerCase()}' column of '${table.toLowerCase()}'`);
+}
+
 export async function POST(
   req: Request,
   ctx: { params?: { id?: string } | Promise<{ id?: string }> }
@@ -43,7 +54,9 @@ export async function POST(
     // Validar "empresa existe"
     const { data: empresa, error: empErr } = await sb
       .from("empresas")
-      .select("id,nombre,email,telefono,web,instagram,direccion,rubro_id")
+      .select(
+        "id,nombre,email,telefono,celular,web,instagram,facebook,direccion,ciudad,pais,rubro_id,contacto_nombre,contacto_email,contacto_celular"
+      )
       .eq("id", empresaId)
       .maybeSingle();
 
@@ -91,26 +104,61 @@ export async function POST(
     const DEFAULT_COMERCIAL_ID = "3ceafb59-8e5a-478c-b534-1dc6f9b22583";
     if (!comercialId) comercialId = DEFAULT_COMERCIAL_ID;
 
-    // Siempre insert: nuevo lead con empresa_id y comercial_id
+    const e = empresa as {
+      email?: string | null;
+      contacto_email?: string | null;
+      telefono?: string | null;
+      celular?: string | null;
+      contacto_celular?: string | null;
+      contacto_nombre?: string | null;
+      instagram?: string | null;
+      direccion?: string | null;
+    };
+    const email = trimStr(e.email) ?? trimStr(e.contacto_email);
+    const telefono = trimStr(e.telefono) ?? trimStr(e.celular) ?? trimStr(e.contacto_celular);
+    const contacto = trimStr(e.contacto_nombre);
+    const instagram = trimStr(e.instagram);
+    const direccion = trimStr(e.direccion);
+
+    // Siempre insert: nuevo lead con empresa_id y comercial_id (snapshot operativo + vínculo a entidad)
     const payload: Record<string, unknown> = {
       empresa_id: empresa.id,
       nombre: empresa.nombre,
-      email: empresa.email ?? null,
-      telefono: empresa.telefono ?? null,
+      contacto,
+      email,
+      telefono,
       website: normalizeWebsite(empresa.web),
-      notas: empresa.instagram ? `IG: ${empresa.instagram}` : null,
+      instagram,
+      direccion,
       origen: "Desde entidad",
       pipeline: "Nuevo",
       comercial_id: comercialId,
     };
 
-    const { data: created, error: createErr } = await sb
+    let { data: created, error: createErr } = await sb
       .from("leads")
       .insert(payload)
       .select("id")
       .single();
+    if (
+      createErr &&
+      (isMissingColumnError(createErr.message, "leads", "instagram") ||
+        isMissingColumnError(createErr.message, "leads", "direccion"))
+    ) {
+      const fallbackPayload = { ...payload };
+      delete (fallbackPayload as { instagram?: string | null }).instagram;
+      delete (fallbackPayload as { direccion?: string | null }).direccion;
+      const fallbackRes = await sb
+        .from("leads")
+        .insert(fallbackPayload)
+        .select("id")
+        .single();
+      created = fallbackRes.data;
+      createErr = fallbackRes.error;
+    }
 
     if (createErr) return NextResponse.json({ error: createErr.message }, { status: 500 });
+    if (!created?.id) return NextResponse.json({ error: "No se pudo crear el lead" }, { status: 500 });
 
     return NextResponse.json({ data: { lead_id: created.id } });
   } catch (err: any) {

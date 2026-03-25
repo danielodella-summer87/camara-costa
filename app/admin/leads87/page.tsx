@@ -4,7 +4,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
-import { List, LayoutGrid, FileText, ExternalLink } from "lucide-react";
+import { List, LayoutGrid, FileText, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import type { LeadForLeadsOkMacro, LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
+import {
+  getLeadProgress,
+  getLeadStage,
+  getLeadStageShortLabel,
+  type DerivedLeadStage,
+} from "@/lib/crm/getLeadDerivedFlow";
 
 type LeadOption = {
   id: string;
@@ -12,20 +19,64 @@ type LeadOption = {
   contacto: string | null;
   email: string | null;
   telefono?: string | null;
+  website?: string | null;
   pipeline: string | null;
   empresas?: { nombre?: string | null } | null;
-  /** Campos opcionales que la API de listado puede devolver (sin tocar backend). */
   objetivos?: string | null;
   audiencia?: string | null;
+  tamano?: string | null;
   notas?: string | null;
   ai_report?: string | null;
   proposal_confirmed_at?: string | null;
   proposal_sent_at?: string | null;
+  proposal_doc_url?: string | null;
+  presentation_doc_url?: string | null;
+  proposal_reviewed?: boolean | null;
+  commercial_stage?: string | null;
+  /** Documentos comerciales por tipo (GET /api/admin/leads agrupa lead_documents). */
+  flow_documents?: LeadsOkDocuments;
   score?: number | null;
   score_categoria?: string | null;
-  /** Responsable asignado (filtro por comercial en LEADS87). */
   comercial_id?: string | null;
 };
+
+function toMacroLead(l: LeadOption): LeadForLeadsOkMacro {
+  return {
+    nombre: l.nombre,
+    contacto: l.contacto,
+    telefono: l.telefono,
+    email: l.email,
+    website: l.website ?? null,
+    objetivos: l.objetivos,
+    audiencia: l.audiencia,
+    tamano: l.tamano ?? null,
+    notas: l.notas,
+    pipeline: l.pipeline,
+    proposal_confirmed_at: l.proposal_confirmed_at,
+    proposal_sent_at: l.proposal_sent_at,
+    proposal_doc_url: l.proposal_doc_url,
+    presentation_doc_url: l.presentation_doc_url,
+    proposal_reviewed: l.proposal_reviewed,
+    commercial_stage: l.commercial_stage,
+    ai_report: l.ai_report,
+    empresas: l.empresas,
+  };
+}
+
+function getLeadFlowSnapshot(l: LeadOption): {
+  stage: DerivedLeadStage;
+  progress: number;
+  label: string;
+} {
+  const lead = toMacroLead(l);
+  const docs = l.flow_documents ?? null;
+  const stage = getLeadStage(lead, docs);
+  return {
+    stage,
+    progress: getLeadProgress(stage),
+    label: getLeadStageShortLabel(stage),
+  };
+}
 
 const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
 
@@ -56,45 +107,6 @@ const NORM_TO_KANBAN_COLUMN: Record<string, string> = {
   seguimiento: "Seguimiento",
 };
 
-/** Progreso 0–100 usando misma lógica conceptual que el detalle (con los datos disponibles en listado). */
-function getLeadProgressPercent(l: LeadOption): number {
-  const hasNombreOrEmpresa = hasStr(l.empresas?.nombre) || hasStr(l.nombre);
-  const hasContact = hasStr(l.contacto) || hasStr(l.telefono) || hasStr(l.email);
-  const hasContext = hasStr(l.objetivos) || hasStr(l.audiencia) || hasStr(l.notas);
-  const etapa1Done = hasNombreOrEmpresa && hasContact && (hasStr(l.objetivos) || hasStr(l.audiencia) || hasContext);
-  const etapa2Done = hasStr(l.ai_report);
-  const etapa5Done = Boolean(l.proposal_confirmed_at);
-  const etapa8Done = Boolean(l.proposal_sent_at);
-  const completed = [
-    etapa1Done,
-    etapa2Done,
-    false,
-    false,
-    etapa5Done,
-    false,
-    false,
-    etapa8Done,
-  ];
-  let activeIndex = completed.findIndex((c) => !c);
-  if (activeIndex === -1) activeIndex = 8;
-  const raw = Math.round((activeIndex / 8) * 100);
-  if (raw >= 100) return 100;
-  if (raw >= 75) return 75;
-  if (raw >= 50) return 50;
-  if (raw >= 25) return 25;
-  return 0;
-}
-
-/** Nombre de etapa actual para mostrar (derivado del avance calculado). */
-function getEtapaActualLabel(l: LeadOption): string {
-  const progress = getLeadProgressPercent(l);
-  if (progress >= 100) return "Cierre";
-  if (progress >= 75) return "Presentación";
-  if (progress >= 50) return "Servicios";
-  if (progress >= 25) return "Investigación";
-  return "Lead";
-}
-
 /** Salud del lead: texto breve y coherente (reutiliza score_categoria si existe). */
 function getLeadSalud(l: LeadOption): { label: string; status: "ok" | "medio" | "bajo" | "nuevo" } {
   if (l.score_categoria && hasStr(l.score_categoria)) {
@@ -103,17 +115,16 @@ function getLeadSalud(l: LeadOption): { label: string; status: "ok" | "medio" | 
     if (c.includes("desarrollo") || c.includes("medio")) return { label: "En desarrollo", status: "medio" };
     if (c.includes("frío") || c.includes("bajo")) return { label: "Frío", status: "bajo" };
   }
-  const progress = getLeadProgressPercent(l);
-  if (progress >= 100) return { label: "Completo", status: "ok" };
-  if (progress >= 25) return { label: "En curso", status: "medio" };
+  const { stage, progress } = getLeadFlowSnapshot(l);
+  if (stage === "completo" || progress >= 100) return { label: "Completo", status: "ok" };
   if (progress > 0) return { label: "En curso", status: "medio" };
   return { label: "Nuevo", status: "nuevo" };
 }
 
 /** Estado visual: verde Completo, amarillo Activo, rojo Bloqueado (sin datos mínimos), gris Nuevo. */
 function getLeadEstadoVisual(l: LeadOption): "finalizado" | "en_curso" | "nuevo" | "bloqueado" {
-  const progress = getLeadProgressPercent(l);
-  if (progress >= 100) return "finalizado";
+  const { stage, progress } = getLeadFlowSnapshot(l);
+  if (stage === "completo" || progress >= 100) return "finalizado";
   if (progress > 0) return "en_curso";
   const hasNombreOrEmpresa = hasStr(l.empresas?.nombre) || hasStr(l.nombre);
   const hasAnyContact = hasStr(l.contacto) || hasStr(l.telefono) || hasStr(l.email);
@@ -372,6 +383,94 @@ function leadLabel(l: LeadOption): string {
   return empresa || contacto || email || nombre || "Sin nombre";
 }
 
+/** Siguiente acción recomendada para un lead (solo con datos del listado). */
+function getNextAction(l: LeadOption): { action: string; href: string } {
+  const estado = getLeadEstadoVisual(l);
+  const { stage } = getLeadFlowSnapshot(l);
+  const baseHref = `/admin/leads87/${encodeURIComponent(l.id)}`;
+
+  if (estado === "bloqueado") {
+    return { action: "Resolver bloqueo", href: baseHref };
+  }
+  if (stage === "lead" || stage === "investigacion") {
+    return { action: "Completar investigación", href: baseHref };
+  }
+  if (stage === "diagnostico") {
+    return { action: "Completar diagnóstico", href: baseHref };
+  }
+  if (stage === "estrategia") {
+    return { action: "Completar estrategia", href: baseHref };
+  }
+  if (stage === "servicios") {
+    return { action: "Definir estructura de servicios", href: baseHref };
+  }
+  if (stage === "propuesta" || stage === "presentacion" || stage === "cierre") {
+    return { action: "Continuar propuesta / presentación", href: baseHref };
+  }
+  return { action: "Continuar proceso", href: baseHref };
+}
+
+function NextActionPanel({
+  lead,
+  loading,
+  leadLabelFn,
+}: {
+  lead: LeadOption | null;
+  loading: boolean;
+  leadLabelFn: (l: LeadOption) => string;
+}) {
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+        <p className="text-sm text-slate-500">Cargando siguiente acción…</p>
+      </div>
+    );
+  }
+  if (!lead) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+        <p className="text-sm text-slate-500">No hay leads activos o bloqueados. Creá uno o elegí otro filtro.</p>
+        <Link href="/admin/leads/nuevo" className="mt-2 inline-block text-sm font-medium text-slate-700 underline hover:text-slate-900">
+          Nuevo lead
+        </Link>
+      </div>
+    );
+  }
+  const estado = getLeadEstadoVisual(lead);
+  const { action, href } = getNextAction(lead);
+  const estadoLabel =
+    estado === "finalizado" ? "Completo" : estado === "en_curso" ? "En curso" : estado === "bloqueado" ? "Bloqueado" : "Nuevo";
+  const estadoClass =
+    estado === "bloqueado"
+      ? "bg-red-100 text-red-800"
+      : estado === "en_curso"
+        ? "bg-amber-100 text-amber-800"
+        : estado === "finalizado"
+          ? "bg-emerald-100 text-emerald-800"
+          : "bg-slate-100 text-slate-700";
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Siguiente acción</h2>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-medium text-slate-900 truncate">{leadLabelFn(lead)}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${estadoClass}`}>{estadoLabel}</span>
+            <span className="text-sm text-slate-600">{action}</span>
+          </div>
+        </div>
+        <Link
+          href={href}
+          className="shrink-0 rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+        >
+          Continuar proceso
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 type ViewMode = "kanban" | "listado";
 const PIPELINE_FILTER_OPTIONS = ["Todos", ...KANBAN_COLUMNS];
 
@@ -401,14 +500,18 @@ function shouldNavigateQuery(next: URLSearchParams, current: URLSearchParams): b
 /** all | mine | comercial_id */
 type ComercialFilterValue = "all" | "mine" | string;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function parseComercialFilterFromUrl(sp: URLSearchParams): ComercialFilterValue {
   const raw = (sp.get("comercial") ?? "").trim();
   const lower = raw.toLowerCase();
+  if (!raw || lower === "all" || lower === "todos" || lower === "*") {
+    const mineLegacy = (sp.get("mine") ?? "").trim().toLowerCase();
+    if (mineLegacy === "1" || mineLegacy === "true") return "mine";
+    return "all";
+  }
   if (lower === "mine") return "mine";
-  if (lower === "all") return "all";
-  if (raw.length > 0) return raw;
-  const mineLegacy = (sp.get("mine") ?? "").trim().toLowerCase();
-  if (mineLegacy === "1" || mineLegacy === "true") return "mine";
+  if (UUID_RE.test(raw)) return raw;
   return "all";
 }
 
@@ -425,6 +528,7 @@ export default function Leads87Page() {
 
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [loadingLeads, setLoadingLeads] = useState(true);
+  const [leadsLoadError, setLeadsLoadError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const v = (searchParams.get("view") ?? "").trim().toLowerCase();
@@ -442,6 +546,8 @@ export default function Leads87Page() {
   const [currentUserComercialId, setCurrentUserComercialId] = useState<string | null>(null);
   const [comercialesCatalog, setComercialesCatalog] = useState<{ id: string; nombre: string }[]>([]);
   const [dragError, setDragError] = useState<string | null>(null);
+  /** Mensaje breve tras volver del detalle (p. ej. lead eliminado). */
+  const [listFlash, setListFlash] = useState<string | null>(null);
   const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [savingLeadId, setSavingLeadId] = useState<string | null>(null);
@@ -460,10 +566,12 @@ export default function Leads87Page() {
   useEffect(() => {
     let cancelled = false;
     setLoadingLeads(true);
+    setLeadsLoadError(null);
     fetch("/api/admin/leads", { cache: "no-store", headers: { "Cache-Control": "no-store" } })
       .then(async (res) => {
-        const json = (await res.json()) as { data?: LeadOption[]; error?: string };
+        const json = (await res.json()) as { data?: LeadOption[] | null; error?: string | null };
         if (!res.ok) throw new Error(json?.error ?? "Error cargando leads");
+        if (json?.error) throw new Error(json.error);
         return json;
       })
       .then((json) => {
@@ -471,9 +579,13 @@ export default function Leads87Page() {
         const data = Array.isArray(json?.data) ? json.data : [];
         const active = data.filter((l) => l?.id && !CLOSED_PIPELINES.has(normPipeline(l.pipeline)));
         setLeads(active);
+        setLeadsLoadError(null);
       })
-      .catch(() => {
-        if (!cancelled) setLeads([]);
+      .catch((e) => {
+        if (!cancelled) {
+          setLeads([]);
+          setLeadsLoadError(e instanceof Error ? e.message : "No se pudieron cargar los leads.");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingLeads(false);
@@ -481,6 +593,18 @@ export default function Leads87Page() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const msg = sessionStorage.getItem("leads87_list_flash");
+      if (msg) {
+        setListFlash(msg);
+        sessionStorage.removeItem("leads87_list_flash");
+      }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   useEffect(() => {
@@ -685,6 +809,19 @@ export default function Leads87Page() {
     return map;
   }, [displayLeads]);
 
+  /** Lead prioritario: primero bloqueado, sino primero en curso, sino primero nuevo. */
+  const priorityLead = useMemo(() => {
+    const bloqueado = displayLeads.find((l) => getLeadEstadoVisual(l) === "bloqueado");
+    if (bloqueado) return bloqueado;
+    const enCurso = displayLeads.find((l) => getLeadEstadoVisual(l) === "en_curso");
+    if (enCurso) return enCurso;
+    const nuevo = displayLeads.find((l) => getLeadEstadoVisual(l) === "nuevo");
+    if (nuevo) return nuevo;
+    return displayLeads[0] ?? null;
+  }, [displayLeads]);
+
+  const [showMetricsSection, setShowMetricsSection] = useState(false);
+
   const handleOpen = () => {
     if (!selectedLeadId?.trim()) return;
     router.push(`/admin/leads87/${encodeURIComponent(selectedLeadId)}`);
@@ -766,6 +903,30 @@ export default function Leads87Page() {
 
   return (
     <PageContainer>
+      {listFlash ? (
+        <div
+          className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-900"
+          role="status"
+        >
+          <span>{listFlash}</span>
+          <button
+            type="button"
+            onClick={() => setListFlash(null)}
+            className="shrink-0 font-medium text-emerald-800 underline decoration-emerald-600/60 hover:text-emerald-950"
+          >
+            Cerrar
+          </button>
+        </div>
+      ) : null}
+      {leadsLoadError ? (
+        <div
+          className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+          role="alert"
+        >
+          <p className="font-semibold">No se pudo cargar el listado de leads</p>
+          <p className="mt-1 text-red-800">{leadsLoadError}</p>
+        </div>
+      ) : null}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h1 className="text-2xl font-semibold text-slate-900">LEADS87</h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -799,8 +960,13 @@ export default function Leads87Page() {
         </div>
       </div>
 
+      {/* Siguiente acción (foco operativo) */}
+      <div className="mt-6">
+        <NextActionPanel lead={priorityLead} loading={loadingLeads} leadLabelFn={leadLabel} />
+      </div>
+
       {/* Abrir oportunidad LEADS87 */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-800 mb-3">Abrir oportunidad (LEADS87)</h2>
         <div className="flex flex-wrap items-center gap-3">
           <select
@@ -829,6 +995,89 @@ export default function Leads87Page() {
         </div>
       </div>
 
+      {/* Métricas y salud del proceso (colapsado por defecto) */}
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowMetricsSection((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <span>Métricas globales y resultado actual</span>
+          {showMetricsSection ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+          )}
+        </button>
+        {showMetricsSection && (
+          <div className="border-t border-slate-200 p-4">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
+              <div className="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm xl:h-full">
+                <p className="mb-1.5 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-600">Métricas globales</p>
+                <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.activas}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enPropuesta}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enSeguimiento}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.nuevas}</p>
+                  </div>
+                </div>
+                <div className="min-h-0 flex flex-1 flex-col">
+                  <SaludProcesoBlock
+                    counts={globalSaludCounts}
+                    variant="global"
+                    loading={loadingLeads}
+                    onVerGrupo={(t) => handleSaludVerGrupo(t, "global")}
+                  />
+                </div>
+              </div>
+              <div className="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm xl:h-full">
+                <p className="mb-1.5 flex shrink-0 flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Vista filtrada
+                  <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium normal-case text-slate-600">Resultado actual</span>
+                </p>
+                <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.activas}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enPropuesta}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enSeguimiento}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.nuevas}</p>
+                  </div>
+                </div>
+                <div className="min-h-0 flex flex-1 flex-col">
+                  <SaludProcesoBlock
+                    counts={filteredSaludCounts}
+                    variant="filtered"
+                    loading={loadingLeads}
+                    onVerGrupo={(t) => handleSaludVerGrupo(t, "vista")}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Vista Listado / Kanban */}
       <div className="mt-6 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <button
@@ -851,73 +1100,6 @@ export default function Leads87Page() {
         >
           Nuevo lead
         </Link>
-      </div>
-
-      {/* Métricas: global (izq.) + resultado actual (der.) en xl+ */}
-      <div className="mt-4 grid grid-cols-1 gap-6 xl:mt-5 xl:grid-cols-2 xl:items-stretch">
-        {/* Métricas globales */}
-        <div className="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm xl:h-full">
-          <p className="mb-1.5 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-600">Métricas globales</p>
-          <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.activas}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enPropuesta}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enSeguimiento}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.nuevas}</p>
-            </div>
-          </div>
-          <div className="min-h-0 flex flex-1 flex-col">
-            <SaludProcesoBlock
-              counts={globalSaludCounts}
-              variant="global"
-              loading={loadingLeads}
-              onVerGrupo={(t) => handleSaludVerGrupo(t, "global")}
-            />
-          </div>
-        </div>
-        {/* Vista filtrada / Resultado actual */}
-        <div className="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm xl:h-full">
-          <p className="mb-1.5 flex shrink-0 flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Vista filtrada
-            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium normal-case text-slate-600">Resultado actual</span>
-          </p>
-          <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.activas}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enPropuesta}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enSeguimiento}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
-              <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.nuevas}</p>
-            </div>
-          </div>
-          <div className="min-h-0 flex flex-1 flex-col">
-            <SaludProcesoBlock
-              counts={filteredSaludCounts}
-              variant="filtered"
-              loading={loadingLeads}
-              onVerGrupo={(t) => handleSaludVerGrupo(t, "vista")}
-            />
-          </div>
-        </div>
       </div>
 
       {/* Filtros */}
@@ -1004,6 +1186,8 @@ export default function Leads87Page() {
           <>
             {loadingLeads ? (
               <div className="p-8 text-sm text-slate-600">Cargando oportunidades…</div>
+            ) : leadsLoadError ? (
+              <div className="p-8 text-sm text-slate-600">Revisá el mensaje de error arriba o recargá la página.</div>
             ) : filteredLeads.length === 0 ? (
               <div className="p-8 text-sm text-slate-600">Ninguna oportunidad coincide con los filtros.</div>
             ) : displayLeads.length === 0 ? (
@@ -1025,8 +1209,7 @@ export default function Leads87Page() {
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
                     {displayLeads.map((l) => {
-                      const progress = getLeadProgressPercent(l);
-                      const etapa = getEtapaActualLabel(l);
+                      const { progress, label: etapa } = getLeadFlowSnapshot(l);
                       const salud = getLeadSalud(l);
                       const estado = getLeadEstadoVisual(l);
                       const rowBg =
@@ -1109,6 +1292,8 @@ export default function Leads87Page() {
           <>
             {loadingLeads ? (
               <div className="p-8 text-sm text-slate-600">Cargando oportunidades…</div>
+            ) : leadsLoadError ? (
+              <div className="p-8 text-sm text-slate-600">Revisá el mensaje de error arriba o recargá la página.</div>
             ) : filteredLeads.length === 0 ? (
               <div className="p-8 text-sm text-slate-600">Ninguna oportunidad coincide con los filtros.</div>
             ) : displayLeads.length === 0 ? (
@@ -1144,8 +1329,7 @@ export default function Leads87Page() {
                         </div>
                         <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                           {columnLeads.map((l) => {
-                            const progress = getLeadProgressPercent(l);
-                            const etapa = getEtapaActualLabel(l);
+                            const { progress, label: etapa } = getLeadFlowSnapshot(l);
                             const salud = getLeadSalud(l);
                             const saludBadgeClass =
                               salud.status === "ok"
@@ -1198,8 +1382,7 @@ export default function Leads87Page() {
                       </div>
                       <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                         {(leadsByColumn["Otros"] ?? []).map((l) => {
-                          const progress = getLeadProgressPercent(l);
-                          const etapa = getEtapaActualLabel(l);
+                          const { progress, label: etapa } = getLeadFlowSnapshot(l);
                           const salud = getLeadSalud(l);
                           const saludBadgeClass =
                             salud.status === "ok"

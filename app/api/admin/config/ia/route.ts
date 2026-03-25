@@ -31,7 +31,7 @@ async function allowDevOrRequire(req: NextRequest, perm: string) {
 /**
  * GET /api/admin/config/ia
  * Devuelve la configuración de prompts IA (basePrompt, modulos, updatedAt).
- * Si no existe en DB, devuelve data null sin error (frontend usará localStorage/defaults).
+ * Si no existe en DB, devuelve data null sin error (la pantalla de config puede usar copia local solo como respaldo de edición).
  */
 export async function GET(req: NextRequest) {
   try {

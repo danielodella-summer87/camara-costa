@@ -60,9 +60,9 @@ export async function updateLeadSafe(
     return u1;
   }
 
-  // Fallback: intentar en tabla "lead" (por si hay naming diferente)
+  // Fallback: intentar en tabla "leads" (por si hay naming diferente)
   const u2 = await sb
-    .from("lead")
+    .from("leads")
     .update(payload)
     .eq("id", leadId)
     .select("*")

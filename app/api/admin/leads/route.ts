@@ -48,6 +48,8 @@ type LeadRow = {
 
   // Campos adicionales usados en UI y endpoints
   website?: string | null;
+  instagram?: string | null;
+  direccion?: string | null;
   objetivos?: string | null;
   audiencia?: string | null;
   tamano?: string | null;
@@ -125,8 +127,15 @@ function cleanActivityType(v: unknown): NextActivityType | null {
     : null;
 }
 
-const SELECT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+function isMissingColumnError(message: string | undefined, table: string, column: string): boolean {
+  const msg = (message ?? "").toLowerCase();
+  return msg.includes(`could not find the '${column.toLowerCase()}' column of '${table.toLowerCase()}'`);
+}
+
+const SELECT_WITH_SNAPSHOT =
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,instagram,direccion,linkedin_empresa,linkedin_director,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+const SELECT_LEGACY =
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,linkedin_director,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -138,6 +147,13 @@ type LeadCreateInput = Partial<{
   pipeline: string | null;
   notas: string | null;
   website: string | null;
+  instagram: string | null;
+  direccion: string | null;
+  objetivos: string | null;
+  audiencia: string | null;
+  tamano: string | null;
+  linkedin_empresa: string | null;
+  linkedin_director: string | null;
   meet_url: string | null;
 
   rating: number | string | null;
@@ -176,7 +192,7 @@ export async function GET(req: Request) {
 
     let q = supabase
       .from("leads")
-      .select(SELECT);
+      .select(SELECT_WITH_SNAPSHOT);
 
     if (pipelineParam && pipelineParam.trim()) {
       q = q.eq("pipeline", pipelineParam.trim());
@@ -194,9 +210,35 @@ export async function GET(req: Request) {
       q = q.eq("empresa_id", empresaIdParam);
     }
 
-    const { data, error } = await q
+    let { data, error } = await q
       .order("created_at", { ascending: false })
       .limit(limit);
+    if (
+      error &&
+      (isMissingColumnError(error.message, "leads", "instagram") ||
+        isMissingColumnError(error.message, "leads", "direccion"))
+    ) {
+      let qLegacy = supabase.from("leads").select(SELECT_LEGACY);
+      if (pipelineParam && pipelineParam.trim()) {
+        qLegacy = qLegacy.eq("pipeline", pipelineParam.trim());
+      }
+      if (comercialIdParam) {
+        qLegacy = qLegacy.eq("comercial_id", comercialIdParam);
+      }
+      if (socioIdParam) {
+        qLegacy = qLegacy.eq("socio_id", socioIdParam);
+      }
+      if (empresaIdParam) {
+        qLegacy = qLegacy.eq("empresa_id", empresaIdParam);
+      }
+      const legacyRes = await qLegacy.order("created_at", { ascending: false }).limit(limit);
+      data = (legacyRes.data ?? []).map((row: any) => ({
+        ...row,
+        instagram: row?.instagram ?? null,
+        direccion: row?.direccion ?? null,
+      })) as any;
+      error = legacyRes.error;
+    }
 
     if (error) {
       return NextResponse.json(
@@ -220,6 +262,32 @@ export async function GET(req: Request) {
       servicesCountByLeadId = counts;
     }
 
+    type FlowDocSlot = { diagnostic?: string; strategy?: string; proposal?: string; presentation?: string };
+    const flowDocsByLeadId: Record<string, FlowDocSlot> = {};
+    if (leadIds.length > 0) {
+      const { data: docRows, error: docErr } = await supabase
+        .from("lead_documents")
+        .select("lead_id,type,url")
+        .eq("is_current", true)
+        .in("lead_id", leadIds);
+      if (!docErr && docRows) {
+        for (const raw of docRows) {
+          const row = raw as { lead_id?: string; type?: string; url?: string };
+          const lid = row.lead_id;
+          const t = row.type;
+          const u = typeof row.url === "string" ? row.url.trim() : "";
+          if (!lid || !t || !u) continue;
+          if (t !== "diagnostic" && t !== "strategy" && t !== "proposal" && t !== "presentation") continue;
+          if (!flowDocsByLeadId[lid]) flowDocsByLeadId[lid] = {};
+          const slot = flowDocsByLeadId[lid];
+          if (t === "diagnostic") slot.diagnostic = u;
+          else if (t === "strategy") slot.strategy = u;
+          else if (t === "proposal") slot.proposal = u;
+          else slot.presentation = u;
+        }
+      }
+    }
+
     const normalizedData = (data ?? []).map((lead: any) => ({
       ...lead,
       comercial: Array.isArray(lead.comerciales)
@@ -227,6 +295,7 @@ export async function GET(req: Request) {
         : lead.comerciales ?? null,
       comerciales: undefined,
       services_count: servicesCountByLeadId[lead.id] ?? 0,
+      flow_documents: flowDocsByLeadId[lead.id] ?? {},
     }));
 
     return NextResponse.json(
@@ -364,6 +433,13 @@ export async function POST(req: Request) {
       pipeline,
       notas: cleanStr(body.notas),
       website: cleanStr(body.website),
+      instagram: cleanStr(body.instagram),
+      direccion: cleanStr(body.direccion),
+      objetivos: cleanStr(body.objetivos),
+      audiencia: cleanStr(body.audiencia),
+      tamano: cleanStr(body.tamano),
+      linkedin_empresa: cleanStr(body.linkedin_empresa),
+      linkedin_director: cleanStr(body.linkedin_director),
       meet_url: meetUrlRaw,
 
       rating: ratingParsed ?? 0,
@@ -377,11 +453,33 @@ export async function POST(req: Request) {
     };
 
     const supabase = supabaseAdmin();
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("leads")
       .insert(insert)
-      .select(SELECT)
+      .select(SELECT_WITH_SNAPSHOT)
       .maybeSingle();
+    if (
+      error &&
+      (isMissingColumnError(error.message, "leads", "instagram") ||
+        isMissingColumnError(error.message, "leads", "direccion"))
+    ) {
+      const fallbackInsert = { ...insert };
+      delete (fallbackInsert as { instagram?: string | null }).instagram;
+      delete (fallbackInsert as { direccion?: string | null }).direccion;
+      const legacyRes = await supabase
+        .from("leads")
+        .insert(fallbackInsert)
+        .select(SELECT_LEGACY)
+        .maybeSingle();
+      data = legacyRes.data
+        ? ({
+            ...(legacyRes.data as any),
+            instagram: (legacyRes.data as any)?.instagram ?? null,
+            direccion: (legacyRes.data as any)?.direccion ?? null,
+          } as any)
+        : null;
+      error = legacyRes.error;
+    }
 
     if (error) {
       return NextResponse.json(

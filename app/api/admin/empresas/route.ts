@@ -54,8 +54,14 @@ function normalizeEmpresaRow(row: any) {
     aprobada: row.aprobada ?? null,
 
     telefono: row.telefono ?? null,
+    celular: row.celular ?? null,
     email: row.email ?? null,
     web: row.web ?? null,
+    instagram: row.instagram ?? null,
+    direccion: row.direccion ?? null,
+    contacto_nombre: row.contacto_nombre ?? null,
+    contacto_email: row.contacto_email ?? null,
+    contacto_celular: row.contacto_celular ?? null,
 
     created_at: row.created_at ?? null,
     updated_at: row.updated_at ?? null,
@@ -84,7 +90,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("empresas")
       .select(
-        "id,nombre,rubro,rubro_id,estado,aprobada,telefono,email,web,created_at,updated_at,rubros(id,nombre)"
+        "id,nombre,rubro,rubro_id,estado,aprobada,telefono,celular,email,web,instagram,direccion,contacto_nombre,contacto_email,contacto_celular,created_at,updated_at,rubros(id,nombre)"
       )
       .order("created_at", { ascending: false });
 

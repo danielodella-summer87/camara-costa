@@ -23,6 +23,11 @@ function safeStr(v: unknown) {
 
 type ApiResp<T> = { data?: T | null; error?: string | null };
 
+function isMissingColumnError(message: string | undefined, table: string, column: string): boolean {
+  const msg = (message ?? "").toLowerCase();
+  return msg.includes(`could not find the '${column.toLowerCase()}' column of '${table.toLowerCase()}'`);
+}
+
 /**
  * GET /api/admin/leads/:id
  * Devuelve el Lead individual (para la ficha /admin/leads/[id]).
@@ -38,18 +43,32 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     }
 
     // Intento principal: tabla "leads" con join a empresas
-    const selectLead =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+    const selectLeadWithSnapshot =
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+    const selectLeadLegacy =
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
-    const q1 = await sb
+    let q1 = await sb
       .from("leads")
-      .select(selectLead)
+      .select(selectLeadWithSnapshot)
       .eq("id", id)
       .maybeSingle();
+    if (
+      q1.error &&
+      (isMissingColumnError(q1.error.message, "leads", "direccion") ||
+        isMissingColumnError(q1.error.message, "leads", "instagram"))
+    ) {
+      q1 = await sb
+        .from("leads")
+        .select(selectLeadLegacy)
+        .eq("id", id)
+        .maybeSingle();
+    }
 
     if (!q1.error && q1.data) {
       const row = q1.data as any;
       const comercial = Array.isArray(row.comerciales) ? row.comerciales[0] ?? null : row.comerciales ?? null;
+      const commercialStage = row.commercial_stage ?? null;
       return NextResponse.json(
         {
           data: {
@@ -59,6 +78,8 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
             linkedin_empresa: row.linkedin_empresa ?? null,
             linkedin_director: row.linkedin_director ?? null,
             meet_url: row.meet_url ?? null,
+            commercial_stage: commercialStage,
+            stage: commercialStage,
           },
           error: null,
         } satisfies ApiResp<any>,
@@ -212,6 +233,39 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     if (body.proposal_sent_at !== undefined) {
       updateData.proposal_sent_at = body.proposal_sent_at === null || body.proposal_sent_at === "" ? null : body.proposal_sent_at;
     }
+    if (body.proposal_reviewed !== undefined) {
+      updateData.proposal_reviewed = Boolean(body.proposal_reviewed);
+    }
+    if (body.proposal_doc_url !== undefined) {
+      updateData.proposal_doc_url =
+        body.proposal_doc_url === null || body.proposal_doc_url === ""
+          ? null
+          : String(body.proposal_doc_url);
+    }
+    if (body.presentation_doc_url !== undefined) {
+      updateData.presentation_doc_url =
+        body.presentation_doc_url === null || body.presentation_doc_url === ""
+          ? null
+          : String(body.presentation_doc_url);
+    }
+    const stageIncoming = body.commercial_stage !== undefined ? body.commercial_stage : body.stage;
+    if (stageIncoming !== undefined) {
+      if (stageIncoming === null || stageIncoming === "") {
+        updateData.commercial_stage = null;
+      } else {
+        const s = String(stageIncoming).trim().toLowerCase();
+        if (s !== "closing") {
+          return NextResponse.json(
+            {
+              data: null,
+              error: 'commercial_stage / stage solo admite "closing" o vacío/null',
+            } satisfies ApiResp<null>,
+            { status: 400 }
+          );
+        }
+        updateData.commercial_stage = "closing";
+      }
+    }
     if (body.score !== undefined) {
       updateData.score = body.score === null ? null : (typeof body.score === "number" && body.score >= 0 && body.score <= 10 ? body.score : null);
     }
@@ -253,9 +307,23 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       }
     }
 
-    // Incluir otros campos del body (excepto force_unlink_entity, ai_custom_prompt ya normalizado, e instagram que no existe en leads)
+    // Incluir otros campos del body (excepto metadatos / campos ya normalizados arriba)
     for (const [key, value] of Object.entries(body)) {
-      if (key !== "force_unlink_entity" && key !== "empresa_id" && key !== "comercial_id" && key !== "instagram" && key !== "ai_custom_prompt" && key !== "proposal_draft_json" && key !== "proposal_confirmed_at" && key !== "proposal_sent_at") {
+      if (
+        key !== "force_unlink_entity" &&
+        key !== "empresa_id" &&
+        key !== "comercial_id" &&
+        key !== "ai_custom_prompt" &&
+        key !== "proposal_draft_json" &&
+        key !== "proposal_confirmed_at" &&
+        key !== "proposal_sent_at" &&
+        key !== "proposal_reviewed" &&
+        key !== "proposal_doc_url" &&
+        key !== "presentation_doc_url" &&
+        key !== "commercial_stage" &&
+        key !== "stage" &&
+        key !== "allow_clear_linkedin"
+      ) {
         updateData[key] = value;
       }
     }
@@ -487,22 +555,37 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     
     if (!updateResult.error && updateResult.data) {
       // Re-hidratar el lead completo con el mismo select que el GET (incluyendo empresas)
-      const selectQuery = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      const selectQueryWithSnapshot = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      const selectQueryLegacy = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
       
       // Intento principal: tabla "leads"
-      const refreshed = await sb
+      let refreshed = await sb
         .from("leads")
-        .select(selectQuery)
+        .select(selectQueryWithSnapshot)
         .eq("id", id)
         .maybeSingle();
+      if (
+        refreshed.error &&
+        (isMissingColumnError(refreshed.error.message, "leads", "direccion") ||
+          isMissingColumnError(refreshed.error.message, "leads", "instagram"))
+      ) {
+        refreshed = await sb
+          .from("leads")
+          .select(selectQueryLegacy)
+          .eq("id", id)
+          .maybeSingle();
+      }
       
       if (!refreshed.error && refreshed.data) {
         const row = refreshed.data;
+        const cs = row.commercial_stage ?? null;
         const fullLead = {
           ...row,
           linkedin_empresa: row.linkedin_empresa ?? null,
           linkedin_director: row.linkedin_director ?? null,
           meet_url: row.meet_url ?? null,
+          commercial_stage: cs,
+          stage: cs,
         };
         
         // Si hubo error al crear socio pero el lead se actualizó, incluir advertencia

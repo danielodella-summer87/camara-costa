@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
@@ -92,7 +92,15 @@ function getProgressBadgeClasses(percent: number): string {
 }
 
 // Componente para botón "Nuevo lead" con opciones
+function normalizeWebsiteForLead(url?: string | null) {
+  if (!url?.trim()) return null;
+  const u = url.trim();
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  return `https://${u}`;
+}
+
 function NewLeadButton() {
+  const router = useRouter();
   const { hasPermission } = usePermissions();
   const [showMenu, setShowMenu] = useState(false);
   const [showEmpresaSelector, setShowEmpresaSelector] = useState(false);
@@ -163,7 +171,11 @@ function NewLeadButton() {
                 return;
               }
 
-              // Crear lead con datos de empresa
+              const email = [empresa.email, empresa.contacto_email].find((x) => typeof x === "string" && x.trim()) ?? null;
+              const telefono =
+                [empresa.telefono, empresa.celular, empresa.contacto_celular].find((x) => typeof x === "string" && x.trim()) ??
+                null;
+
               const leadRes = await fetch("/api/admin/leads", {
                 method: "POST",
                 cache: "no-store",
@@ -173,10 +185,14 @@ function NewLeadButton() {
                 },
                 body: JSON.stringify({
                   nombre: empresa.nombre ?? "",
-                  email: empresa.email,
-                  telefono: empresa.telefono,
-                  website: empresa.web,
+                  contacto: typeof empresa.contacto_nombre === "string" ? empresa.contacto_nombre : null,
+                  email,
+                  telefono,
+                  website: normalizeWebsiteForLead(empresa.web),
+                  instagram: typeof empresa.instagram === "string" ? empresa.instagram : null,
+                  direccion: typeof empresa.direccion === "string" ? empresa.direccion : null,
                   empresa_id: empresa.id,
+                  origen: "Desde entidad",
                   pipeline: "Nuevo",
                 }),
               });
@@ -186,9 +202,9 @@ function NewLeadButton() {
                 throw new Error(leadJson?.error ?? "Error creando lead");
               }
 
-              // Redirigir a la ficha del lead
+              // Redirigir al flujo LEADS87 con el lead recién creado
               if (leadJson?.data?.id) {
-                window.location.href = `/admin/leads/${leadJson.data.id}`;
+                router.push(`/admin/leads87/${leadJson.data.id}`);
               }
             } catch (e: any) {
               alert(e?.message ?? "Error creando lead desde entidad");

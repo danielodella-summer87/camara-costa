@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import Link from "next/link";
+import { IA_MODULE_LABELS } from "@/lib/ai/moduleCatalog";
 
 console.log("[IA CONFIG] PAGE.TSX HIT", new Date().toISOString());
 
@@ -85,28 +86,6 @@ const DEFAULT_BASE = `Eres un consultor senior experto en identificar oportunida
 REGLAS ESTRICTAS:
 - No mencionar Cámara / asociación / institución salvo que el lead sea explícitamente una Cámara.
 - No asumir contexto institucional si no está explícitamente indicado en los datos del lead.`;
-
-const MODULE_LABELS: Record<string, string> = {
-  INVESTIGACION_DIGITAL: "Investigación Digital",
-  REDES_SOCIALES: "Redes Sociales",
-  PAUTA_PUBLICITARIA: "Pauta Publicitaria",
-  PRESTIGIO_IA: "Prestigio IA",
-  POSICIONAMIENTO: "Posicionamiento",
-  COMPETENCIA: "Competencia",
-  FODA: "FODA",
-  OPORTUNIDADES: "Oportunidades",
-  ACCIONES: "Acciones",
-  MATERIALES_LISTOS: "Materiales Listos",
-  CIERRE_VENTA: "Cierre de Venta",
-  vision_estrategica: "Visión Estratégica",
-  linkedin_decision_makers: "LinkedIn – Tomadores de decisión",
-  north_star_metric: "North Star y métricas clave",
-  producto_servicio_estrella: "Producto / Servicio estrella",
-  auditoria_tecnica_basica: "Auditoría técnica básica",
-  plan_crecimiento: "Plan de crecimiento",
-  propuesta_easy: "Propuesta de crecimiento EASY",
-  oportunidades_negocio_easy: "Oportunidades de negocio EASY",
-};
 
 /**
  * Carga desde backend o storage SIN reemplazar con defaults.
@@ -326,7 +305,7 @@ export default function ConfigIAPage() {
               </div>
 
               <div className="space-y-6">
-                {Object.entries(MODULE_LABELS).map(([moduleId, label]) => (
+                {Object.entries(IA_MODULE_LABELS).map(([moduleId, label]) => (
                   <div key={moduleId}>
                     <label className="block text-sm font-semibold text-slate-700 mb-2">
                       {label}

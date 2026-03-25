@@ -1731,18 +1731,23 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Resolver contexto unificado
     const ctx = resolveLeadContext(leadRow, cliente);
 
-    // Cargar config IA desde DB si el body no trae prompts (siempre usar módulo IA cuando falte)
+    // Unir siempre prompts del body con config IA persistida en BD (body gana en claves repetidas).
+    // Así `only_module` y regeneraciones tienen el prompt del módulo aunque el cliente no reenvíe toda la config.
     let effectivePrompts = body?.prompts;
-    if (!effectivePrompts?.base?.trim()) {
-      const dbConfig = await getIAConfigFromDB();
-      if (dbConfig.base || (dbConfig.modules && Object.keys(dbConfig.modules).length > 0)) {
-        effectivePrompts = {
-          base: effectivePrompts?.base?.trim() || dbConfig.base || "",
-          modules: { ...dbConfig.modules, ...effectivePrompts?.modules },
-        };
-        if (process.env.NODE_ENV !== "production") {
-          console.log("[AI] config from DB:", { hasBase: !!dbConfig.base, moduleKeys: dbConfig.modules ? Object.keys(dbConfig.modules) : [] });
-        }
+    const dbConfig = await getIAConfigFromDB();
+    const hasDb =
+      Boolean(dbConfig.base?.trim()) ||
+      Boolean(dbConfig.modules && Object.keys(dbConfig.modules).length > 0);
+    if (hasDb) {
+      effectivePrompts = {
+        base: body?.prompts?.base?.trim() || dbConfig.base || "",
+        modules: { ...(dbConfig.modules || {}), ...(body?.prompts?.modules || {}) },
+      };
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[AI] config merged with DB:", {
+          hasBase: !!effectivePrompts.base,
+          moduleKeys: effectivePrompts.modules ? Object.keys(effectivePrompts.modules) : [],
+        });
       }
     }
     if (process.env.NODE_ENV !== "production") {
@@ -1851,8 +1856,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           console.log("[MODULE REGEN DEBUG] profile", profile);
           console.log("[MODULE REGEN DEBUG] final custom prompt", finalCustomPromptForModule ? `${finalCustomPromptForModule.slice(0, 200)}...` : null);
         }
-        // Lookup case-insensitive: el front puede enviar PROPUESTA_EASY y el backend usa propuesta_easy
-        const mods = body?.prompts?.modules ?? {};
+        // Lookup case-insensitive: usar config efectiva (BD + body), no solo body crudo
+        const mods = effectivePrompts?.modules ?? {};
         const onlyNorm = only_module.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
         const moduleKey = Object.keys(mods).find(
           (k) => k.trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_") === onlyNorm
@@ -1863,7 +1868,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           ? bodyCustomPrompt.trim()
           : (moduleCustomPrompt?.trim() || parsedCustomPrompt.legacyText?.trim() || "") || fromBody;
         
-        // Fallback para vision_estrategica: usar prompt default si no está en localStorage
+        // Fallback embebido si el módulo no está en la config persistida (p. ej. visión estratégica)
         if (!modulePrompt && only_module === "vision_estrategica") {
           const defaultVisionPrompt = `Actúa como Director de Growth Marketing Senior y socio estratégico.
 
@@ -1895,7 +1900,7 @@ Reglas finales:
 - No vendas servicios.
 - No cierres con frases abiertas.`;
           modulePrompt = defaultVisionPrompt;
-          console.warn(`[AI] Prompt no encontrado en localStorage para ${only_module}, usando prompt default`);
+          console.warn(`[AI] Prompt no encontrado en config IA (BD) para ${only_module}, usando default embebido`);
         }
         
         const promptUpdatedAt = body?.prompts_meta?.updated_at?.modules?.[only_module] || body?.prompts_meta?.updated_at?.base || null;
@@ -1911,7 +1916,7 @@ Reglas finales:
         }
         
         // Detectar tipo de organización del vendedor desde basePrompt para el frame de CIERRE_VENTA
-        const basePromptForHint = body?.prompts?.base || "";
+        const basePromptForHint = effectivePrompts?.base || "";
         const sellerHint =
           basePromptForHint.toLowerCase().includes("cámara") ? "cámara" :
           basePromptForHint.toLowerCase().includes("agencia") ? "agencia" :

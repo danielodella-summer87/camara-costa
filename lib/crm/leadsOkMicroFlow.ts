@@ -3,7 +3,7 @@
  * Solo lectura; no modifica backend.
  */
 
-import type { LeadForLeadsOkMacro, LeadsOkDocuments } from "./leadsOkMacroFlow";
+import type { LeadForLeadsOkMacro, LeadsOkDocuments, MacroStage } from "./leadsOkMacroFlow";
 
 function hasStr(v: unknown): boolean {
   return typeof v === "string" && v.trim().length > 0;
@@ -28,7 +28,7 @@ export type MicroStep = {
 };
 
 const STEP_1_SUBSTEPS: { label: string; optional?: boolean }[] = [
-  { label: "Generar análisis comercial" },
+  { label: "Generar investigación comercial" },
   { label: "Revisar informe IA" },
   { label: "Ver informe comercial" },
   { label: "Exportar / copiar / revisar texto" },
@@ -79,10 +79,10 @@ export function getLeadsOkMicroFlow(
   return [
     {
       id: 1,
-      title: "Paso 1 — Análisis del lead",
+      title: "Paso 1 — Investigación del lead",
       status: stepStatus(0),
       subSteps: subSteps1,
-      queObtiene: "Un análisis interno que alimenta diagnóstico y estrategia.",
+      queObtiene: "Una investigación interna que alimenta diagnóstico y estrategia.",
       defaultOpen: activeIndex === 0,
     },
     {
@@ -126,4 +126,29 @@ export function getLeadsOkMicroFlow(
       defaultOpen: activeIndex === 5,
     },
   ];
+}
+
+/**
+ * Alinea estados de pasos micro con el flujo macro (misma fuente de verdad que el stepper de 8 etapas).
+ * Micro N corresponde a la etapa macro id N+1 (salvo micro 6, que cubre presentación + cierre macro 7–8).
+ */
+export function alignMicroStepsWithMacro(baseSteps: MicroStep[], macroStages: MacroStage[]): MicroStep[] {
+  const m = (id: number) => macroStages.find((s) => s.id === id);
+
+  function microStatusFromMacro(microId: number): MicroStepStatus {
+    if (microId <= 5) {
+      return m(microId + 1)?.status ?? "pending";
+    }
+    const s7 = m(7);
+    const s8 = m(8);
+    if (!s7 || !s8) return "pending";
+    if (s8.status === "completed") return "completed";
+    if (s7.status === "active" || s8.status === "active") return "active";
+    return "pending";
+  }
+
+  return baseSteps.map((step) => ({
+    ...step,
+    status: microStatusFromMacro(step.id),
+  }));
 }

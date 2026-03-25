@@ -24,6 +24,7 @@ type MeResponse = {
 const NAV: NavItem[] = [
   { label: "Centro de control", href: "/admin" },
   { label: "Dashboard comercial", href: "/admin/dashboard" },
+  { label: "Entidades", href: "/admin/empresas" },
   { label: "Oportunidades", href: "/admin/oportunidades" },
   { label: "LEADS87", href: "/admin/leads87" },
   { label: "Leads", href: "/admin/leads" },

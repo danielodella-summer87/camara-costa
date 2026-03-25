@@ -3,6 +3,11 @@
  * Solo lectura de datos ya disponibles; no modifica backend.
  */
 
+import {
+  isOfficialCrmPersistedDocumentUrl,
+  isOfficialPresentationDocumentUrl,
+} from "@/lib/leads/gammaDocumentPolicy";
+
 export type MacroStageStatus = "completed" | "active" | "pending";
 
 export type ChecklistItem = {
@@ -22,6 +27,7 @@ export type LeadsOkDocuments = {
   diagnostic?: string | null;
   strategy?: string | null;
   proposal?: string | null;
+  presentation?: string | null;
 };
 
 export type LeadForLeadsOkMacro = {
@@ -31,6 +37,7 @@ export type LeadForLeadsOkMacro = {
   telefono?: string | null;
   email?: string | null;
   website?: string | null;
+  // Campos opcionales (no bloquean la etapa 1).
   objetivos?: string | null;
   audiencia?: string | null;
   tamano?: string | null;
@@ -40,32 +47,79 @@ export type LeadForLeadsOkMacro = {
   comercial_id?: string | null;
   proposal_confirmed_at?: string | null;
   proposal_sent_at?: string | null;
+  proposal_doc_url?: string | null;
+  presentation_doc_url?: string | null;
+  proposal_reviewed?: boolean | null;
+  commercial_stage?: string | null;
   ai_report?: string | null;
-  empresas?: { nombre?: string | null } | null;
+  // Rubro proviene de `empresas:empresa_id(... rubros:rubro_id(id,nombre))`.
+  empresas?: { nombre?: string | null; rubros?: { id?: string | null } | null } | null;
+  rubro_id?: string | null;
+  // Redes opcionales (no obligatorias, pero suman para "Web / redes").
+  instagram?: string | null;
+  facebook?: string | null;
 };
 
 function hasStr(v: unknown): boolean {
   return typeof v === "string" && v.trim().length > 0;
 }
 
-function hasAnyContact(lead: LeadForLeadsOkMacro): boolean {
+function hasContactoUtil(lead: LeadForLeadsOkMacro): boolean {
   return (
     hasStr(lead.contacto) ||
     hasStr(lead.telefono) ||
     hasStr(lead.email) ||
-    hasStr(lead.website) ||
     false
   );
 }
 
-function hasContext(lead: LeadForLeadsOkMacro): boolean {
+function hasWebOred(lead: LeadForLeadsOkMacro): boolean {
   return (
-    hasStr(lead.objetivos) ||
-    hasStr(lead.audiencia) ||
-    hasStr(lead.tamano) ||
-    hasStr(lead.notas) ||
+    hasStr(lead.website) ||
+    // Redes opcionales: si existen, ayudan a pasar el paso inicial.
+    hasStr(lead.instagram) ||
+    hasStr(lead.facebook) ||
     false
   );
+}
+
+function hasRubro(lead: LeadForLeadsOkMacro): boolean {
+  const rubroFromLead = hasStr(lead.rubro_id);
+  const rubroFromEmpresas = Boolean((lead.empresas as any)?.rubros?.id && hasStr((lead.empresas as any).rubros.id));
+  const rubroFromEmpresasAlt =
+    Boolean(Array.isArray((lead.empresas as any)?.rubros) && (lead.empresas as any)?.rubros?.[0]?.id) &&
+    hasStr((lead.empresas as any)?.rubros?.[0]?.id);
+  return Boolean(rubroFromLead || rubroFromEmpresas || rubroFromEmpresasAlt);
+}
+
+/**
+ * Orden de pipeline alineado con flujos comerciales (Oportunidades / LEADS87).
+ * Etapas macro 6–8 dependen de avanzar pipeline, no solo de existir URLs de documentos.
+ */
+const PIPELINE_ORDER = [
+  "Nuevo",
+  "Contactado",
+  "Diagnóstico",
+  "Estrategia",
+  "Servicios",
+  "Propuesta",
+  "Presentación",
+  "Seguimiento",
+  "Ganado",
+  "Perdido",
+  "Cierre",
+] as const;
+
+function pipelineRank(p: string | null | undefined): number {
+  const t = (p ?? "").trim();
+  const i = (PIPELINE_ORDER as readonly string[]).indexOf(t);
+  return i >= 0 ? i : -1;
+}
+
+function pipelineAtLeast(p: string | null | undefined, min: (typeof PIPELINE_ORDER)[number]): boolean {
+  const r = pipelineRank(p);
+  const m = PIPELINE_ORDER.indexOf(min);
+  return r >= m && m >= 0;
 }
 
 /** Etapas 1–8 (sin Etapa 0). Etapa 1 fusiona lead creado + datos base. */
@@ -93,18 +147,54 @@ export function getLeadsOkMacroFlow(
   }
 
   const hasNombreOrEmpresa = hasStr(lead.nombre) || (lead.empresas?.nombre && hasStr(lead.empresas.nombre));
-  const hasContact = hasAnyContact(lead);
-  const hasObjetivosAudiencia = hasStr(lead.objetivos) || hasStr(lead.audiencia) || hasStr(lead.tamano);
-  const datosSuficientes = hasNombreOrEmpresa && hasContact && (hasObjetivosAudiencia || hasContext(lead));
+  // Etapa 1 debe ser desbloqueable con mínimos razonables.
+  // Regla: NO bloquear por `objetivos/audiencia/tamaño` (son opcionales para investigar).
+  const hasContacto = hasContactoUtil(lead);
+  const hasWebOredValue = hasWebOred(lead);
+  const rubroOk = hasRubro(lead);
+  const datosSuficientes = hasNombreOrEmpresa && hasContacto && hasWebOredValue && rubroOk;
 
+  /** Secuencial: una etapa no puede estar completa si la anterior no lo está (una sola fuente de verdad coherente con el stepper). */
   const etapa1Done = datosSuficientes; // Lead creado + datos base
-  const etapa2Done = hasStr(lead.ai_report);
-  const etapa3Done = Boolean(documents?.diagnostic);
-  const etapa4Done = Boolean(documents?.strategy);
-  const etapa5Done = Boolean(lead.proposal_confirmed_at);
-  const etapa6Done = Boolean(documents?.proposal);
-  const etapa7Done = Boolean(documents?.diagnostic && documents?.strategy && documents?.proposal);
-  const etapa8Done = Boolean(lead.proposal_sent_at);
+  const etapa2Done = etapa1Done && hasStr(lead.ai_report);
+  const etapa3Done =
+    etapa2Done &&
+    Boolean(documents?.diagnostic && isOfficialCrmPersistedDocumentUrl(documents.diagnostic));
+  const etapa4Done =
+    etapa3Done && Boolean(documents?.strategy && isOfficialCrmPersistedDocumentUrl(documents.strategy));
+  const etapa5Done = etapa4Done && Boolean(lead.proposal_confirmed_at);
+  const proposalUrlPersisted =
+    Boolean(documents?.proposal && isOfficialCrmPersistedDocumentUrl(documents.proposal)) ||
+    Boolean(
+      typeof lead.proposal_doc_url === "string" &&
+        lead.proposal_doc_url.trim() &&
+        isOfficialCrmPersistedDocumentUrl(lead.proposal_doc_url)
+    );
+  /** Propuesta documentada y pipeline pasado a Presentación (revisión persistida + etapa en CRM). */
+  const etapa6Done =
+    etapa5Done &&
+    proposalUrlPersisted &&
+    lead.proposal_reviewed === true &&
+    pipelineAtLeast(lead.pipeline, "Presentación");
+  const presentationUrlPersisted =
+    Boolean(documents?.presentation && isOfficialPresentationDocumentUrl(documents.presentation)) ||
+    Boolean(
+      typeof lead.presentation_doc_url === "string" &&
+        lead.presentation_doc_url.trim() &&
+        isOfficialPresentationDocumentUrl(lead.presentation_doc_url)
+    );
+  const commercialClosing =
+    String(lead.commercial_stage ?? "")
+      .trim()
+      .toLowerCase() === "closing";
+  /** Material de presentación o avance a cierre comercial persistido. */
+  const etapa7Done =
+    etapa6Done &&
+    (pipelineAtLeast(lead.pipeline, "Seguimiento") ||
+      Boolean(lead.proposal_sent_at) ||
+      commercialClosing ||
+      presentationUrlPersisted);
+  const etapa8Done = etapa7Done && Boolean(lead.proposal_sent_at);
 
   const completed = [
     etapa1Done,
@@ -123,9 +213,9 @@ export function getLeadsOkMacroFlow(
   const checklist1: ChecklistItem[] = [
     { label: "Alta del lead", done: true },
     { label: "Nombre / empresa", done: Boolean(hasNombreOrEmpresa) },
-    { label: "Web / redes / contacto", done: Boolean(hasContact) },
-    { label: "Objetivos", done: Boolean(hasStr(lead.objetivos)) },
-    { label: "Audiencia / rubro", done: Boolean(hasStr(lead.audiencia) || hasStr(lead.tamano)) },
+    { label: "Contacto útil (email/teléfono/contacto)", done: Boolean(hasContacto) },
+    { label: "Web o red relevante", done: Boolean(hasWebOredValue) },
+    { label: "Rubro", done: Boolean(rubroOk) },
     { label: "Datos suficientes para analizarlo", done: Boolean(datosSuficientes) },
   ];
 

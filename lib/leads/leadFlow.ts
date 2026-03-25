@@ -3,6 +3,11 @@
  * Usa solo datos ya disponibles (lead, ai_report, cantidad de servicios).
  */
 
+import {
+  isOfficialPresentationDocumentUrl,
+  isTransientGammaExportPdfUrl,
+} from "@/lib/leads/gammaDocumentPolicy";
+
 export type LeadFlowStep = {
   id:
     | "lead"
@@ -81,12 +86,10 @@ function hasProposalDraftWithRows(draftJson: unknown): boolean {
   }
 }
 
-/** Señales opcionales de presentación (Gamma/PDF). */
+/** Señales opcionales de presentación (Gamma/PDF). Solo pdfUrl estable cuenta para “material listo”. */
 export type PresentationSignals = {
   gammaUrl?: string | null;
   pdfUrl?: string | null;
-  lastGeneratedPdf?: boolean;
-  exportReady?: boolean;
 };
 
 function parseReportTabsLocal(report: string): Record<string, string> {
@@ -120,11 +123,11 @@ export function getPresentationReadySignal(
 ): boolean {
   if (!lead) return false;
   const count = getServicesCount(leadServicesOrCount);
-  const gammaUrl = signals?.gammaUrl ?? null;
   const pdfUrl = signals?.pdfUrl ?? null;
-  if (typeof gammaUrl === "string" && gammaUrl.trim().length > 0) return true;
-  if (typeof pdfUrl === "string" && pdfUrl.trim().length > 0) return true;
-  if (signals?.lastGeneratedPdf === true || signals?.exportReady === true) return true;
+  if (typeof pdfUrl === "string" && pdfUrl.trim().length > 0) {
+    if (!isTransientGammaExportPdfUrl(pdfUrl) && isOfficialPresentationDocumentUrl(pdfUrl)) return true;
+  }
+  // No usar solo gamma web como “presentación oficial” del CRM.
   const aiReport = lead.ai_report;
   const hasReport = typeof aiReport === "string" && aiReport.trim().length > 0;
   if (count >= 2 && hasReport) return true;

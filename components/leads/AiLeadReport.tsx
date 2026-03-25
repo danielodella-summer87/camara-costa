@@ -1,11 +1,18 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback, type RefObject } from "react";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { pdf } from "@react-pdf/renderer";
 import LeadReportPdf from "@/components/pdf/LeadReportPdf";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
+import { buildModuleTabsFromCatalog } from "@/lib/ai/moduleCatalog";
 import { parseLeadCustomPrompt, serializeLeadCustomPrompt, getModuleCustomPrompt } from "@/lib/leads/customPrompt";
+import {
+  mirrorGammaPdfToDocuments,
+  persistGammaCompletedStatus,
+  type MirrorPdfDocType,
+} from "@/lib/leads/mirrorGammaPdfClient";
+import { isTransientGammaExportPdfUrl } from "@/lib/leads/presentationUtils";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,30 +40,53 @@ type AiResp = {
   error?: string | null;
 };
 
-// Configuración única de tabs
-const TABS_CONFIG = [
-  { id: "investigacion_digital", label: "Investigación Digital", tabId: "INVESTIGACION_DIGITAL" },
-  { id: "redes_sociales", label: "Redes Sociales", tabId: "REDES_SOCIALES" },
-  { id: "pauta_publicitaria", label: "Pauta Publicitaria", tabId: "PAUTA_PUBLICITARIA" },
-  { id: "prestigio_ia", label: "Prestigio en IA", tabId: "PRESTIGIO_IA" },
-  { id: "posicionamiento", label: "Posicionamiento en el mercado", tabId: "POSICIONAMIENTO" },
-  { id: "competencia", label: "Competencia", tabId: "COMPETENCIA" },
-  { id: "foda", label: "FODA", tabId: "FODA" },
-  { id: "oportunidades", label: "Oportunidades", tabId: "OPORTUNIDADES" },
-  { id: "acciones", label: "Acciones", tabId: "ACCIONES" },
-  { id: "materiales", label: "Materiales listos", tabId: "MATERIALES_LISTOS" },
-  { id: "cierre", label: "Cierre de la venta", tabId: "CIERRE_VENTA" },
-  { id: "linkedin_decision_makers", label: "LinkedIn – Tomadores de decisión", tabId: "linkedin_decision_makers" },
-  { id: "north_star_metric", label: "North Star y métricas clave", tabId: "north_star_metric" },
-  { id: "producto_servicio_estrella", label: "Producto / Servicio estrella", tabId: "producto_servicio_estrella" },
-  { id: "auditoria_tecnica_basica", label: "Auditoría técnica básica", tabId: "auditoria_tecnica_basica" },
-  { id: "plan_crecimiento", label: "Plan de crecimiento", tabId: "plan_crecimiento" },
-  { id: "propuesta_easy", label: "Propuesta de crecimiento EASY", tabId: "propuesta_easy" },
-  { id: "oportunidades_negocio_easy", label: "Oportunidades de negocio EASY", tabId: "oportunidades_negocio_easy" },
-  { id: "vision_estrategica", label: "Visión Estratégica", tabId: "vision_estrategica" },
-] as const;
+// Configuración de tabs desde catálogo unificado de IA (misma fuente que Configuración IA)
+const TABS_CONFIG = buildModuleTabsFromCatalog();
 
 const TECH_MODULE_IDS = ["north_star_metric", "producto_servicio_estrella", "auditoria_tecnica_basica"] as const;
+
+/** Bundle de prompts solo desde servidor (`GET /api/admin/config/ia` → tabla `config`). */
+type ClientAiPromptsBundle = {
+  prompts: { base?: string; modules?: Record<string, string> };
+  meta: { updated_at: { base?: number; modules?: Record<string, number> } };
+};
+
+function hasNonEmptyModuleValues(modules: Record<string, string> | undefined | null): boolean {
+  if (!modules || typeof modules !== "object") return false;
+  return Object.values(modules).some((v) => typeof v === "string" && v.trim().length > 0);
+}
+
+function bundleFromServerSnapshot(
+  api: { basePrompt: string; modulos: Record<string, string> } | null
+): ClientAiPromptsBundle | null {
+  if (!api?.modulos || typeof api.modulos !== "object" || Array.isArray(api.modulos)) return null;
+  const modules = { ...api.modulos };
+  if (!hasNonEmptyModuleValues(modules)) return null;
+  const base = api.basePrompt?.trim() ? api.basePrompt : "";
+  const now = Date.now();
+  return {
+    prompts: { base: base || undefined, modules },
+    meta: { updated_at: { base: now, modules: {} } },
+  };
+}
+
+async function fetchIaConfigFromApi(): Promise<{ basePrompt: string; modulos: Record<string, string> } | null> {
+  try {
+    const res = await fetch("/api/admin/config/ia", { cache: "no-store" });
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: { basePrompt?: string; modulos?: Record<string, string> } | null;
+    };
+    const data = json?.data;
+    if (!data?.modulos || typeof data.modulos !== "object" || Array.isArray(data.modulos)) return null;
+    if (!hasNonEmptyModuleValues(data.modulos as Record<string, string>)) return null;
+    return {
+      basePrompt: typeof data.basePrompt === "string" ? data.basePrompt : "",
+      modulos: data.modulos as Record<string, string>,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const formatAiText = (text: string) => {
   if (!text) return "";
@@ -358,6 +388,14 @@ async function textToPdfBytes(title: string, content: string) {
 
 type AiProfile = "comercial" | "tecnico";
 
+/** Ciclo de vida del análisis en UI (LEADS87 y ficha comercial). */
+export type AnalysisLifecyclePhase = "NOT_STARTED" | "PROCESSING" | "COMPLETED";
+
+function initialPhaseFromLead(lead: LeadMini | null | undefined): AnalysisLifecyclePhase {
+  const r = (lead as any)?.ai_report ?? "";
+  return typeof r === "string" && r.trim() ? "COMPLETED" : "NOT_STARTED";
+}
+
 export function AiLeadReport({
   leadId,
   lead,
@@ -371,6 +409,15 @@ export function AiLeadReport({
   subtitleLabel,
   buttonHelperText,
   buttonTooltipContent,
+  guidedStep1Mode = false,
+  nextStepCtaLabel,
+  onNextStepClick,
+  executionScrollRef,
+  onBeginAnalysisGeneration,
+  /** LEADS87: copy unificado “Investigación” en lugar de “Análisis” como nombre de paso (solo textos UI). */
+  useInvestigacionUiLabels = false,
+  /** Tipo en `lead_documents` al archivar el PDF generado en Gamma (LEADS87 paso 3 → `strategy`). */
+  gammaPersistDocumentType = "presentation" as MirrorPdfDocType,
 }: {
   leadId: string;
   lead?: LeadMini | null;
@@ -378,12 +425,7 @@ export function AiLeadReport({
   onPromptSaved?: () => void;
   allowedProfiles?: AiProfile[];
   initialProfile?: AiProfile;
-  onPresentationSignalChange?: (signals: {
-    gammaUrl?: string | null;
-    pdfUrl?: string | null;
-    lastGeneratedPdf?: boolean;
-    exportReady?: boolean;
-  }) => void;
+  onPresentationSignalChange?: (signals: { gammaUrl?: string | null; pdfUrl?: string | null }) => void;
   /** Se llama cuando termina la generación del informe (para que el padre pueda refetch y actualizar el flujo). */
   onReportGenerated?: () => void;
   /** Cuando se usa en el tab Comercial: título del bloque (ej. "Análisis interno del lead (IA)") */
@@ -394,16 +436,70 @@ export function AiLeadReport({
   buttonHelperText?: string;
   /** Contenido del tooltip al pasar el mouse sobre el botón de generación comercial */
   buttonTooltipContent?: string;
+  /** Modo guiado para Paso 1: menos ruido y foco en secuencia */
+  guidedStep1Mode?: boolean;
+  /** Texto del CTA principal al completar */
+  nextStepCtaLabel?: string;
+  /** Acción del CTA principal al completar */
+  onNextStepClick?: () => void;
+  /** Ancla de scroll al bloque de ejecución (progreso), no al panel de módulos */
+  executionScrollRef?: RefObject<HTMLDivElement | null>;
+  onBeginAnalysisGeneration?: () => void;
+  useInvestigacionUiLabels?: boolean;
+  gammaPersistDocumentType?: MirrorPdfDocType;
 }) {
   const canUseCommercial = allowedProfiles.includes("comercial");
   const canUseTechnical = allowedProfiles.includes("tecnico");
   const hasAnyProfile = canUseCommercial || canUseTechnical;
+  const inv = useInvestigacionUiLabels === true;
+  const moduleCompleteLabel = inv ? "Investigación completada" : "Análisis completado";
+  const ui = inv
+    ? {
+        lockedTitle: "Disponible después de generar la investigación",
+        genCommercial: "Generando investigación comercial…",
+        genTech: "Generando investigación técnica…",
+        progressAria: "Progreso de la investigación por módulos",
+        defaultSubtitle: "Generá informe técnico de oportunidades con contexto estratégico.",
+        alreadyTooltip: "La investigación ya fue generada.",
+        alreadyChip: "Investigación completada",
+        btnCommercial: "Generar investigación comercial",
+        bannerDone: "Investigación completada",
+        docPrincipal: "Documento principal generado a partir de la investigación del lead.",
+        modulesDetails: "Módulos de la investigación",
+        modulosDestacados: "Módulos destacados de la investigación",
+        modulosDestacadosH3: "Módulos destacados de la investigación",
+        personalize: "Disponible como ajuste opcional de la investigación.",
+        extraLabel: "Instrucciones adicionales para la investigación (opcional)",
+        btnTechnical: "Generar investigación técnica",
+      }
+    : {
+        lockedTitle: "Disponible después de generar el análisis",
+        genCommercial: "Generando análisis comercial…",
+        genTech: "Generando análisis técnico…",
+        progressAria: "Progreso del análisis por módulos",
+        defaultSubtitle: "Genera informe técnico de oportunidades con análisis estratégico.",
+        alreadyTooltip: "El análisis ya fue generado.",
+        alreadyChip: "Análisis ya generado",
+        btnCommercial: "Generar Análisis Comercial",
+        bannerDone: "Análisis completado",
+        docPrincipal: "Documento principal generado a partir del análisis del lead.",
+        modulesDetails: "Módulos del análisis",
+        modulosDestacados: "Módulos destacados del análisis",
+        modulosDestacadosH3: "Módulos destacados del análisis",
+        personalize: "Disponible como ajuste opcional del análisis.",
+        extraLabel: "Instrucciones adicionales para el análisis (opcional)",
+        btnTechnical: "Generar Técnico",
+      };
 
   const [aiLoading, setAiLoading] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisCurrentModule, setAnalysisCurrentModule] = useState("");
   const [analysisTotalModules, setAnalysisTotalModules] = useState(0);
   const [report, setReport] = useState<string>("");
+  /** NOT_STARTED | PROCESSING | COMPLETED — fuente de verdad UX para loader y módulos. */
+  const [analysisPhase, setAnalysisPhase] = useState<AnalysisLifecyclePhase>(() => initialPhaseFromLead(lead));
+  /** Perfil de la corrida activa (textos del bloque de procesamiento). */
+  const [generationProfileActive, setGenerationProfileActive] = useState<AiProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"rendered" | "raw">("rendered");
   const [status, setStatus] = useState<"idle" | "saving" | "generating" | "done">("idle");
@@ -440,31 +536,95 @@ export function AiLeadReport({
   const [pdfExporting, setPdfExporting] = useState<"comercial" | "tecnico" | "vision" | null>(null);
   const [gammaUrl, setGammaUrl] = useState<string | null>(null);
   const [gammaPdfUrl, setGammaPdfUrl] = useState<string | null>(null);
+  const [gammaStablePdfUrl, setGammaStablePdfUrl] = useState<string | null>(null);
+  const [gammaMirrorBusy, setGammaMirrorBusy] = useState(false);
+  const [gammaMirrorError, setGammaMirrorError] = useState<string | null>(null);
   const [gammaError, setGammaError] = useState<string | null>(null);
   const [gammaGenerationId, setGammaGenerationId] = useState<string | null>(null);
+  const [analysisStartedAt, setAnalysisStartedAt] = useState<number | null>(null);
   const moduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const modulePanelRef = useRef<HTMLDivElement | null>(null);
 
   const VISION_TAB_ID = "vision_estrategica";
+  const isProcessingPhase = analysisPhase === "PROCESSING";
+  const analysisPercent = Math.min(100, Math.max(0, analysisProgress));
+  const analysisEstimatedRemaining = useMemo(() => {
+    if (!isProcessingPhase || !analysisStartedAt || analysisPercent <= 5 || analysisPercent >= 100)
+      return null;
+    const elapsed = (Date.now() - analysisStartedAt) / 1000;
+    const totalEstimated = elapsed / (analysisPercent / 100);
+    return Math.max(1, Math.round(totalEstimated - elapsed));
+  }, [isProcessingPhase, analysisStartedAt, analysisPercent]);
 
   useEffect(() => {
     if (!onPresentationSignalChange) return;
-    if (gammaUrl?.trim() || gammaPdfUrl?.trim()) {
+    const transientPdf = gammaPdfUrl?.trim() || null;
+    const pdfForParent =
+      gammaStablePdfUrl?.trim() ||
+      (transientPdf && !isTransientGammaExportPdfUrl(transientPdf) ? transientPdf : null);
+    if (gammaUrl?.trim() || transientPdf) {
       onPresentationSignalChange({
         gammaUrl: gammaUrl ?? null,
-        pdfUrl: gammaPdfUrl ?? null,
-        exportReady: true,
+        pdfUrl: pdfForParent,
       });
     }
-  }, [gammaUrl, gammaPdfUrl, onPresentationSignalChange]);
+  }, [gammaUrl, gammaPdfUrl, gammaStablePdfUrl, onPresentationSignalChange]);
+
+  useEffect(() => {
+    if (!leadId?.trim()) {
+      setGammaStablePdfUrl(null);
+      setGammaMirrorError(null);
+      setGammaMirrorBusy(false);
+      return;
+    }
+    if (!gammaPdfUrl?.trim()) {
+      setGammaMirrorError(null);
+      setGammaMirrorBusy(false);
+      return;
+    }
+    if (!isTransientGammaExportPdfUrl(gammaPdfUrl)) {
+      setGammaStablePdfUrl(gammaPdfUrl.trim());
+      setGammaMirrorError(null);
+      setGammaMirrorBusy(false);
+      return;
+    }
+    let cancelled = false;
+    setGammaMirrorBusy(true);
+    setGammaMirrorError(null);
+    setGammaStablePdfUrl(null);
+    void (async () => {
+      try {
+        const stable = await mirrorGammaPdfToDocuments(
+          leadId.trim(),
+          gammaPdfUrl.trim(),
+          gammaPersistDocumentType,
+          gammaGenerationId,
+          { persist: true }
+        );
+        if (!cancelled) {
+          setGammaStablePdfUrl(stable);
+          setGammaMirrorError(null);
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setGammaMirrorError(e instanceof Error ? e.message : "No se pudo archivar el PDF.");
+        }
+      } finally {
+        if (!cancelled) setGammaMirrorBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId, gammaPdfUrl, gammaGenerationId, gammaPersistDocumentType]);
 
   // Ocultar barra de progreso unos segundos después de "Análisis completado"
   useEffect(() => {
     if (
       !aiLoading &&
       analysisProgress === 100 &&
-      analysisCurrentModule === "Análisis completado"
+      analysisCurrentModule === moduleCompleteLabel
     ) {
       const t = setTimeout(() => {
         setAnalysisProgress(0);
@@ -473,7 +633,12 @@ export function AiLeadReport({
       }, 3000);
       return () => clearTimeout(t);
     }
-  }, [aiLoading, analysisProgress, analysisCurrentModule]);
+  }, [aiLoading, analysisProgress, analysisCurrentModule, moduleCompleteLabel]);
+
+  useEffect(() => {
+    if (!guidedStep1Mode) return;
+    setReportExpanded(false);
+  }, [guidedStep1Mode]);
 
   const fetchGammaPrompt = async (type: "comercial" | "tecnico") => {
     if (!leadId?.trim()) return;
@@ -518,16 +683,33 @@ export function AiLeadReport({
         const gammaUrlVal = json?.gammaUrl ?? null;
         setGammaUrl(gammaUrlVal);
         setGammaPdfUrl(pdfUrl);
+
+        const persisted = await persistGammaCompletedStatus(
+          leadId.trim(),
+          gammaPersistDocumentType,
+          generationId,
+          { pdfUrl, gammaUrl: gammaUrlVal }
+        );
+
+        if (persisted.crmArchivedUrl) {
+          setGammaPdfUrl(null);
+          setGammaStablePdfUrl(persisted.crmArchivedUrl);
+          setGammaMirrorError(null);
+          setGammaMirrorBusy(false);
+          setGammaError(null);
+        } else if (persisted.error) {
+          setGammaError(persisted.error);
+        } else if (persisted.pendingMessage) {
+          setGammaError(persisted.pendingMessage);
+        } else {
+          setGammaError(null);
+        }
+
         setGammaProgress(100);
         setGammaEstimatedRemaining(null);
         setGammaStartTime(null);
         setGammaLoading(false);
-        setGammaError(null);
-        onPresentationSignalChange?.({
-          gammaUrl: gammaUrlVal ?? null,
-          pdfUrl: pdfUrl ?? null,
-          exportReady: Boolean(gammaUrlVal || pdfUrl),
-        });
+        void onReportGenerated?.();
         return;
       }
 
@@ -568,6 +750,9 @@ export function AiLeadReport({
     setGammaError(null);
     setGammaUrl(null);
     setGammaPdfUrl(null);
+    setGammaStablePdfUrl(null);
+    setGammaMirrorError(null);
+    setGammaMirrorBusy(false);
     setGammaGenerationId(null);
     try {
       const res = await fetch(`/api/admin/leads/${leadId}/gamma-proposal`, {
@@ -589,13 +774,47 @@ export function AiLeadReport({
     }
   };
 
-  const visibleTabs = useMemo(
-    () =>
-      TABS_CONFIG.filter((tab) =>
-        getReportProfile(reportProfile).moduleIds.includes(tab.tabId)
-      ),
-    [reportProfile]
-  );
+  const retryGammaMirror = useCallback(async () => {
+    if (!leadId?.trim() || !gammaPdfUrl?.trim() || !isTransientGammaExportPdfUrl(gammaPdfUrl)) return;
+    setGammaMirrorBusy(true);
+    setGammaMirrorError(null);
+    try {
+      const stable = await mirrorGammaPdfToDocuments(
+        leadId.trim(),
+        gammaPdfUrl.trim(),
+        gammaPersistDocumentType,
+        gammaGenerationId,
+        { persist: true }
+      );
+      setGammaStablePdfUrl(stable);
+    } catch (e: unknown) {
+      setGammaMirrorError(e instanceof Error ? e.message : "No se pudo archivar el PDF.");
+    } finally {
+      setGammaMirrorBusy(false);
+    }
+  }, [leadId, gammaPdfUrl, gammaGenerationId, gammaPersistDocumentType]);
+
+  const visibleTabs = useMemo(() => {
+    const profileModuleIds = getReportProfile(reportProfile).moduleIds;
+    const configuredModules = globalConfigFromApi?.modulos;
+    const configuredByLower = configuredModules
+      ? (() => {
+          const map = new Map<string, string>();
+          Object.entries(configuredModules).forEach(([k, v]) => {
+            const key = String(k ?? "").toLowerCase();
+            const value = typeof v === "string" ? v.trim() : "";
+            if (key && value) map.set(key, value);
+          });
+          return map;
+        })()
+      : null;
+
+    return TABS_CONFIG.filter((tab) => {
+      if (!profileModuleIds.includes(tab.tabId)) return false;
+      if (!configuredByLower) return true;
+      return configuredByLower.has(tab.tabId.toLowerCase());
+    });
+  }, [reportProfile, globalConfigFromApi]);
 
   // Cargar prompt global real desde API (misma fuente que el backend)
   useEffect(() => {
@@ -731,11 +950,24 @@ export function AiLeadReport({
     }
   }, [reportProfile, visibleTabs]);
 
-  const keepTabsInView = () => {
-    tabsBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-
   const canRun = !!(leadId && leadId.trim());
+
+  /** Al iniciar generación, llevar la vista al bloque de progreso (no a los módulos). */
+  useEffect(() => {
+    if (!isProcessingPhase) return;
+    const t = requestAnimationFrame(() => {
+      executionScrollRef?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(t);
+  }, [isProcessingPhase, executionScrollRef]);
+
+  /** Sincronizar COMPLETED desde el lead salvo durante PROCESSING. */
+  useEffect(() => {
+    setAnalysisPhase((prev) => {
+      if (prev === "PROCESSING") return prev;
+      return initialPhaseFromLead(lead);
+    });
+  }, [leadId, (lead as any)?.ai_report]);
 
   // Inicializar report desde el lead cuando se carga o cambia
   useEffect(() => {
@@ -743,6 +975,7 @@ export function AiLeadReport({
     if (initialReport && initialReport.trim()) {
       setReport(initialReport);
       setReportExpanded(true); // Auto-expandir cuando hay informe
+      setAnalysisPhase((p) => (p === "PROCESSING" ? p : "COMPLETED"));
     }
   }, [lead]);
 
@@ -844,45 +1077,6 @@ export function AiLeadReport({
     return `AI_Informe_${base}_${stamp}.pdf`;
   }, [lead?.nombre]);
 
-  // Helper para leer prompts desde localStorage con timestamps
-  const getAiPromptsFromLocalStorage = (): {
-    prompts: { base?: string; modules?: Record<string, string> };
-    meta: { updated_at: { base?: number; modules?: Record<string, number> } };
-  } | null => {
-    try {
-      const stored = localStorage.getItem("camara_costa_ai_prompts_v1");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // Si no tiene meta, crear estructura con timestamps actuales
-        const now = Date.now();
-        const meta = parsed.meta || {
-          updated_at: {
-            base: parsed.base ? now : undefined,
-            modules: {} as Record<string, number>,
-          },
-        };
-        
-        // Asegurar que cada módulo tenga timestamp
-        if (parsed.modules) {
-          Object.keys(parsed.modules).forEach((key) => {
-            if (!meta.updated_at.modules?.[key]) {
-              meta.updated_at.modules = meta.updated_at.modules || {};
-              meta.updated_at.modules[key] = now;
-            }
-          });
-        }
-        
-        return {
-          prompts: { base: parsed.base, modules: parsed.modules },
-          meta,
-        };
-      }
-    } catch (e) {
-      console.warn("[AI] Error leyendo prompts desde localStorage:", e);
-    }
-    return null;
-  };
-
   // Derivar tabs desde el texto completo del informe
   const reportTabs = useMemo(() => {
     return parseReportTabs(report);
@@ -977,18 +1171,42 @@ export function AiLeadReport({
     return key ? (modules[key] || "") : (modules[tabId] || "");
   }, []);
 
-  // Regenera un solo módulo; retorna { ok, report, error } para uso en loop o manual
-  const regenerateSingleModule = async (tabId: string): Promise<{ ok: boolean; report?: string; error?: string }> => {
-    if (!leadId?.trim()) return { ok: false, error: "Sin leadId" };
-    const promptsData = getAiPromptsFromLocalStorage();
-    if (!promptsData) return { ok: false, error: "No se encontraron prompts en localStorage" };
+  /** Solo configuración persistida en servidor (cache en estado + refetch). */
+  const resolveIaPromptsForExecution = useCallback(async (): Promise<ClientAiPromptsBundle | null> => {
+    let bundle = bundleFromServerSnapshot(globalConfigFromApi);
+    if (bundle) return bundle;
+    const snap = await fetchIaConfigFromApi();
+    if (snap) {
+      setGlobalConfigFromApi(snap);
+      bundle = bundleFromServerSnapshot(snap);
+    }
+    return bundle ?? null;
+  }, [globalConfigFromApi]);
 
-    const customPromptValue = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
+  // Regenera un solo módulo; retorna { ok, report, error } para uso en loop o manual
+  const regenerateSingleModule = async (
+    tabId: string,
+    moduleCustomPromptOverride?: string | null
+  ): Promise<{ ok: boolean; report?: string; error?: string }> => {
+    if (!leadId?.trim()) return { ok: false, error: "Sin leadId" };
+
+    const promptsData = await resolveIaPromptsForExecution();
+    if (!promptsData || !hasNonEmptyModuleValues(promptsData.prompts.modules)) {
+      return {
+        ok: false,
+        error:
+          "No hay prompts de módulos en el servidor. Guardá la configuración en Admin → Configuración → IA y reintentá.",
+      };
+    }
+
+    const customPromptValue = typeof moduleCustomPromptOverride === "string"
+      ? (moduleCustomPromptOverride.trim() || null)
+      : null;
     const onlyModule = (tabId ?? "").trim().toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_");
     const modulePrompt = getModulePromptForTab(tabId, promptsData.prompts.modules);
     const body = {
-      custom_prompt: customPromptValue,
-      personalization: customPromptValue,
+      custom_prompt: customPromptValue || undefined,
+      personalization: customPromptValue || undefined,
       force_regenerate: true,
       only_module: onlyModule,
       profile: reportProfile,
@@ -1035,7 +1253,9 @@ export function AiLeadReport({
     setError(null);
     setToastMessage("Regenerando…");
     try {
-      const result = await regenerateSingleModule(tabId);
+      const activeTabId = visibleTabs.find((t) => t.id === activeReportTab)?.tabId;
+      const promptOverride = activeTabId === tabId ? (aiPromptExtra?.trim() || null) : null;
+      const result = await regenerateSingleModule(tabId, promptOverride);
       if (result.ok && result.report) {
         setReport(result.report);
         setToastMessage("Actualizado ✅");
@@ -1057,32 +1277,52 @@ export function AiLeadReport({
 
   const runFullAiGeneration = async () => {
     if (!leadId?.trim()) return;
+
+    const rollbackNotStarted = () => {
+      setAnalysisPhase("NOT_STARTED");
+      setAiLoading(false);
+      setGenerationProfileActive(null);
+      setAnalysisStartedAt(null);
+    };
+
+    /** Optimista: PROCESSING + loader antes de cualquier await (onBeforeGenerate / red). */
+    setGenerationProfileActive(reportProfile);
+    setAnalysisPhase("PROCESSING");
+    setAiLoading(true);
+    setError(null);
+    setAiDoneMsg("");
+    setReportExpanded(false);
+    setAnalysisStartedAt(Date.now());
+    setAnalysisProgress(0);
+    setAnalysisCurrentModule("Preparando…");
+    setAnalysisTotalModules(0);
+    onBeginAnalysisGeneration?.();
+
     try {
       await onBeforeGenerate?.();
     } catch (e) {
       setError("Error guardando draft antes de generar.");
+      rollbackNotStarted();
       return;
     }
 
-    setAiLoading(true);
-    setError(null);
-    setAiDoneMsg("");
-    setReportExpanded(true);
-
-    const promptsData = getAiPromptsFromLocalStorage();
-    if (!promptsData?.prompts?.modules) {
-      setError("No hay módulos en la config IA. Configurá en Admin → Configuración → IA.");
-      setAiLoading(false);
+    const promptsData = await resolveIaPromptsForExecution();
+    if (!promptsData?.prompts?.modules || !hasNonEmptyModuleValues(promptsData.prompts.modules)) {
+      setError(
+        "No hay prompts de módulos en el servidor. Guardá la configuración en Admin → Configuración → IA (persistida en base de datos) y recargá esta página."
+      );
+      rollbackNotStarted();
       return;
     }
 
     const profile = getReportProfile(reportProfile);
-    const availableByLower = new Map(
-      Object.keys(promptsData.prompts.modules).map((k) => [k.toLowerCase(), k])
+    // Orden del catálogo + perfil; solo módulos con prompt no vacío en la config del servidor (no depende de visibleTabs ni de localStorage).
+    const tabsWithPrompts = TABS_CONFIG.filter(
+      (tab) =>
+        profile.moduleIds.includes(tab.tabId) &&
+        getModulePromptForTab(tab.tabId, promptsData.prompts.modules).trim().length > 0
     );
-    let moduleIdsToRun = profile.moduleIds
-      .map((id) => availableByLower.get(id.toLowerCase()))
-      .filter(Boolean) as string[];
+    let moduleIdsToRun = tabsWithPrompts.map((t) => t.tabId);
     const emp = (lead as any)?.empresas;
     const hasWeb = Boolean(
       lead?.website || emp?.web || emp?.website || emp?.instagram || emp?.facebook ||
@@ -1091,16 +1331,17 @@ export function AiLeadReport({
     const adHint = `${lead?.objetivos ?? ""} ${lead?.notas ?? ""} ${(lead as any)?.ai_context ?? ""}`.toLowerCase();
     const hasPauta = adHint.includes("ads") || adHint.includes("pauta") || adHint.includes("pixel") || adHint.includes("capi");
     const shouldIncludeTech = hasWeb || hasPauta;
-    const filteredIds = moduleIdsToRun.filter(
-      (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
-    );
+    const filteredIds = moduleIdsToRun.filter((id) => {
+      const normalized = id.toLowerCase();
+      return shouldIncludeTech || !TECH_MODULE_IDS.includes(normalized as any);
+    });
 
     const uiModuleOrder = filteredIds
-      .map((id) => visibleTabs.find((t) => t.tabId === id))
-      .filter(Boolean) as typeof visibleTabs;
+      .map((id) => tabsWithPrompts.find((t) => t.tabId === id))
+      .filter(Boolean) as typeof TABS_CONFIG;
     if (uiModuleOrder.length === 0) {
       setError("Ningún módulo para generar. Revisá la config IA.");
-      setAiLoading(false);
+      rollbackNotStarted();
       return;
     }
 
@@ -1111,6 +1352,7 @@ export function AiLeadReport({
     });
 
     const totalModules = uiModuleOrder.length;
+    setAnalysisStartedAt(Date.now());
     setAnalysisTotalModules(totalModules);
     setAnalysisProgress(0);
     setAnalysisCurrentModule(uiModuleOrder[0]?.label ?? "Preparando…");
@@ -1125,7 +1367,8 @@ export function AiLeadReport({
       setAnalysisProgress(totalModules > 0 ? Math.round((i / totalModules) * 100) : 0);
       setModuleStatus((s) => ({ ...s, [tab.tabId]: "running" }));
       setActiveReportTab(tab.id);
-      const result = await regenerateSingleModule(tab.tabId);
+      // Importante: en corrida completa, cada módulo usa su propio prompt (sin heredar prompt activo global).
+      const result = await regenerateSingleModule(tab.tabId, null);
       if (result.ok && result.report) {
         currentReport = result.report;
         setReport(currentReport);
@@ -1137,22 +1380,31 @@ export function AiLeadReport({
       setAnalysisProgress(totalModules > 0 ? Math.round(((i + 1) / totalModules) * 100) : 0);
     }
 
-    const visionInProfile = profile.moduleIds.some(
-      (id) => id.toLowerCase() === VISION_TAB_ID.toLowerCase()
+    const visionInProfile = uiModuleOrder.some(
+      (tab) => tab.tabId.toLowerCase() === VISION_TAB_ID.toLowerCase()
     );
     if (visionInProfile) {
       setActiveReportTab(VISION_TAB_ID);
     } else if (uiModuleOrder.length > 0) {
       setActiveReportTab(uiModuleOrder[uiModuleOrder.length - 1].id);
     }
-    modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    /** Foco en el bloque de ejecución / resultado, no en «Módulos del análisis». */
+    requestAnimationFrame(() => {
+      executionScrollRef?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
 
     setAnalysisProgress(100);
-    setAnalysisCurrentModule("Análisis completado");
+    setAnalysisCurrentModule(moduleCompleteLabel);
     setAiDoneMsg("✅ Informe IA completo.");
     setStatus("done");
+    setAnalysisPhase("COMPLETED");
+    setGenerationProfileActive(null);
     setAiLoading(false);
+    setAnalysisStartedAt(null);
     onReportGenerated?.();
+    if (!guidedStep1Mode) {
+      setReportExpanded(true);
+    }
   };
 
   const generateAI = async () => {
@@ -1164,15 +1416,18 @@ export function AiLeadReport({
   const handleGenerate = async (force = false, moduleId?: string) => {
     console.log("[AI] CLICK Generar IA", { force, moduleId });
 
+    setGenerationProfileActive(reportProfile);
+    setAnalysisPhase("PROCESSING");
+    setAiLoading(true);
+    setAnalysisStartedAt(Date.now());
+    setAnalysisProgress(0);
+    setAnalysisCurrentModule("Generando informe completo…");
+    onBeginAnalysisGeneration?.();
+
     try {
-      setAiLoading(true);
       setError(null);
       setStatus("generating");
 
-      // Leer prompts desde localStorage usando helper
-      const promptsFromStorage = getAiPromptsFromLocalStorage();
-
-      // Tipos para el body
       type AiPromptsPayload = {
         base?: string;
         modules?: Record<string, string>;
@@ -1185,21 +1440,19 @@ export function AiLeadReport({
         prompts?: AiPromptsPayload;
       };
 
-      // Personalización IA siempre incluida
       const personalizationText = aiPromptExtra?.trim() ? aiPromptExtra.trim() : null;
       const forceRegenerate = force;
       const moduleIdParam = moduleId;
 
-      // body tipado (acepta prompts)
       const body: AiReportBody = {
         personalization: personalizationText || undefined,
         force_regenerate: !!forceRegenerate,
         module: moduleIdParam || undefined,
       };
 
-      // Agregar prompts si existen
-      if (promptsFromStorage) {
-        body.prompts = promptsFromStorage.prompts as AiPromptsPayload;
+      const serverPrompts = await resolveIaPromptsForExecution();
+      if (serverPrompts && hasNonEmptyModuleValues(serverPrompts.prompts.modules)) {
+        body.prompts = serverPrompts.prompts as AiPromptsPayload;
       }
 
       console.log("[AI] llamando endpoint", `/api/admin/leads/${leadId}/ai-report`);
@@ -1224,13 +1477,18 @@ export function AiLeadReport({
 
       setReport(data.data?.report ?? data.report ?? "");
       setStatus("done");
+      setAnalysisPhase("COMPLETED");
       setReportExpanded(true);
     } catch (err: any) {
       console.error("[AI] ERROR generando informe", err);
       setError(err?.message ?? "Error generando informe IA. Ver consola.");
       setStatus("idle");
+      const hadReportFromLead = String((lead as any)?.ai_report ?? "").trim().length > 0;
+      setAnalysisPhase(hadReportFromLead ? "COMPLETED" : "NOT_STARTED");
     } finally {
       setAiLoading(false);
+      setGenerationProfileActive(null);
+      setAnalysisStartedAt(null);
     }
   };
 
@@ -1261,7 +1519,6 @@ export function AiLeadReport({
       await downloadBlob(blob, filename);
 
       setToastMessage("✅ PDF descargado.");
-      onPresentationSignalChange?.({ lastGeneratedPdf: true, exportReady: true });
     } catch (e: any) {
       setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
@@ -1299,7 +1556,6 @@ export function AiLeadReport({
       const blob = await pdf(doc).toBlob();
       await downloadBlob(blob, `informe-vision-estrategica-${baseName}.pdf`);
       setToastMessage("✅ PDF descargado.");
-      onPresentationSignalChange?.({ lastGeneratedPdf: true, exportReady: true });
     } catch (e: any) {
       setError(e?.message ?? "Error generando PDF");
       setToastMessage(null);
@@ -1323,22 +1579,27 @@ export function AiLeadReport({
     );
   }
 
-  const analysisAvailable = !!report.trim();
+  const analysisAvailable = analysisPhase === "COMPLETED" && !!report.trim();
   const lockIcon = (
     <svg className="mr-1.5 h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden fill="currentColor" viewBox="0 0 20 20">
       <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
     </svg>
   );
-  const lockedTitle = "Disponible después de generar el análisis";
+  const lockedTitle = ui.lockedTitle;
 
   return (
     <div className="rounded-2xl border bg-white p-4">
+      <div
+        ref={executionScrollRef}
+        id="lead-ai-execution-anchor"
+        className="scroll-mt-28"
+      >
       {aiDoneMsg && (
         <div className="mb-3 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800 font-medium">
           {aiDoneMsg}
         </div>
       )}
-      {status !== "idle" && !aiDoneMsg && !(aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado")) && (
+      {status !== "idle" && !aiDoneMsg && analysisPhase !== "PROCESSING" && (
         <div className="mb-3 rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-700">
           {status === "saving" && "Guardando datos del lead…"}
           {status === "generating" && "Generando informe con IA…"}
@@ -1346,59 +1607,89 @@ export function AiLeadReport({
         </div>
       )}
 
-      {/* Barra de progreso del análisis (reemplaza "Generando..." por progreso real por módulos) */}
-      {(aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado")) && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3">
-          <p className="text-sm font-medium text-slate-800">
-            {analysisProgress >= 100 ? "Análisis completado" : "Analizando el lead…"}
-          </p>
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
-            <div
-              className="h-full rounded-full bg-blue-600 transition-[width] duration-500 ease-out"
-              style={{ width: `${Math.min(100, Math.max(0, analysisProgress))}%` }}
-              role="progressbar"
-              aria-valuenow={analysisProgress}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label="Progreso del análisis por módulos"
+      {/* PROCESSING: estado intermedio explícito (loader + progreso), siempre visible al generar */}
+      {analysisPhase === "PROCESSING" && (
+        <div
+          className="mb-4 rounded-xl border-2 border-blue-400 bg-gradient-to-b from-blue-50/90 to-white px-4 py-4 shadow-sm"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div className="flex gap-4">
+            <span
+              className="mt-1 inline-block h-10 w-10 shrink-0 animate-spin rounded-full border-[3px] border-blue-200 border-t-blue-600"
+              aria-hidden
             />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold tracking-tight text-slate-900">
+                {generationProfileActive === "tecnico" ? ui.genTech : ui.genCommercial}
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">Esto puede tardar unos segundos</p>
+              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+                {analysisTotalModules <= 0 ? (
+                  <div className="h-full w-2/5 animate-pulse rounded-full bg-blue-500" />
+                ) : (
+                  <div
+                    className="h-full rounded-full bg-blue-600 transition-[width] duration-500 ease-out"
+                    style={{ width: `${analysisPercent}%` }}
+                    role="progressbar"
+                    aria-valuenow={analysisPercent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={ui.progressAria}
+                  />
+                )}
+              </div>
+              {analysisTotalModules > 0 && (
+                <p className="mt-2 text-xs font-semibold text-slate-700">{analysisPercent}% completado</p>
+              )}
+              {analysisCurrentModule && analysisPercent < 100 && (
+                <p className="mt-1.5 text-xs font-medium text-slate-700">Módulo actual: {analysisCurrentModule}</p>
+              )}
+              {analysisTotalModules > 0 && analysisPercent < 100 && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {analysisEstimatedRemaining != null
+                    ? `Tiempo estimado restante: ${formatTime(analysisEstimatedRemaining)}`
+                    : "Calculando tiempo estimado…"}
+                </p>
+              )}
+            </div>
           </div>
-          {analysisCurrentModule && analysisProgress < 100 && (
-            <p className="mt-1.5 text-xs text-slate-600">
-              Procesando: {analysisCurrentModule}
-            </p>
-          )}
         </div>
       )}
 
-      {/* Zona A — Acción principal */}
+      </div>
+
+      {/* Zona A — Acción principal (título siempre; botones ocultos en paso 1 guiado mientras PROCESSING) */}
       <div className="mb-4">
         <div className="text-sm font-semibold text-slate-900">
           {titleLabel ?? "Agente IA · Informe del Lead"}
         </div>
         <div className="mt-1 text-xs text-slate-500">
-          {subtitleLabel ?? "Genera informe técnico de oportunidades con análisis estratégico."}
+          {subtitleLabel ?? ui.defaultSubtitle}
         </div>
+        {!(guidedStep1Mode && isProcessingPhase) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {canUseCommercial && (
             <div className="flex flex-col items-start">
-              {aiLoading || (analysisProgress === 100 && analysisCurrentModule === "Análisis completado") ? (
+              {isProcessingPhase ? (
                 <button
                   type="button"
                   disabled
-                  className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-300 text-slate-500 cursor-not-allowed"
+                  className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-300 text-slate-600 cursor-not-allowed"
                 >
-                  Generar Análisis Comercial
+                  <span className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-slate-400 border-t-slate-600" aria-hidden />
+                  Generando…
                 </button>
-              ) : report.trim() ? (
+              ) : analysisPhase === "COMPLETED" && report.trim() ? (
                 <span
                   className="inline-flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-500 opacity-90"
-                  title="El análisis ya fue generado."
+                  title={ui.alreadyTooltip}
                 >
                   <svg className="h-4 w-4 shrink-0" aria-hidden fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
                   </svg>
-                  Análisis ya generado
+                  {ui.alreadyChip}
                 </span>
               ) : (
                 <>
@@ -1410,7 +1701,7 @@ export function AiLeadReport({
                           onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
                           className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
                         >
-                          Generar Análisis Comercial
+                          {ui.btnCommercial}
                         </button>
                       </span>
                     </Tooltip>
@@ -1420,7 +1711,7 @@ export function AiLeadReport({
                       onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
                       className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
                     >
-                      Generar Análisis Comercial
+                      {ui.btnCommercial}
                     </button>
                   )}
                   {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
@@ -1432,21 +1723,91 @@ export function AiLeadReport({
             <button
               type="button"
               onClick={() => { setReportProfile("tecnico"); runFullAiGeneration(); }}
-              disabled={aiLoading}
+              disabled={isProcessingPhase}
               className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Generar Técnico
+              {ui.btnTechnical}
             </button>
           )}
         </div>
+        )}
       </div>
 
+      {guidedStep1Mode && !isProcessingPhase && analysisAvailable && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3">
+          <p className="text-sm font-semibold text-emerald-900">{ui.bannerDone}</p>
+          <p className="mt-0.5 text-xs text-emerald-800">Documento principal disponible</p>
+          {onNextStepClick && (
+            <button
+              type="button"
+              onClick={onNextStepClick}
+              className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              {nextStepCtaLabel ?? "Ir al diagnóstico comercial"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {guidedStep1Mode && !isProcessingPhase && analysisAvailable && (
+        <div className="mb-4 space-y-3">
+          <details className="rounded-lg border border-slate-200 bg-white p-3">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">Informe comercial</summary>
+            <p className="mt-1 text-xs text-slate-500">{ui.docPrincipal}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setReportProfile("comercial");
+                  const firstModuleId = getReportProfile("comercial").moduleIds[0];
+                  const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId);
+                  setActiveReportTab(firstTab?.id ?? TABS_CONFIG[0].id);
+                  setReportExpanded(true);
+                  requestAnimationFrame(() => setTimeout(() => modulePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80));
+                }}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50"
+              >
+                Ver informe
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExportPdf("comercial")}
+                disabled={!leadId || pdfExporting !== null}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pdfExporting === "comercial" ? "Generando PDF..." : "PDF informe comercial"}
+              </button>
+            </div>
+          </details>
+
+          <details className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">{ui.modulosDestacados}</summary>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setActiveReportTab("vision_estrategica")} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50">Ver visión estratégica</button>
+              <button type="button" onClick={handleExportPdfVision} disabled={!leadId || pdfExporting !== null} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">{pdfExporting === "vision" ? "Generando PDF..." : "PDF visión estratégica"}</button>
+              <button type="button" onClick={() => generateGammaProposal("comercial")} disabled={!leadId || gammaLoading} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">{gammaLoading ? "Generando Gamma..." : "Generar Gamma de visión estratégica"}</button>
+            </div>
+          </details>
+
+          <details className="rounded-lg border border-violet-200 bg-violet-50/30 p-3">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-violet-800">Personalización IA</summary>
+            <p className="mt-1 text-xs text-violet-700">{ui.personalize}</p>
+          </details>
+
+          <details className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">{ui.modulesDetails}</summary>
+            <p className="mt-1 text-xs text-slate-600">Selector de módulos y contenido detallado del informe.</p>
+          </details>
+        </div>
+      )}
+
       {/* Zona B — Documentos generados (reorganizado: principal, módulos destacados, exportaciones) */}
+      {!guidedStep1Mode && !isProcessingPhase && (
       <div className="mb-4 space-y-4">
         {/* 1. BLOQUE PRINCIPAL — Informe comercial */}
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
           <h3 className="text-sm font-semibold text-slate-800">Informe comercial</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Documento principal generado a partir del análisis del lead.</p>
+          <p className="mt-0.5 text-xs text-slate-500">{ui.docPrincipal}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {canUseCommercial && (
               analysisAvailable ? (
@@ -1510,10 +1871,10 @@ export function AiLeadReport({
           </div>
         </div>
 
-        {/* 2. BLOQUE SECUNDARIO — Módulos destacados del análisis */}
+        {/* 2. BLOQUE SECUNDARIO — Módulos destacados */}
         {canUseCommercial && (!analysisAvailable || (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0) && (
           <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-            <h3 className="text-sm font-semibold text-slate-800">Módulos destacados del análisis</h3>
+            <h3 className="text-sm font-semibold text-slate-800">{ui.modulosDestacadosH3}</h3>
             <p className="mt-0.5 text-xs text-slate-500">Secciones clave derivadas del informe comercial.</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {analysisAvailable && (reportTabs["vision_estrategica"]?.trim() ?? "").length > 0 ? (
@@ -1563,7 +1924,7 @@ export function AiLeadReport({
                   type="button"
                   onClick={() => generateGammaProposal("comercial")}
                   disabled={!leadId || gammaLoading}
-                  className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
                   title={gammaLoading ? "Generando…" : "Crear propuesta en Gamma"}
                 >
                   {gammaLoading ? (
@@ -1576,7 +1937,7 @@ export function AiLeadReport({
                   )}
                 </button>
               ) : (
-                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-sm font-medium text-emerald-700 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma comercial</span>
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma comercial</span>
               )
             )}
             {canUseTechnical && (
@@ -1585,7 +1946,7 @@ export function AiLeadReport({
                   type="button"
                   onClick={() => generateGammaProposal("tecnico")}
                   disabled={!leadId || gammaLoading}
-                  className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed min-w-[160px]"
                   title={gammaLoading ? "Generando…" : "Crear propuesta en Gamma"}
                 >
                   {gammaLoading ? (
@@ -1598,7 +1959,7 @@ export function AiLeadReport({
                   )}
                 </button>
               ) : (
-                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-sm font-medium text-emerald-700 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma técnico</span>
+                <span className="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-500 opacity-60 min-w-[160px]" title={lockedTitle}>{lockIcon}Generar Gamma técnico</span>
               )
             )}
             {canUseTechnical && (
@@ -1627,11 +1988,11 @@ export function AiLeadReport({
 
           {/* Gamma: progreso y resultado solo dentro de este bloque */}
           {gammaLoading && (
-            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
-              <p className="text-sm font-medium text-emerald-800">Generando propuesta en Gamma…</p>
-              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-emerald-100">
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+              <p className="text-sm font-medium text-slate-800">Generando propuesta en Gamma…</p>
+              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-200">
                 <div
-                  className="h-full rounded-full bg-emerald-600 transition-[width] duration-500 ease-out"
+                  className="h-full rounded-full bg-slate-600 transition-[width] duration-500 ease-out"
                   style={{ width: `${Math.min(100, Math.max(0, gammaProgress))}%` }}
                   role="progressbar"
                   aria-valuenow={gammaProgress}
@@ -1640,8 +2001,8 @@ export function AiLeadReport({
                   aria-label="Progreso de generación Gamma"
                 />
               </div>
-              <p className="mt-1.5 text-xs text-emerald-700">{gammaProgress}%</p>
-              <p className="mt-1 text-xs text-emerald-600">
+              <p className="mt-1.5 text-xs text-slate-700">{gammaProgress}%</p>
+              <p className="mt-1 text-xs text-slate-600">
                 {gammaProgress < 15
                   ? "Calculando tiempo estimado…"
                   : gammaProgress > 95
@@ -1661,43 +2022,68 @@ export function AiLeadReport({
             </div>
           )}
           {(gammaPdfUrl || gammaUrl) && !gammaLoading && (
-            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
-              <p className="text-sm font-medium text-emerald-800 mb-2">Propuesta Gamma lista</p>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+              <p className="mb-1 text-sm font-medium text-slate-800">Salida desde Gamma</p>
+              <p className="mb-2 text-xs text-slate-600">
+                El CRM solo toma como documento oficial el PDF archivado en almacenamiento propio. Los enlaces a gamma.app son vista previa externa, no el repositorio final.
+              </p>
+              {gammaStablePdfUrl ? (
+                <p className="mb-2 text-xs font-medium text-emerald-800">PDF archivado en el CRM — usá «Descargar PDF (CRM)».</p>
+              ) : null}
               <div className="flex flex-wrap gap-2">
-                {gammaUrl && (
+                {gammaUrl ? (
                   <button
                     type="button"
-                    onClick={() => window.open(gammaUrl!, "_blank")}
-                    className="rounded-lg border border-emerald-400 bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-200"
+                    onClick={() => window.open(gammaUrl, "_blank")}
+                    className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm font-medium text-amber-950 hover:bg-amber-100"
                   >
-                    Ver Gamma
+                    Abrir en Gamma (externo)
                   </button>
-                )}
-                {gammaUrl && (
-                  <button
-                    type="button"
-                    onClick={() => window.open(gammaUrl!, "_blank")}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Abrir presentación
-                  </button>
-                )}
+                ) : null}
                 {gammaPdfUrl && (
-                  <button
-                    type="button"
-                    onClick={() => window.open(gammaPdfUrl!, "_blank")}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Descargar
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      disabled={
+                        isTransientGammaExportPdfUrl(gammaPdfUrl) &&
+                        (!gammaStablePdfUrl || gammaMirrorBusy)
+                      }
+                      onClick={() => {
+                        const target = isTransientGammaExportPdfUrl(gammaPdfUrl)
+                          ? gammaStablePdfUrl
+                          : gammaPdfUrl;
+                        if (target) window.open(target, "_blank");
+                      }}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {gammaMirrorBusy && isTransientGammaExportPdfUrl(gammaPdfUrl)
+                        ? "Archivando PDF en CRM…"
+                        : "Descargar PDF (CRM)"}
+                    </button>
+                    {gammaMirrorError && isTransientGammaExportPdfUrl(gammaPdfUrl) ? (
+                      <div className="w-full mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <p>{gammaMirrorError}</p>
+                        <button
+                          type="button"
+                          onClick={() => void retryGammaMirror()}
+                          disabled={gammaMirrorBusy}
+                          className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          Reintentar archivar PDF
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
             </div>
           )}
         </div>
       </div>
+      )}
 
       {/* Bloque separado: Personalización IA */}
+      {!guidedStep1Mode && !isProcessingPhase && (
       <details className="mb-4 rounded-lg border border-violet-200 bg-violet-50/30">
         <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium text-violet-800 hover:bg-violet-100/50 rounded-lg">
           Personalización IA
@@ -1712,15 +2098,17 @@ export function AiLeadReport({
             )}
           </div>
           <div>
-            <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700 mb-1">Instrucciones adicionales para el análisis (opcional)</label>
+            <label htmlFor="ai-prompt-extra" className="block text-xs font-medium text-slate-700 mb-1">{ui.extraLabel}</label>
             <textarea id="ai-prompt-extra" value={aiPromptExtra} onChange={(e) => setAiPromptExtra(e.target.value)} disabled={aiLoading} placeholder="Ejemplo: Enfocarse en oportunidades de membresía premium y eventos corporativos." className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-y min-h-[72px] disabled:opacity-50" rows={2} />
           </div>
         </div>
       </details>
+      )}
 
-      {/* Bloque: Módulos del análisis (único selector de módulos; no se repite debajo de "Ver informe") */}
+      {/* Bloque: módulos del informe — oculto mientras corre la generación (contenido secundario) */}
+      {!guidedStep1Mode && !isProcessingPhase && (
       <div ref={tabsBarRef} className="mb-4 rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Módulos del análisis</p>
+        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">{ui.modulesDetails}</p>
         <div className="flex flex-wrap gap-2">
           {visibleTabs.map((tab) => {
             const hasMissingData = missingDataByTab[tab.tabId]?.faltantes.length > 0;
@@ -1740,6 +2128,7 @@ export function AiLeadReport({
           })}
         </div>
       </div>
+      )}
 
       {toastMessage && (
         <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 flex items-center gap-2">
@@ -1758,6 +2147,7 @@ export function AiLeadReport({
         </div>
       )}
 
+      {!isProcessingPhase && (
       <div className="mt-4">
         {!report.trim() ? (
           <div className="rounded-xl border bg-slate-50 p-3 text-sm text-slate-600">
@@ -2149,6 +2539,7 @@ export function AiLeadReport({
           </>
         )}
       </div>
+      )}
 
       {/* Modal Prompt Gamma */}
       {gammaPromptOpen && (
