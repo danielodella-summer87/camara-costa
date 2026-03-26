@@ -6,15 +6,11 @@ import { usePathname } from "next/navigation";
 import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
 import UserMenu from "@/app/admin/components/UserMenu";
 import { usePersonalizacion } from "@/lib/personalizacion";
-import { resolveUILabel } from "@/lib/ui/labels";
 import { BreadcrumbContext } from "@/app/admin/context/BreadcrumbContext";
+import { mergeAdminSidebarModules, type AdminSidebarModule } from "@/lib/admin/adminSidebarModules";
 
 const SIDEBAR_STORAGE_KEY = "admin_sidebar_collapsed";
 
-/** Ruta fija del módulo; el texto visible sale de `label_member_plural` (tabla `config`, key `portal_config`). */
-const SOCIOS_ADMIN_HREF = "/admin/socios" as const;
-
-type NavItem = { label: string; href: string };
 type RoleKey = "admin" | "operador" | "comercial" | "viewer";
 
 type MeResponse = {
@@ -23,26 +19,6 @@ type MeResponse = {
     role?: string | null;
   };
 };
-
-const NAV: NavItem[] = [
-  { label: "Centro de control", href: "/admin" },
-  { label: "Dashboard comercial", href: "/admin/dashboard" },
-  { label: "Entidades", href: "/admin/empresas" },
-  { label: "Oportunidades", href: "/admin/oportunidades" },
-  { label: "LEADS87", href: "/admin/leads87" },
-  /** `label` solo para otras entradas; esta fila usa siempre `clientePlural` ↔ API `label_member_plural`. */
-  { label: "socios", href: SOCIOS_ADMIN_HREF },
-  { label: "Agenda", href: "/admin/agenda" },
-  { label: "Reuniones", href: "/admin/reuniones" },
-  { label: "Operaciones", href: "/admin/operaciones" },
-  { label: "Reportes", href: "/admin/reportes" },
-  { label: "Eventos", href: "/admin/eventos" },
-  { label: "Mesa de ayuda", href: "/admin/mesa-de-ayuda" },
-  { label: "Manual de neuroventas", href: "/admin/neuroventas" },
-  { label: "IA", href: "/admin/configuracion/ia" },
-  { label: "Personalización", href: "/admin/personalizacion" },
-  { label: "Configuración", href: "/admin/configuracion" },
-];
 
 function cx(...classes: Array<false | null | string | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -119,8 +95,8 @@ function normalizeRole(role: string | null | undefined): RoleKey | null {
  * - operador: Dashboard, Leads, Operaciones, Mesa de ayuda, Agenda, Reportes (+ Iniciativas, Socios, Eventos). NO: IA, Personalización, Configuración
  * - viewer: Dashboard, Iniciativas, Leads, Reportes, Mesa de ayuda (lectura). NO: Operaciones, IA, Personalización, Configuración, Socios, Agenda, Eventos
  */
-function filterNavByRole(role: RoleKey | null, nav: NavItem[]): NavItem[] {
-  if (!role) return nav; // mientras carga: NAV completo para evitar flicker
+function filterNavByRole(role: RoleKey | null, nav: AdminSidebarModule[]): AdminSidebarModule[] {
+  if (!role) return nav;
   if (role === "admin") return nav;
 
   const hiddenByRole: Record<RoleKey, string[]> = {
@@ -152,10 +128,9 @@ function filterNavByRole(role: RoleKey | null, nav: NavItem[]): NavItem[] {
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { clientePlural, clienteSingular } = usePersonalizacion();
-  const personalizacion = useMemo(
-    () => ({ clientePlural, clienteSingular }),
-    [clientePlural, clienteSingular]
+  const { clientePlural } = usePersonalizacion();
+  const [sidebarModules, setSidebarModules] = useState<AdminSidebarModule[]>(() =>
+    mergeAdminSidebarModules(undefined)
   );
   const [mobileOpen, setMobileOpen] = useState(false);
   const [role, setRole] = useState<RoleKey | null>(null);
@@ -191,7 +166,35 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     };
   }, []);
 
-  const filteredNav = useMemo(() => filterNavByRole(role, NAV), [role]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSidebar() {
+      try {
+        const res = await fetch("/api/admin/config/portal", {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store" },
+        });
+        const json = (await res.json()) as { data?: { sidebar_modules?: unknown } };
+        if (!cancelled && json?.data) {
+          setSidebarModules(mergeAdminSidebarModules(json.data.sidebar_modules as never));
+        }
+      } catch {
+        /* defaults ya en estado inicial */
+      }
+    }
+    void loadSidebar();
+    const onPortalUpdate = () => void loadSidebar();
+    window.addEventListener("portal-config-updated", onPortalUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("portal-config-updated", onPortalUpdate);
+    };
+  }, []);
+
+  const filteredNav = useMemo(() => {
+    const visible = sidebarModules.filter((m) => m.status !== "oculto");
+    return filterNavByRole(role, visible);
+  }, [role, sidebarModules]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [breadcrumbSegment, setBreadcrumbSegment] = useState<string | null>(null);
 
@@ -241,13 +244,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <nav className="p-3 space-y-1">
             {filteredNav.map((item) => {
               const active = isActive(pathname, item.href);
-              const resolvedLabel =
-                item.href === SOCIOS_ADMIN_HREF
-                  ? clientePlural.trim() || "Socios"
-                  : resolveUILabel(item.label, personalizacion);
+              const isActivo = item.status === "activo";
+              const isPrep = item.status === "en_preparacion";
+              const displayLabel = item.useMemberPluralLabel
+                ? clientePlural.trim() || "Socios"
+                : item.label;
               return (
                 <Link
-                  key={item.href}
+                  key={item.key}
                   href={item.href}
                   onClick={() => {
                     if (typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches) {
@@ -255,12 +259,24 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                     }
                   }}
                   className={cx(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm",
-                    active ? "bg-white/10 text-white" : "text-white/80 hover:bg-white/5 hover:text-white"
+                    "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors",
+                    isActivo
+                      ? active
+                        ? "bg-white/10 font-semibold text-white"
+                        : "font-semibold text-white hover:bg-white/5 hover:text-white"
+                      : isPrep
+                        ? active
+                          ? "bg-white/5 font-normal text-gray-300"
+                          : "cursor-not-allowed font-normal text-gray-400 opacity-70 hover:bg-transparent hover:text-gray-400"
+                        : active
+                          ? "bg-white/5 font-normal text-gray-300"
+                          : "font-normal text-gray-400"
                   )}
                 >
-                  <span className="h-2 w-2 rounded-full bg-white/20" />
-                  <span>{resolvedLabel}</span>
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center text-lg leading-none" aria-hidden>
+                    {item.icon || "·"}
+                  </span>
+                  <span>{displayLabel}</span>
                 </Link>
               );
             })}

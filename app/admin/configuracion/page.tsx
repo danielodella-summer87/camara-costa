@@ -73,6 +73,15 @@ function ConfiguracionContent() {
               Gestioná el equipo comercial (vendedores) para asignarlos a leads.
             </div>
           </Link>
+          <Link
+            href="/admin/configuracion/modulos-menu"
+            className="rounded-2xl border bg-white p-4 hover:bg-slate-50 transition"
+          >
+            <div className="text-sm font-semibold text-slate-900">Módulos y menú</div>
+            <div className="mt-1 text-xs text-slate-600">
+              Estado del menú lateral (activo, en preparación, oculto), iconos y etiquetas.
+            </div>
+          </Link>
         </div>
 
         {/* Tabs */}

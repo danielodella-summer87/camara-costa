@@ -12,6 +12,11 @@ import {
   getLeadStageShortLabel,
   type DerivedLeadStage,
 } from "@/lib/crm/getLeadDerivedFlow";
+import {
+  countLeads87CommercialSummary,
+  commercialSummaryBucketForDerivedStage,
+  type Leads87CommercialSummaryBucket,
+} from "@/lib/crm/leads87CommercialSummary";
 
 type LeadOption = {
   id: string;
@@ -76,6 +81,13 @@ function getLeadFlowSnapshot(l: LeadOption): {
     progress: getLeadProgress(stage),
     label: getLeadStageShortLabel(stage),
   };
+}
+
+function commercialSummaryInputFromLead(l: LeadOption): {
+  lead: ReturnType<typeof toMacroLead>;
+  documents: LeadsOkDocuments | null;
+} {
+  return { lead: toMacroLead(l), documents: l.flow_documents ?? null };
 }
 
 const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
@@ -476,6 +488,14 @@ const PIPELINE_FILTER_OPTIONS = ["Todos", ...KANBAN_COLUMNS];
 
 const SALUD_URL_KEYS = ["bloqueado", "activo", "nuevo", "completo"] as const;
 
+const SEGMENTO_URL_KEYS = ["nuevas", "activas", "en_propuesta", "en_seguimiento"] as const;
+
+function parseSegmentoDrill(sp: URLSearchParams): Leads87CommercialSummaryBucket | null {
+  const s = sp.get("segmento");
+  if (!s || !(SEGMENTO_URL_KEYS as readonly string[]).includes(s)) return null;
+  return s as Leads87CommercialSummaryBucket;
+}
+
 function parseSaludDrill(sp: URLSearchParams): { tipo: SaludAccionTipo; scope: "global" | "vista" } | null {
   const s = sp.get("salud");
   if (!s || !(SALUD_URL_KEYS as readonly string[]).includes(s)) return null;
@@ -651,6 +671,11 @@ export default function Leads87Page() {
       if (drill.scope === "global") params.set("alcance", "global");
     }
 
+    const seg = parseSegmentoDrill(new URLSearchParams(searchParamsKey));
+    if (seg && !filtersChanged) {
+      params.set("segmento", seg);
+    }
+
     const currentSp = new URLSearchParams(searchParamsKey);
     if (!shouldNavigateQuery(params, currentSp)) return;
 
@@ -694,12 +719,21 @@ export default function Leads87Page() {
   }, [leads, selectedPipeline, searchText, comercialFilter, currentUserComercialId]);
 
   const saludDrill = useMemo(() => parseSaludDrill(searchParams), [searchParams]);
+  const segmentoDrill = useMemo(() => parseSegmentoDrill(searchParams), [searchParams]);
 
   const displayLeads = useMemo(() => {
-    if (!saludDrill) return filteredLeads;
-    const base = saludDrill.scope === "global" ? leads : filteredLeads;
-    return base.filter((l) => matchesSaludAccion(l, saludDrill.tipo));
-  }, [leads, filteredLeads, saludDrill]);
+    if (saludDrill) {
+      const base = saludDrill.scope === "global" ? leads : filteredLeads;
+      return base.filter((l) => matchesSaludAccion(l, saludDrill.tipo));
+    }
+    if (segmentoDrill) {
+      return filteredLeads.filter((l) => {
+        const stage = getLeadStage(toMacroLead(l), l.flow_documents ?? null);
+        return commercialSummaryBucketForDerivedStage(stage) === segmentoDrill;
+      });
+    }
+    return filteredLeads;
+  }, [leads, filteredLeads, saludDrill, segmentoDrill]);
 
   const handleSaludVerGrupo = (tipo: SaludAccionTipo, scope: "global" | "vista") => {
     setViewMode("listado");
@@ -710,6 +744,23 @@ export default function Leads87Page() {
     p.set("comercial", comercialParamForUrl(comercialFilter));
     p.set("salud", tipo);
     if (scope === "global") p.set("alcance", "global");
+    const currentSp = new URLSearchParams(searchParams.toString());
+    if (shouldNavigateQuery(p, currentSp)) {
+      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    }
+    requestAnimationFrame(() => {
+      document.getElementById("leads87-tabla")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const handleSegmentoVerGrupo = (bucket: Leads87CommercialSummaryBucket) => {
+    setViewMode("listado");
+    const p = new URLSearchParams();
+    p.set("view", "listado");
+    if (selectedPipeline !== "Todos") p.set("pipeline", selectedPipeline);
+    if (searchText.trim()) p.set("search", searchText.trim());
+    p.set("comercial", comercialParamForUrl(comercialFilter));
+    p.set("segmento", bucket);
     const currentSp = new URLSearchParams(searchParams.toString());
     if (shouldNavigateQuery(p, currentSp)) {
       router.replace(`${pathname}?${p.toString()}`, { scroll: false });
@@ -740,6 +791,13 @@ export default function Leads87Page() {
     completo: "completados",
   };
 
+  const segmentoDrillLabels: Record<Leads87CommercialSummaryBucket, string> = {
+    nuevas: "en etapa Lead (datos base / sin avanzar el flujo)",
+    activas: "en investigación, diagnóstico, estrategia o servicios",
+    en_propuesta: "en propuesta o presentación",
+    en_seguimiento: "en cierre o proceso completo",
+  };
+
   const comercialSelectOptions = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of comercialesCatalog) {
@@ -754,43 +812,16 @@ export default function Leads87Page() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
   }, [comercialesCatalog, leads]);
 
-  /** Métricas sobre el universo completo de leads cargados (sin filtros de vista). */
-  const globalMetrics = useMemo(() => {
-    let enPropuesta = 0;
-    let enSeguimiento = 0;
-    let nuevas = 0;
-    for (const l of leads) {
-      const n = normPipeline(l.pipeline);
-      if (n === "nuevo") nuevas++;
-      else if (n === "propuesta") enPropuesta++;
-      else if (n === "seguimiento") enSeguimiento++;
-    }
-    return {
-      activas: leads.length,
-      enPropuesta,
-      enSeguimiento,
-      nuevas,
-    };
-  }, [leads]);
+  /** Conteos por etapa derivada (getLeadStage), mismo criterio que columna «Etapa actual» del listado. */
+  const globalCommercialSummary = useMemo(
+    () => countLeads87CommercialSummary(leads.map(commercialSummaryInputFromLead)),
+    [leads],
+  );
 
-  /** Métricas sobre filteredLeads (pipeline, búsqueda y comercial). */
-  const summaryMetrics = useMemo(() => {
-    let enPropuesta = 0;
-    let enSeguimiento = 0;
-    let nuevas = 0;
-    for (const l of filteredLeads) {
-      const n = normPipeline(l.pipeline);
-      if (n === "nuevo") nuevas++;
-      else if (n === "propuesta") enPropuesta++;
-      else if (n === "seguimiento") enSeguimiento++;
-    }
-    return {
-      activas: filteredLeads.length,
-      enPropuesta,
-      enSeguimiento,
-      nuevas,
-    };
-  }, [filteredLeads]);
+  const filteredCommercialSummary = useMemo(
+    () => countLeads87CommercialSummary(filteredLeads.map(commercialSummaryInputFromLead)),
+    [filteredLeads],
+  );
 
   const globalSaludCounts = useMemo(() => computeSaludCounts(leads), [leads]);
   const filteredSaludCounts = useMemo(() => computeSaludCounts(filteredLeads), [filteredLeads]);
@@ -1016,20 +1047,20 @@ export default function Leads87Page() {
                 <p className="mb-1.5 shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-600">Métricas globales</p>
                 <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalCommercialSummary.nuevas}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.activas}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalCommercialSummary.activas}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enPropuesta}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalCommercialSummary.en_propuesta}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.enSeguimiento}</p>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalMetrics.nuevas}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-800">{loadingLeads ? "—" : globalCommercialSummary.en_seguimiento}</p>
                   </div>
                 </div>
                 <div className="min-h-0 flex flex-1 flex-col">
@@ -1048,20 +1079,20 @@ export default function Leads87Page() {
                 </p>
                 <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : filteredCommercialSummary.nuevas}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activas</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.activas}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : filteredCommercialSummary.activas}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En propuesta</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enPropuesta}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : filteredCommercialSummary.en_propuesta}</p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">En seguimiento</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.enSeguimiento}</p>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2.5">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Nuevas</p>
-                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : summaryMetrics.nuevas}</p>
+                    <p className="mt-0.5 text-xl font-semibold text-slate-700">{loadingLeads ? "—" : filteredCommercialSummary.en_seguimiento}</p>
                   </div>
                 </div>
                 <div className="min-h-0 flex flex-1 flex-col">
@@ -1101,6 +1132,47 @@ export default function Leads87Page() {
           Nuevo lead
         </Link>
       </div>
+
+      {/* Resumen por etapa derivada (misma lógica que «Etapa actual» / getLeadStage) */}
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {(
+          [
+            { key: "nuevas" as const, label: "Nuevas" },
+            { key: "activas" as const, label: "Activas" },
+            { key: "en_propuesta" as const, label: "En propuesta" },
+            { key: "en_seguimiento" as const, label: "En seguimiento" },
+          ] as const
+        ).map(({ key, label }) => {
+          const value =
+            key === "nuevas"
+              ? filteredCommercialSummary.nuevas
+              : key === "activas"
+                ? filteredCommercialSummary.activas
+                : key === "en_propuesta"
+                  ? filteredCommercialSummary.en_propuesta
+                  : filteredCommercialSummary.en_seguimiento;
+          const selected = segmentoDrill === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              disabled={loadingLeads || value === 0}
+              onClick={() => handleSegmentoVerGrupo(key)}
+              title="Ver en listado con este filtro de etapa"
+              className={`rounded-lg border bg-white p-3 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50/80 disabled:cursor-default disabled:opacity-60 disabled:hover:border-slate-200 disabled:hover:bg-white ${
+                selected ? "border-slate-800 ring-2 ring-slate-800/15" : "border-slate-200"
+              }`}
+            >
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
+              <p className="mt-1 text-xl font-semibold text-slate-800 tabular-nums">{loadingLeads ? "—" : value}</p>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Según etapa comercial derivada del flujo LEADS87 (no solo la columna del kanban). Total activos en cartera:{" "}
+        <span className="font-medium text-slate-700 tabular-nums">{loadingLeads ? "—" : filteredCommercialSummary.total}</span>.
+      </p>
 
       {/* Filtros */}
       <div className="mt-6 flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -1169,6 +1241,23 @@ export default function Leads87Page() {
             ) : (
               <span className="text-slate-500"> · según filtros actuales</span>
             )}
+          </span>
+          <button
+            type="button"
+            onClick={handleSaludVerTodos}
+            className="shrink-0 rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 ring-1 ring-slate-300 hover:bg-slate-50"
+          >
+            Ver todos
+          </button>
+        </div>
+      )}
+
+      {segmentoDrill && !saludDrill && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+          <span className="text-slate-700">
+            Filtrado por resumen comercial:{" "}
+            <strong className="font-semibold text-slate-900">{segmentoDrillLabels[segmentoDrill]}</strong>
+            <span className="text-slate-500"> · según filtros actuales</span>
           </span>
           <button
             type="button"

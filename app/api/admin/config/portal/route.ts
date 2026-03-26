@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { sanitizeSidebarModulesForPersist, type SidebarModulePersisted } from "@/lib/admin/adminSidebarModules";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ type PortalConfig = {
   logo_url?: string | null;
   label_member_singular?: string | null;
   label_member_plural?: string | null;
+  /** Overrides del menú lateral admin (`mergeAdminSidebarModules` en cliente). */
+  sidebar_modules?: SidebarModulePersisted[];
 };
 
 const DEFAULT_CONFIG: PortalConfig = {
@@ -140,6 +143,10 @@ export async function PATCH(req: NextRequest) {
       updates.label_member_plural = body.label_member_plural === "" || !body.label_member_plural.trim()
         ? DEFAULT_CONFIG.label_member_plural
         : body.label_member_plural.trim();
+    }
+
+    if (Array.isArray(body.sidebar_modules)) {
+      updates.sidebar_modules = sanitizeSidebarModulesForPersist(body.sidebar_modules);
     }
 
     // Obtener config actual para mergear
