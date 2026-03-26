@@ -11,6 +11,9 @@ import { BreadcrumbContext } from "@/app/admin/context/BreadcrumbContext";
 
 const SIDEBAR_STORAGE_KEY = "admin_sidebar_collapsed";
 
+/** Ruta fija del módulo; el texto visible sale de `label_member_plural` (tabla `config`, key `portal_config`). */
+const SOCIOS_ADMIN_HREF = "/admin/socios" as const;
+
 type NavItem = { label: string; href: string };
 type RoleKey = "admin" | "operador" | "comercial" | "viewer";
 
@@ -27,9 +30,8 @@ const NAV: NavItem[] = [
   { label: "Entidades", href: "/admin/empresas" },
   { label: "Oportunidades", href: "/admin/oportunidades" },
   { label: "LEADS87", href: "/admin/leads87" },
-  { label: "Leads", href: "/admin/leads" },
-  { label: "LeadsOk", href: "/admin/leadsok" },
-  { label: "Socios", href: "/admin/socios" },
+  /** `label` solo para otras entradas; esta fila usa siempre `clientePlural` ↔ API `label_member_plural`. */
+  { label: "socios", href: SOCIOS_ADMIN_HREF },
   { label: "Agenda", href: "/admin/agenda" },
   { label: "Reuniones", href: "/admin/reuniones" },
   { label: "Operaciones", href: "/admin/operaciones" },
@@ -54,7 +56,11 @@ function isActive(pathname: string | null, href: string) {
 }
 
 /** Partes del breadcrumb: [ "Admin", "Leads", "Nombre del lead" ]. */
-function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string | null): string[] {
+function getBreadcrumbParts(
+  pathname: string | null,
+  breadcrumbSegment: string | null,
+  clientePlural: string
+): string[] {
   if (!pathname || !pathname.startsWith("/admin")) return ["Admin", "Dashboard"];
 
   const segments = pathname.replace(/^\/admin\/?/, "").split("/").filter(Boolean);
@@ -78,7 +84,7 @@ function getBreadcrumbParts(pathname: string | null, breadcrumbSegment: string |
 
   const labelMap: Record<string, string> = {
     empresas: "Iniciativas",
-    socios: "Socios",
+    socios: clientePlural.trim() || "Socios",
     agenda: "Agenda",
     reuniones: "Reuniones",
     operaciones: "Operaciones",
@@ -194,8 +200,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   }, [pathname]);
 
   const breadcrumbParts = useMemo(
-    () => getBreadcrumbParts(pathname, breadcrumbSegment),
-    [pathname, breadcrumbSegment]
+    () => getBreadcrumbParts(pathname, breadcrumbSegment, clientePlural),
+    [pathname, breadcrumbSegment, clientePlural]
   );
 
   useEffect(() => {
@@ -235,7 +241,10 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <nav className="p-3 space-y-1">
             {filteredNav.map((item) => {
               const active = isActive(pathname, item.href);
-              const resolvedLabel = resolveUILabel(item.label as any, personalizacion);
+              const resolvedLabel =
+                item.href === SOCIOS_ADMIN_HREF
+                  ? clientePlural.trim() || "Socios"
+                  : resolveUILabel(item.label, personalizacion);
               return (
                 <Link
                   key={item.href}

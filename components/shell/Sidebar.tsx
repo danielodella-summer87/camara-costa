@@ -13,7 +13,6 @@ import {
   Settings as SettingsIcon,
   LayoutDashboard,
   Building2,
-  Target,
   BarChart3,
   CalendarDays,
   SlidersHorizontal,
@@ -105,7 +104,6 @@ export default function Sidebar() {
   const items: SidebarItem[] = [
     { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
     { label: "Iniciativas", href: "/admin/empresas", icon: Building2 },
-    { label: "Leads", href: "/admin/leads", icon: Target },
     { label: memberLabel, href: "/admin/socios", icon: Users },
     { label: "Agenda", href: "/admin/agenda", icon: Calendar },
     { label: "Reportes", href: "/admin/reportes", icon: BarChart3 },

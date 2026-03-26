@@ -50,8 +50,10 @@ export async function fetchLabels(): Promise<Labels> {
   try {
     const res = await fetch("/api/admin/config/portal", {
       cache: "no-store",
+      credentials: "same-origin",
       headers: { "Cache-Control": "no-store" },
     });
+    if (!res.ok) return DEFAULT_LABELS;
     const json = await res.json();
     return getLabels(json?.data);
   } catch {

@@ -232,8 +232,8 @@ export default function Leads87DetailPage() {
   const [presentationGenerationError, setPresentationGenerationError] = useState<string | null>(null);
   const [presentationCloseBusy, setPresentationCloseBusy] = useState(false);
   const [legacyRecoverBusy, setLegacyRecoverBusy] = useState(false);
-  const [legacyRecoverMessage, setLegacyRecoverMessage] = useState<string | null>(null);
-  const [legacyRecoverFailures, setLegacyRecoverFailures] = useState<string[]>([]);
+  /** Mensaje amigable si el último intento de archivado dejó pendientes reales (sin detalle técnico). */
+  const [legacyRecoverUserError, setLegacyRecoverUserError] = useState<string | null>(null);
   const [editingFicha, setEditingFicha] = useState(false);
   const [savingFicha, setSavingFicha] = useState(false);
   const [fichaError, setFichaError] = useState<string | null>(null);
@@ -399,8 +399,7 @@ export default function Leads87DetailPage() {
   }, [id]);
 
   useEffect(() => {
-    setLegacyRecoverMessage(null);
-    setLegacyRecoverFailures([]);
+    setLegacyRecoverUserError(null);
   }, [id]);
 
   useEffect(() => {
@@ -610,27 +609,22 @@ export default function Leads87DetailPage() {
   const handleRecoverLegacyGammaDocs = useCallback(async () => {
     if (!id?.trim()) return;
     setLegacyRecoverBusy(true);
-    setLegacyRecoverMessage(null);
-    setLegacyRecoverFailures([]);
+    setLegacyRecoverUserError(null);
     try {
       const json = await postRecoverLegacyDocuments(id.trim());
       if (!json.ok) {
-        setLegacyRecoverMessage(json.error ?? "No se pudo ejecutar la recuperación.");
+        setLegacyRecoverUserError("No se pudo iniciar el archivado. Reintentá en unos segundos.");
         return;
       }
       const failed = (json.results ?? []).filter((r) => r.status === "failed");
-      const archived = (json.results ?? []).filter((r) => r.status === "archived");
-      const lines = failed.map((f) => {
-        const hint = f.suggestRegenerate ? " Regenerá este documento desde el flujo." : "";
-        return `${f.type}: ${f.error ?? "Error desconocido"}.${hint}`;
-      });
-      setLegacyRecoverFailures(lines);
-      setLegacyRecoverMessage(
-        `Archivados: ${json.summary?.archived ?? archived.length}. Omitidos (ya estables o sin fila): ${json.summary?.skipped ?? 0}. Fallidos: ${json.summary?.failed ?? failed.length}.`
-      );
       await refetchLead();
-    } catch (e) {
-      setLegacyRecoverMessage(e instanceof Error ? e.message : "Error de red al recuperar documentos.");
+      if (failed.length > 0) {
+        setLegacyRecoverUserError(
+          "Algunos documentos no se archivaron (enlace expirado o error de red). Reintentá o volvé a generarlos desde el paso correspondiente."
+        );
+      }
+    } catch {
+      setLegacyRecoverUserError("No se pudo conectar para archivar. Revisá tu conexión e intentá de nuevo.");
     } finally {
       setLegacyRecoverBusy(false);
     }
@@ -1120,7 +1114,7 @@ export default function Leads87DetailPage() {
   const diagnosticoCompleto = microSteps.some((s) => s.id === 2 && s.status === "completed");
   const actionByStepId: Record<number, string> = {
     1: "Generar investigación comercial",
-    2: "Generar diagnóstico comercial",
+    2: "Generar diagnóstico comercial (3/3)",
     3: "Avanzar a estrategia comercial",
     4: "Definir propuesta de servicios",
     5: "Crear propuesta",
@@ -1187,8 +1181,14 @@ export default function Leads87DetailPage() {
     commercialState === "proposal_pending_review" &&
     Boolean(proposalDocUrl);
 
+  const needsLegacyArchive = !loadingLead && legacyGammaTransientTypes.length > 0;
+
+  useEffect(() => {
+    if (!needsLegacyArchive) setLegacyRecoverUserError(null);
+  }, [needsLegacyArchive]);
+
   const nextActionLabel = useMemo(() => {
-    if (hasBlocking && !shouldForceFlowProgress) return "Completar datos del lead";
+    if (hasBlocking && !shouldForceFlowProgress) return "Revisar información del lead (2/3)";
     if (ctaMicroStepId == null) return isProcessComplete ? "Proceso completo" : "—";
     if (ctaMicroStepId === 5 || ctaMicroStepId === 6) {
       if (commercialState === "closing") {
@@ -1202,9 +1202,10 @@ export default function Leads87DetailPage() {
     return actionByStepId[ctaMicroStepId] ?? "—";
   }, [hasBlocking, shouldForceFlowProgress, ctaMicroStepId, isProcessComplete, commercialState]);
 
-  const heroCtaLabel = hasBlocking && !shouldForceFlowProgress ? "Completar datos del lead" : isProcessComplete ? "Proceso completo" : nextActionLabel;
+  const heroCtaLabel = hasBlocking && !shouldForceFlowProgress ? "Revisar información del lead (2/3)" : isProcessComplete ? "Proceso completo" : nextActionLabel;
 
   const heroPrimaryLabel = useMemo(() => {
+    if (needsLegacyArchive) return "Archivar documentos (1/3)";
     if (shouldPromoteServicesConfirmCta) return "Confirmar estructura de propuesta";
     if (shouldPromoteProposalCreateCta) return "Generar propuesta comercial";
     if (shouldPromotePresentationGenerateCta) return "Generar presentación comercial";
@@ -1222,6 +1223,7 @@ export default function Leads87DetailPage() {
     heroPresentationCloseNavigateOnly,
     softenHeroPresentationCloseCta,
     softenHeroProposalReviewCta,
+    needsLegacyArchive,
     ctaMicroStepId,
     commercialState,
     heroCtaLabel,
@@ -1235,7 +1237,9 @@ export default function Leads87DetailPage() {
 
   /** CTA único del hero: ficha si bloqueado; si no, primer paso micro incompleto según etapa macro activa. */
   const handleHeroCta = useCallback(() => {
-    if (hasBlocking && !shouldForceFlowProgress) {
+    if (needsLegacyArchive) {
+      void handleRecoverLegacyGammaDocs();
+    } else if (hasBlocking && !shouldForceFlowProgress) {
       goToFichaAndEdit();
     } else if (ctaMicroStepId === 3) {
       void moveToServicesFromHero();
@@ -1264,6 +1268,8 @@ export default function Leads87DetailPage() {
       handleStepAction(ctaMicroStepId);
     }
   }, [
+    needsLegacyArchive,
+    handleRecoverLegacyGammaDocs,
     hasBlocking,
     shouldForceFlowProgress,
     ctaMicroStepId,
@@ -1644,32 +1650,44 @@ export default function Leads87DetailPage() {
         )}
       </div>
 
-      {!loadingLead && legacyGammaTransientTypes.length > 0 ? (
-        <div className="mt-6 rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-3 text-sm text-amber-950">
-          <p className="font-semibold">
-            Hay documentos generados previamente que necesitan ser archivados para continuar
-          </p>
-          <p className="mt-1 text-xs text-amber-900">
-            Tipos con enlace Gamma efímero (no válidos como oficiales): {legacyGammaTransientTypes.join(", ")}. El sistema intenta
-            archivarlos automáticamente al abrir esta vista (una vez por pestaña); si falla el enlace, usá el botón para reintentar o
-            regenerá el documento desde el flujo.
-          </p>
-          {legacyRecoverMessage ? <p className="mt-2 text-xs text-amber-950">{legacyRecoverMessage}</p> : null}
-          {legacyRecoverFailures.length > 0 ? (
-            <ul className="mt-2 list-inside list-disc text-xs text-red-900">
-              {legacyRecoverFailures.map((line, i) => (
-                <li key={i}>{line}</li>
-              ))}
-            </ul>
-          ) : null}
-          <button
-            type="button"
-            disabled={legacyRecoverBusy}
-            onClick={() => void handleRecoverLegacyGammaDocs()}
-            className="mt-3 rounded-lg bg-amber-800 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-900 disabled:opacity-50"
-          >
-            {legacyRecoverBusy ? "Archivando…" : "Reintentar archivado"}
-          </button>
+      {!loadingLead && (needsLegacyArchive || legacyRecoverBusy || legacyRecoverUserError) ? (
+        <div
+          id="leads87-archive-docs-status"
+          className={`mt-6 rounded-xl border px-4 py-3 text-sm ${
+            legacyRecoverBusy
+              ? "border-blue-200 bg-blue-50/90 text-blue-950"
+              : legacyRecoverUserError
+                ? "border-amber-200 bg-amber-50/90 text-amber-950"
+                : "border-amber-200 bg-amber-50/90 text-amber-950"
+          }`}
+        >
+          {legacyRecoverBusy ? (
+            <>
+              <p className="font-semibold">Archivando documentos…</p>
+              <p className="mt-1 text-xs opacity-90">Guardando copias estables en el CRM. Esto puede tardar un momento.</p>
+            </>
+          ) : legacyRecoverUserError ? (
+            <>
+              <p className="font-semibold">Archivado incompleto</p>
+              <p className="mt-1 text-xs opacity-90">{legacyRecoverUserError}</p>
+              <button
+                type="button"
+                disabled={legacyRecoverBusy}
+                onClick={() => void handleRecoverLegacyGammaDocs()}
+                className="mt-3 rounded-lg border-2 border-amber-400 bg-white px-3 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Reintentar archivado (1/3)
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Hay documentos pendientes de archivar para continuar</p>
+              <p className="mt-1 text-xs opacity-90">
+                El paso <strong>1/3</strong> es archivar enlaces temporales en el CRM. Usá el botón verde de{" "}
+                <strong>Siguiente acción</strong>: «Archivar documentos (1/3)».
+              </p>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -1710,7 +1728,8 @@ export default function Leads87DetailPage() {
                 (shouldPromoteProposalCreateCta && proposalCreateBusy) ||
                 (shouldPromotePresentationGenerateCta && presentationGenerationBusy) ||
                 (isPresentationReadyForClose && presentationCloseBusy) ||
-                (ctaMicroStepId === 5 && proposalReviewPatchBusy)
+                (ctaMicroStepId === 5 && proposalReviewPatchBusy) ||
+                (needsLegacyArchive && legacyRecoverBusy)
               }
               onClick={handleHeroCta}
               className={`w-full rounded-xl px-6 py-4 text-lg font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed ${
@@ -1721,7 +1740,9 @@ export default function Leads87DetailPage() {
                     : "bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500"
               }`}
             >
-              {heroStageUpdating && ctaMicroStepId === 3
+              {needsLegacyArchive && legacyRecoverBusy
+                ? "Archivando documentos…"
+                : heroStageUpdating && ctaMicroStepId === 3
                 ? "Actualizando etapa…"
                 : shouldPromoteProposalCreateCta && proposalCreateBusy
                   ? "Creando propuesta…"

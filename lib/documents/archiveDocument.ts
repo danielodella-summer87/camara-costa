@@ -4,7 +4,11 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { upsertLeadDocumentUrl, type LeadDocumentType } from "@/lib/leads/leadDocuments";
+import {
+  getStableArchivedDocumentUrlForType,
+  upsertLeadDocumentUrl,
+  type LeadDocumentType,
+} from "@/lib/leads/leadDocuments";
 import { isTransientGammaExportPdfUrl } from "@/lib/leads/presentationUtils";
 
 export const DOCUMENTS_BUCKET = "documents";
@@ -47,6 +51,16 @@ export async function archiveGammaExportPdfToDocuments(params: {
   if (!sourceUrlRaw || !isTransientGammaExportPdfUrl(sourceUrlRaw)) {
     console.warn("[archiveDocument] URL no es export PDF Gamma permitido");
     return { ok: false, error: "La URL no es un export PDF efímero de Gamma." };
+  }
+
+  if (params.persist) {
+    const already = await getStableArchivedDocumentUrlForType(params.sb, params.leadId, params.type);
+    if (already) {
+      console.info("[archiveDocument] ya archivado en CRM; no se descarga ni inserta de nuevo", {
+        type: params.type,
+      });
+      return { ok: true, publicUrl: already, storagePath: "" };
+    }
   }
 
   const controller = new AbortController();

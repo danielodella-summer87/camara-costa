@@ -45,11 +45,15 @@ export type LeadDocumentVersionSummary = {
   status: string | null;
 };
 
-function isOfficialForType(type: LeadDocumentType, url: string): boolean {
+export function isOfficialUrlForLeadDocumentType(type: LeadDocumentType, url: string): boolean {
   if (!url.trim()) return false;
   if (isTransientGammaExportPdfUrl(url)) return false;
   if (type === "presentation") return isOfficialPresentationDocumentUrl(url);
   return isOfficialCrmPersistedDocumentUrl(url);
+}
+
+function isOfficialForType(type: LeadDocumentType, url: string): boolean {
+  return isOfficialUrlForLeadDocumentType(type, url);
 }
 
 /** URL que puede abrirse como documento oficial CRM (no Gamma efímera). */
@@ -295,6 +299,22 @@ export async function getLeadDocumentRows(
   return out;
 }
 
+/** URL ya persistida y estable para el tipo (evita re-archivado y duplicados lógicos). */
+export async function getStableArchivedDocumentUrlForType(
+  sb: SupabaseClient,
+  leadId: string,
+  type: LeadDocumentType
+): Promise<string | null> {
+  const rows = await getLeadDocumentRows(sb, leadId.trim());
+  const r = rows.find((x) => x.type === type);
+  if (!r) return null;
+  const f = r.file_url?.trim() ?? "";
+  const u = r.url?.trim() ?? "";
+  if (f && isOfficialUrlForLeadDocumentType(type, f)) return f;
+  if (u && isOfficialUrlForLeadDocumentType(type, u)) return u;
+  return null;
+}
+
 function formatSupabaseError(prefix: string, err: PostgrestError): string {
   const parts = [err.message, err.details, err.hint].filter(Boolean);
   const base = parts.join(" — ");
@@ -406,6 +426,34 @@ export async function upsertLeadDocumentUrl(
     has_file_url: Boolean(inferred.file_url),
   });
 
+  const stableExisting = await getStableArchivedDocumentUrlForType(sb, leadId.trim(), type);
+  if (stableExisting && stableExisting === trimmedUrl) {
+    console.info("[leadDocuments] upsert omitido: URL vigente ya coincide (idempotente)", { type });
+    const leadPatch: Record<string, unknown> = {};
+    const mirror = mirrorUrlForLeadsTable(type, trimmedUrl, meta);
+    if (type === "proposal" && mirror) {
+      leadPatch.proposal_doc_url = mirror;
+      leadPatch.proposal_reviewed = false;
+    } else if (type === "presentation" && mirror) {
+      leadPatch.presentation_doc_url = mirror;
+    }
+    if (Object.keys(leadPatch).length > 0) {
+      const { data: leadRows, error: leadErr } = await sb
+        .from("leads")
+        .update(leadPatch)
+        .eq("id", leadId.trim())
+        .select("id");
+      if (leadErr) return { error: formatSupabaseError("leads", leadErr) };
+      if (!leadRows?.length) {
+        return {
+          error:
+            "leads: ninguna fila actualizada (¿lead_id inexistente o sin permiso?). Verificá que el UUID exista en public.leads.",
+        };
+      }
+    }
+    return { error: null };
+  }
+
   const { error: docErr } = await sb.rpc("insert_lead_document_version", {
     p_lead_id: leadId.trim(),
     p_type: type,
@@ -421,6 +469,27 @@ export async function upsertLeadDocumentUrl(
   });
 
   if (docErr) {
+    const dup =
+      docErr.code === "23505" ||
+      (docErr.message ?? "").toLowerCase().includes("duplicate") ||
+      (docErr.message ?? "").includes("lead_documents_lead_id_type_key");
+    if (dup) {
+      const afterStable = await getStableArchivedDocumentUrlForType(sb, leadId.trim(), type);
+      if (afterStable) {
+        console.info("[leadDocuments] duplicado en DB tratado como ya archivado (sin error al usuario)", { type });
+        const leadPatch: Record<string, unknown> = {};
+        const mirror = mirrorUrlForLeadsTable(type, afterStable, meta);
+        if (type === "proposal" && mirror) {
+          leadPatch.proposal_doc_url = mirror;
+        } else if (type === "presentation" && mirror) {
+          leadPatch.presentation_doc_url = mirror;
+        }
+        if (Object.keys(leadPatch).length > 0) {
+          await sb.from("leads").update(leadPatch).eq("id", leadId.trim());
+        }
+        return { error: null };
+      }
+    }
     console.error("[leadDocuments] insert_lead_document_version ← error", {
       message: docErr.message,
       details: docErr.details,

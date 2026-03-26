@@ -5,7 +5,11 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getLeadDocumentRows, type LeadDocumentType } from "@/lib/leads/leadDocuments";
+import {
+  getLeadDocumentRows,
+  getStableArchivedDocumentUrlForType,
+  type LeadDocumentType,
+} from "@/lib/leads/leadDocuments";
 import { archiveGammaExportPdfToDocuments } from "@/lib/leads/archiveGammaExportToDocuments";
 import { isTransientGammaExportPdfUrl } from "@/lib/leads/presentationUtils";
 import { isProposalMarkdownDataUrl } from "@/lib/leads/gammaDocumentPolicy";
@@ -53,6 +57,18 @@ export async function recoverLegacyGammaDocumentsForLead(
     if (!row) {
       console.info("[recoverLegacyGammaDocuments] omitido sin fila", { type });
       results.push({ type, status: "skipped_no_row" });
+      continue;
+    }
+
+    const stableAlready = await getStableArchivedDocumentUrlForType(sb, trimmedId, type);
+    if (stableAlready) {
+      console.info("[recoverLegacyGammaDocuments] omitido: ya archivado (sin insert duplicado)", { type });
+      results.push({
+        type,
+        status: "skipped_stable",
+        previousUrl: row.url,
+        publicUrl: stableAlready,
+      });
       continue;
     }
 
