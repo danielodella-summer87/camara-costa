@@ -75,8 +75,12 @@ export function mergeDocumentsForFlow(
 }
 
 /**
- * Snapshot único para listado y widgets: misma macro que el detalle LEADS87, sin recalcular heurísticas aparte.
- * Si todas las etapas macro están `completed` → 100% y etapa `completo` (post-cierre no baja el %).
+ * Snapshot único para listado y widgets: misma macro que el detalle LEADS87.
+ *
+ * - **Etapa / label**: siempre la macro con `status === "active"` (mismo criterio que el stepper del detalle).
+ *   No se reemplaza por «Proceso completo» solo porque el % llegue a 100 (p. ej. etapa Cierre = 100% pero sigue siendo «Cierre»).
+ * - **% avance**: deriva del `DerivedLeadStage` de esa etapa activa, no al revés.
+ * - **isFlowCompleted**: verdadero solo si todas las filas macro están `completed` (caso raro; no fuerza etiqueta «Proceso completo» en listados).
  */
 export function getLeadMacroFlowDisplay(
   lead: LeadForLeadsOkMacro | null,
@@ -99,21 +103,23 @@ export function getLeadMacroFlowDisplay(
   const macro = getLeadsOkMacroFlow(lead, merged);
   const isFlowCompleted = macro.length > 0 && macro.every((s) => s.status === "completed");
 
+  const activeIdx = macro.findIndex((s) => s.status === "active");
+  const activeStep = activeIdx >= 0 ? macro[activeIdx] : null;
+
   let stage: DerivedLeadStage;
   if (isFlowCompleted) {
-    stage = "completo";
+    const last = macro[macro.length - 1];
+    const id = last?.id ?? 8;
+    stage = MACRO_ID_TO_STAGE[id] ?? "cierre";
+  } else if (activeStep) {
+    const id = activeStep.id ?? 1;
+    stage = MACRO_ID_TO_STAGE[id] ?? "lead";
   } else {
-    const activeIdx = macro.findIndex((s) => s.status === "active");
-    if (activeIdx < 0) {
-      stage = "lead";
-    } else {
-      const id = macro[activeIdx]?.id ?? 1;
-      stage = MACRO_ID_TO_STAGE[id] ?? "lead";
-    }
+    stage = "lead";
   }
 
-  const progress = isFlowCompleted ? 100 : getLeadProgress(stage);
-  const label = isFlowCompleted ? DERIVED_LEAD_STAGE_LABEL_ES.completo : getLeadStageShortLabel(stage);
+  const progress = getLeadProgress(stage);
+  const label = getLeadStageShortLabel(stage);
 
   return { stage, progress, label, isFlowCompleted };
 }

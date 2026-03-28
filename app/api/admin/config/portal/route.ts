@@ -28,6 +28,11 @@ type PortalConfig = {
   label_member_plural?: string | null;
   /** Overrides del menú lateral admin (`mergeAdminSidebarModules` en cliente). */
   sidebar_modules?: SidebarModulePersisted[];
+  /**
+   * Home opcional al entrar a `/admin` (debe coincidir con un href de menú y módulo `activo`).
+   * Si falta o el módulo no está activo, aplica la resolución por defecto en `resolveAdminLandingPath`.
+   */
+  admin_landing_path?: string | null;
 };
 
 const DEFAULT_CONFIG: PortalConfig = {
@@ -147,6 +152,17 @@ export async function PATCH(req: NextRequest) {
 
     if (Array.isArray(body.sidebar_modules)) {
       updates.sidebar_modules = sanitizeSidebarModulesForPersist(body.sidebar_modules);
+    }
+
+    if (body.admin_landing_path === null) {
+      updates.admin_landing_path = null;
+    } else if (typeof body.admin_landing_path === "string") {
+      const t = body.admin_landing_path.trim();
+      if (!t) {
+        updates.admin_landing_path = null;
+      } else if (t.startsWith("/admin") && !t.includes("..") && t.length < 240) {
+        updates.admin_landing_path = t.split("?")[0] ?? t;
+      }
     }
 
     // Obtener config actual para mergear

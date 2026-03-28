@@ -12,11 +12,7 @@ import {
   commercialSummaryBucketForDerivedStage,
   type Leads87CommercialSummaryBucket,
 } from "@/lib/crm/leads87CommercialSummary";
-import {
-  calcularEstadoReal,
-  getLeadEtapaActual,
-  isLeadActive,
-} from "@/lib/leads/leadStatusPolicy";
+import { calcularEstadoReal, isLeadActive } from "@/lib/leads/leadStatusPolicy";
 
 type LeadOption = {
   id: string;
@@ -128,23 +124,37 @@ const NORM_TO_KANBAN_COLUMN: Record<string, string> = {
   seguimiento: "Seguimiento",
 };
 
-/** Salud del lead: texto breve (score_categoria); sin usar % de avance del flujo LEADS87. */
+/**
+ * Salud del listado: misma fuente que la columna «Etapa actual» (`getLeadFlowSnapshot` / macro LEADS87).
+ * No usa pipeline CRM ni score_categoria para evitar “Nuevo” con etapa macro ya avanzada (p. ej. Diagnóstico).
+ */
 function getLeadSalud(l: LeadOption): { label: string; status: "ok" | "medio" | "bajo" | "nuevo" } {
-  if (l.score_categoria && hasStr(l.score_categoria)) {
-    const c = (l.score_categoria as string).toLowerCase();
-    if (c.includes("listo") || c.includes("alto")) return { label: "Listo", status: "ok" };
-    if (c.includes("desarrollo") || c.includes("medio")) return { label: "En desarrollo", status: "medio" };
-    if (c.includes("frío") || c.includes("bajo")) return { label: "Frío", status: "bajo" };
-  }
-  const cierre = calcularEstadoReal(l);
-  if (cierre === "Cerrado") return { label: "Ganado", status: "ok" };
-  if (cierre === "Perdido") return { label: "Perdido", status: "bajo" };
   const hasNombreOrEmpresa = hasStr(l.empresas?.nombre) || hasStr(l.nombre);
   const hasAnyContact = hasStr(l.contacto) || hasStr(l.telefono) || hasStr(l.email);
   if (!hasNombreOrEmpresa || !hasAnyContact) return { label: "Bloqueado", status: "bajo" };
-  const p = normPipeline(l.pipeline);
-  if (!p || p === "nuevo") return { label: "Nuevo", status: "nuevo" };
-  return { label: "En curso", status: "medio" };
+
+  const cierre = calcularEstadoReal(l);
+  if (cierre === "Cerrado") return { label: "Ganado", status: "ok" };
+  if (cierre === "Perdido") return { label: "Perdido", status: "bajo" };
+
+  const { stage } = getLeadFlowSnapshot(l);
+  switch (stage) {
+    case "lead":
+    case "investigacion":
+      return { label: "Nuevo", status: "nuevo" };
+    case "diagnostico":
+    case "estrategia":
+    case "servicios":
+      return { label: "En curso", status: "medio" };
+    case "propuesta":
+    case "presentacion":
+      return { label: "Avanzado", status: "medio" };
+    case "cierre":
+    case "completo":
+      return { label: "Completo", status: "ok" };
+    default:
+      return { label: "Nuevo", status: "nuevo" };
+  }
 }
 
 /**
@@ -162,8 +172,8 @@ function getLeadEstadoVisual(l: LeadOption): LeadProcesoVisual {
   if (cierre === "Cerrado") return "cerrado_ganado";
   if (cierre === "Perdido") return "cerrado_perdido";
 
-  const p = normPipeline(l.pipeline);
-  if (!p || p === "nuevo") return "nuevo";
+  const { stage } = getLeadFlowSnapshot(l);
+  if (stage === "lead" || stage === "investigacion") return "nuevo";
   return "en_curso";
 }
 
@@ -893,7 +903,7 @@ export default function Leads87Page() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
   }, [comercialesCatalog, leads]);
 
-  /** Conteos por etapa derivada del flujo LEADS87 (getLeadStage); la columna «Etapa actual» del listado usa `etapa_actual` / pipeline. */
+  /** Conteos por etapa derivada del flujo LEADS87 (getLeadStage); la columna «Etapa actual» usa el mismo snapshot macro que la ficha (getLeadMacroFlowDisplay → label). */
   const globalCommercialSummary = useMemo(
     () => countLeads87CommercialSummary(leads.map(commercialSummaryInputFromLead)),
     [leads],
@@ -1379,8 +1389,7 @@ export default function Leads87Page() {
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
                     {displayLeads.map((l) => {
-                      const { progress } = getLeadFlowSnapshot(l);
-                      const etapa = getLeadEtapaActual(l);
+                      const { progress, label: etapa } = getLeadFlowSnapshot(l);
                       const salud = getLeadSalud(l);
                       const proceso = getLeadEstadoVisual(l);
                       const estadoComercial = calcularEstadoReal(l);
@@ -1503,8 +1512,7 @@ export default function Leads87Page() {
                         </div>
                         <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                           {columnLeads.map((l) => {
-                            const { progress } = getLeadFlowSnapshot(l);
-                            const etapa = getLeadEtapaActual(l);
+                            const { progress, label: etapa } = getLeadFlowSnapshot(l);
                             const salud = getLeadSalud(l);
                             const saludBadgeClass =
                               salud.status === "ok"
@@ -1557,8 +1565,7 @@ export default function Leads87Page() {
                       </div>
                       <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                         {(leadsByColumn["Otros"] ?? []).map((l) => {
-                          const { progress } = getLeadFlowSnapshot(l);
-                          const etapa = getLeadEtapaActual(l);
+                          const { progress, label: etapa } = getLeadFlowSnapshot(l);
                           const salud = getLeadSalud(l);
                           const saludBadgeClass =
                             salud.status === "ok"
