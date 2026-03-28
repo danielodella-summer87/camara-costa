@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import type { LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
 import type { CommercialStepState } from "@/lib/crm/getCommercialStepState";
 import {
@@ -45,8 +46,11 @@ export type Leads87AdvancedWorkspaceProps = {
   presentationGammaUrl: string | null;
   presentationPdfUrl: string | null;
   commercialState: CommercialStepState;
+  /** Requerido para habilitar estructura de servicios (Paso 4). */
+  strategyApproved?: boolean;
+  /** Texto derivado de estrategia confirmada o borrador para sugerencias de servicios. */
+  strategyContextText?: string;
   onStructureConfirmed?: () => void;
-  onRegisterConfirmAction?: (action: (() => Promise<void>) | null) => void;
   onConfirmReadinessChange?: (ready: boolean, busy: boolean) => void;
   onProposalDocumentCreated?: () => void;
   onRegisterProposalCreateAction?: (action: (() => Promise<void>) | null) => void;
@@ -63,6 +67,19 @@ export type Leads87AdvancedWorkspaceProps = {
   onGeneratePresentation?: () => void | Promise<void>;
   onOpenPresentation?: () => void;
   onAdvanceToClose?: () => void | Promise<void>;
+  onGoToClosingActions?: () => void;
+};
+
+type LeadServiceForAssistant = {
+  id: string;
+  service_id: string;
+  codigo: string | null;
+  nombre: string | null;
+  mes: number;
+  precio: number | null;
+  moneda: string | null;
+  alcance_editado: string | null;
+  observaciones: string | null;
 };
 
 function docActionRow(label: string, url: string | null | undefined, opts?: { secondary?: boolean }) {
@@ -83,7 +100,7 @@ function docActionRow(label: string, url: string | null | undefined, opts?: { se
         rel="noopener noreferrer"
         className="rounded-lg border-2 border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
       >
-        {secondary ? "Abrir en Gamma (externo)" : pdf ? "Ver / descargar PDF (CRM)" : "Abrir documento"}
+        {secondary ? "Abrir en Gamma" : pdf ? "Ver PDF" : "Abrir documento"}
       </a>
     </div>
   );
@@ -100,8 +117,9 @@ export function Leads87AdvancedWorkspace({
   presentationGammaUrl,
   presentationPdfUrl,
   commercialState,
+  strategyApproved = false,
+  strategyContextText = "",
   onStructureConfirmed,
-  onRegisterConfirmAction,
   onConfirmReadinessChange,
   onProposalDocumentCreated,
   onRegisterProposalCreateAction,
@@ -118,7 +136,13 @@ export function Leads87AdvancedWorkspace({
   onGeneratePresentation,
   onOpenPresentation,
   onAdvanceToClose,
+  onGoToClosingActions,
 }: Leads87AdvancedWorkspaceProps) {
+  const [closingGuideOpen, setClosingGuideOpen] = useState(false);
+  const [closingGuideBusy, setClosingGuideBusy] = useState(false);
+  const [closingGuideError, setClosingGuideError] = useState<string | null>(null);
+  const [closingGuideRaw, setClosingGuideRaw] = useState<string | null>(null);
+
   const proposalUrl = documents?.proposal?.trim();
   const presentationResolved = resolvePresentationResource(
     documents as Parameters<typeof resolvePresentationResource>[0],
@@ -128,14 +152,35 @@ export function Leads87AdvancedWorkspace({
   const structureConfirmed = Boolean(proposalConfirmedAt?.trim());
   const step6 = step6Badge(commercialState);
 
+  const closingGuideStructured = useMemo(() => {
+    const text = String(closingGuideRaw || "").trim();
+    const take = (titles: string[]) => {
+      const escaped = titles.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+      const re = new RegExp(
+        `(?:^|\\n)\\s*(?:\\*\\*)?(${escaped})(?:\\*\\*)?\\s*[:\\-]?\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:\\*\\*)?(?:Apertura de reunión|Presentación de propuesta|Objeciones probables|Respuestas sugeridas|Cierre recomendado)(?:\\*\\*)?\\s*[:\\-]?|$)`,
+        "i"
+      );
+      const m = text.match(re);
+      return m?.[2]?.trim() || "";
+    };
+    return {
+      apertura: take(["Apertura de reunión", "Apertura"]),
+      presentacion: take(["Presentación de propuesta", "Presentación"]),
+      objeciones: take(["Objeciones probables", "Objeciones"]),
+      respuestas: take(["Respuestas sugeridas", "Respuestas"]),
+      cierre: take(["Cierre recomendado", "Cierre"]),
+    };
+  }, [closingGuideRaw]);
+
   if (step === 4) {
     return (
       <Leads87ServicesWorkspace
         leadId={leadId}
         aiReport={aiReport ?? null}
+        strategyApproved={strategyApproved}
+        strategyContextText={strategyContextText}
         proposalConfirmedAt={proposalConfirmedAt}
         onStructureConfirmed={onStructureConfirmed}
-        onRegisterConfirmAction={onRegisterConfirmAction}
         onConfirmReadinessChange={onConfirmReadinessChange}
       />
     );
@@ -147,6 +192,7 @@ export function Leads87AdvancedWorkspace({
         leadId={leadId}
         leadDisplayName={leadDisplayName}
         proposalUrl={proposalUrl}
+        commercialStrategyApproved={strategyApproved}
         structureConfirmed={structureConfirmed}
         onDocumentCreated={onProposalDocumentCreated ?? (() => {})}
         onRegisterCreateAction={onRegisterProposalCreateAction}
@@ -182,6 +228,83 @@ export function Leads87AdvancedWorkspace({
   const showEmptyOnboarding = !hasStableArchivedOutput && !hasGamma && !hasTemporaryPdf;
   const isGeneratingPresentation = presentationGenerationStatus === "generating" || presentationGenerateBusy;
   const canGeneratePresentation = commercialState === "ready_for_presentation";
+
+  async function resolveModoEasyProfileId(): Promise<string> {
+    const res = await fetch("/api/admin/ia/profiles", { cache: "no-store" });
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: Array<{ id: string; name?: string }>;
+      error?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json?.error ?? "No se pudo cargar perfiles IA.");
+    }
+    const rows = Array.isArray(json?.data) ? json.data : [];
+    const modeasy = rows.find((p) => String(p?.name || "").toLowerCase().includes("modo easy"));
+    if (!modeasy?.id) {
+      throw new Error("No se encontró el perfil IA 'Agencia de Marketing / MODO EASY'.");
+    }
+    return modeasy.id;
+  }
+
+  function extractTab(report: string, tabId: string): string {
+    const re = new RegExp(`###\\s+TAB:\\s*${tabId}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+TAB:|$)`, "i");
+    const m = String(report || "").match(re);
+    return m?.[1]?.trim() || "";
+  }
+
+  async function generateClosingGuide(): Promise<void> {
+    try {
+      setClosingGuideBusy(true);
+      setClosingGuideError(null);
+      const profileId = await resolveModoEasyProfileId();
+      const svcRes = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}/services`, { cache: "no-store" });
+      const svcJson = (await svcRes.json().catch(() => ({}))) as { services?: LeadServiceForAssistant[]; error?: string };
+      const services = Array.isArray(svcJson?.services) ? svcJson.services : [];
+      const runtimeContext = [
+        "Asistente de cierre comercial en vivo (Paso 6).",
+        `Servicios seleccionados (${services.length}):`,
+        ...services.slice(0, 12).map((s, idx) => `- ${idx + 1}) ${s.nombre || s.codigo || s.service_id} | Mes ${s.mes} | ${s.moneda || ""} ${s.precio ?? "—"} | Alcance: ${s.alcance_editado || "—"}`),
+        "",
+        `Propuesta generada URL: ${proposalUrl || "no disponible"}`,
+        "",
+        "Insights del diagnóstico (extracto):",
+        (aiReport || "").slice(0, 1800) || "No hay diagnóstico disponible.",
+        "",
+        "Formato obligatorio en 5 bloques exactos:",
+        "1) Apertura de reunión",
+        "2) Presentación de propuesta",
+        "3) Objeciones probables",
+        "4) Respuestas sugeridas",
+        "5) Cierre recomendado",
+      ].join("\n");
+
+      const res = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}/ai-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+        body: JSON.stringify({
+          profile_id: profileId,
+          force_regenerate: true,
+          only_module: "cierre_de_venta",
+          runtime_context: runtimeContext,
+        }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        data?: { report?: string; ai_report?: string };
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo generar la guía de cierre.");
+      }
+      const report = String(json?.data?.report || json?.data?.ai_report || "");
+      const tab = extractTab(report, "cierre_de_venta");
+      setClosingGuideRaw(tab || report || "");
+      setClosingGuideOpen(true);
+    } catch (e) {
+      setClosingGuideError(e instanceof Error ? e.message : "Error generando guía de cierre.");
+    } finally {
+      setClosingGuideBusy(false);
+    }
+  }
 
   return (
     <div id="leads87-presentation-workflow" className="space-y-4 scroll-mt-4">
@@ -274,7 +397,7 @@ export function Leads87AdvancedWorkspace({
               type="button"
               onClick={() => void onGeneratePresentation()}
               disabled={isGeneratingPresentation || !canGeneratePresentation}
-              className="mt-3 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-700 disabled:opacity-50"
+              className="mt-3 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
               title={!canGeneratePresentation ? "Primero validá la propuesta comercial en el paso 5" : undefined}
             >
               {isGeneratingPresentation ? "Generando presentación comercial…" : "Generar presentación comercial"}
@@ -323,6 +446,63 @@ export function Leads87AdvancedWorkspace({
 
       {hasStableArchivedOutput ? (
         <>
+          <details className="rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3" open={closingGuideOpen}>
+            <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+              Asistente de cierre comercial (IA)
+            </summary>
+            <p className="mt-2 text-xs text-slate-600">
+              Guía en vivo para conducir la reunión final usando servicios seleccionados, propuesta e insights del diagnóstico.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void generateClosingGuide()}
+                disabled={closingGuideBusy}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {closingGuideBusy ? "Generando guía…" : "Generar guía de cierre"}
+              </button>
+              {closingGuideRaw ? (
+                <button
+                  type="button"
+                  onClick={() => setClosingGuideOpen((v) => !v)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  {closingGuideOpen ? "Contraer" : "Expandir"}
+                </button>
+              ) : null}
+            </div>
+            {closingGuideError ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                {closingGuideError}
+              </div>
+            ) : null}
+            {closingGuideRaw ? (
+              <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
+                <div>
+                  <p className="font-semibold text-slate-900">Apertura de reunión</p>
+                  <p className="mt-1 whitespace-pre-wrap">{closingGuideStructured.apertura || "—"}</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Presentación de propuesta</p>
+                  <p className="mt-1 whitespace-pre-wrap">{closingGuideStructured.presentacion || "—"}</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Objeciones probables</p>
+                  <p className="mt-1 whitespace-pre-wrap">{closingGuideStructured.objeciones || "—"}</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Respuestas sugeridas</p>
+                  <p className="mt-1 whitespace-pre-wrap">{closingGuideStructured.respuestas || "—"}</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Cierre recomendado</p>
+                  <p className="mt-1 whitespace-pre-wrap">{closingGuideStructured.cierre || "—"}</p>
+                </div>
+              </div>
+            ) : null}
+          </details>
+
           {commercialState === "presentation_ready" ? (
             <p className="text-xs text-slate-600">
               <span className="font-semibold text-slate-800">1/2</span> Revisá la presentación con los enlaces de abajo.{" "}
@@ -340,19 +520,54 @@ export function Leads87AdvancedWorkspace({
               </button>
             ) : null}
           </div>
-          {commercialState === "presentation_ready" && onAdvanceToClose ? (
+          {onAdvanceToClose ? (
             <div id="leads87-presentation-close" className="scroll-mt-4 border-t border-slate-200 pt-4">
-              <button
-                type="button"
-                onClick={() => void onAdvanceToClose()}
-                disabled={presentationCloseBusy}
-                className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {presentationCloseBusy ? "Actualizando etapa…" : "Avanzar a cierre"}
-              </button>
-              <p className="mt-2 text-xs text-slate-500">
-                Es la única acción que marca la etapa comercial como cierre en el CRM.
-              </p>
+              {commercialState === "closing" ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3">
+                  <p className="text-sm font-medium text-emerald-900">
+                    Este lead ya fue movido a cierre comercial.
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-800">
+                    La etapa de presentación ya está cerrada. Continuá en acciones de cierre y seguimiento.
+                  </p>
+                  {onGoToClosingActions ? (
+                    <button
+                      type="button"
+                      onClick={onGoToClosingActions}
+                      className="mt-3 rounded-lg border-2 border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    >
+                      Ir a acciones de cierre
+                    </button>
+                  ) : null}
+                </div>
+              ) : commercialState === "presentation_ready" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.debug("[LEADS87][STEP6] CTA finalizar->cierre click");
+                    void onAdvanceToClose();
+                  }}
+                  disabled={presentationCloseBusy}
+                  className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {presentationCloseBusy ? "Actualizando etapa…" : "Finalizar proceso y pasar a cierre"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="rounded-lg border-2 border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-500"
+                >
+                  Finalizar proceso y pasar a cierre
+                </button>
+              )}
+              {commercialState !== "closing" ? (
+                <p className="mt-2 text-xs text-slate-500">
+                  {commercialState === "presentation_ready"
+                    ? "Es la única acción principal que marca la etapa comercial como cierre en el CRM."
+                    : "Disponible cuando la presentación esté lista y archivada en el CRM."}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </>

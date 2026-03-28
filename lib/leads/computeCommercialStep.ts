@@ -1,37 +1,57 @@
 /**
- * Estado lineal del proceso comercial (5 pasos).
- * Una sola fuente de verdad para barra, siguiente paso y botones.
+ * Estado lineal del proceso comercial (6 pasos).
+ * Fuente compartida con getCommercialNextAction y la ficha /admin/leads/[id].
  *
- * Orden: 1 Análisis → 2 Diagnóstico → 3 Estrategia → 4 Estructura → 5 Propuesta final para cliente.
+ * Orden: 1 Análisis → 2 Diagnóstico → 3 Estrategia → 4 Estructura → 5 Propuesta → 6 Presentación / cierre.
  */
 
-export type CommercialStep = 1 | 2 | 3 | 4 | 5;
+import { isCommercialStrategyApproved } from "@/lib/crm/commercialStrategyFlow";
+import { getCommercialStepState } from "@/lib/crm/getCommercialStepState";
+
+export type CommercialStep = 1 | 2 | 3 | 4 | 5 | 6;
 
 export type ComputeCommercialStepParams = {
-  /** Lead con ai_report y proposal_confirmed_at */
-  lead: { ai_report?: string | null; proposal_confirmed_at?: string | null } | null;
-  /** URLs de documentos generados (desde API o estado local) */
-  documents: { diagnostic?: string | null; strategy?: string | null; proposal?: string | null } | null;
-  /** Estructura de servicios/costos definida (tab Consultor o propuesta confirmada) */
+  lead: {
+    ai_report?: string | null;
+    proposal_confirmed_at?: string | null;
+    proposal_reviewed?: boolean | null;
+    proposal_doc_url?: string | null;
+    presentation_doc_url?: string | null;
+    commercial_stage?: string | null;
+    stage?: string | null;
+    strategy_approved_at?: string | null;
+    commercial_strategy_json?: unknown;
+  } | null;
+  documents: {
+    diagnostic?: string | null;
+    strategy?: string | null;
+    proposal?: string | null;
+    presentation?: string | null;
+  } | null;
   structureReady: boolean;
 };
 
 /**
  * Calcula el paso actual del proceso comercial de forma lineal.
- * Si falta un paso anterior, no se considera completado ningún paso posterior.
+ * La estrategia puede estar cerrada por LEADS87 (strategy_approved_at / JSON) sin URL legacy en `documents.strategy`.
+ * El paso 6 agrupa presentación pendiente, presentación lista y cierre según getCommercialStepState.
  */
 export function computeCurrentStep(params: ComputeCommercialStepParams): CommercialStep {
   const { lead, documents, structureReady } = params;
   const analysis = Boolean(lead?.ai_report && String(lead.ai_report).trim().length > 0);
   const diagnostico = Boolean(documents?.diagnostic && String(documents.diagnostic).trim().length > 0);
-  const estrategia = Boolean(documents?.strategy && String(documents.strategy).trim().length > 0);
-  const propuesta = Boolean(documents?.proposal && String(documents.proposal).trim().length > 0);
+  const strategyClosed = isCommercialStrategyApproved(lead, documents);
+  const estrategia = strategyClosed || Boolean(documents?.strategy && String(documents.strategy).trim().length > 0);
 
   if (!analysis) return 1;
   if (!diagnostico) return 2;
   if (!estrategia) return 3;
   if (!structureReady) return 4;
-  if (!propuesta) return 5;
+
+  const pipeline = getCommercialStepState(lead, documents);
+  if (pipeline === "closing") return 6;
+  if (pipeline === "presentation_ready") return 6;
+  if (pipeline === "ready_for_presentation") return 6;
   return 5;
 }
 

@@ -43,7 +43,7 @@ export const DEFAULT_ADMIN_SIDEBAR_MODULES: AdminSidebarModule[] = [
   { key: "eventos", label: "Eventos", href: "/admin/eventos", icon: "🎉", status: "en_preparacion" },
   { key: "mesa_ayuda", label: "Mesa de ayuda", href: "/admin/mesa-de-ayuda", icon: "🆘", status: "activo" },
   { key: "neuroventas", label: "Manual de neuroventas", href: "/admin/neuroventas", icon: "📘", status: "activo" },
-  { key: "ia", label: "IA", href: "/admin/configuracion/ia", icon: "🧠", status: "activo" },
+  { key: "ia", label: "IA", href: "/admin/ia", icon: "🧠", status: "activo" },
   { key: "personalizacion", label: "Personalización", href: "/admin/personalizacion", icon: "🎨", status: "activo" },
   { key: "configuracion", label: "Configuración", href: "/admin/configuracion", icon: "🛠️", status: "activo" },
 ];

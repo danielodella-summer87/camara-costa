@@ -61,10 +61,38 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const sb = supabaseAdmin();
     const now = new Date().toISOString();
 
-    const updateResult = await updateLeadSafe(sb, id, {
+    /** Alinear CRM con etapa “listo para documento de propuesta” sin bajar pipeline ya avanzado. */
+    const PIPELINE_ORDER = [
+      "Nuevo",
+      "Contactado",
+      "Diagnóstico",
+      "Estrategia",
+      "Servicios",
+      "Propuesta",
+      "Presentación",
+      "Seguimiento",
+      "Ganado",
+      "Perdido",
+      "Cierre",
+    ] as const;
+    function pipelineRank(p: string | null | undefined): number {
+      const t = (p ?? "").trim();
+      const i = (PIPELINE_ORDER as readonly string[]).indexOf(t);
+      return i >= 0 ? i : -1;
+    }
+
+    const { data: existingLead } = await sb.from("leads").select("pipeline").eq("id", id).maybeSingle();
+    const propuestaIdx = PIPELINE_ORDER.indexOf("Propuesta");
+    const currRank = pipelineRank(existingLead?.pipeline as string | null | undefined);
+    const payload: Record<string, unknown> = {
       proposal_draft_json: JSON.stringify(body.draft),
       proposal_confirmed_at: now,
-    }, { force_unlink_entity: false });
+    };
+    if (propuestaIdx >= 0 && (currRank < 0 || currRank < propuestaIdx)) {
+      payload.pipeline = "Propuesta";
+    }
+
+    const updateResult = await updateLeadSafe(sb, id, payload, { force_unlink_entity: false });
 
     if (updateResult.error) {
       return NextResponse.json({ ok: false, error: updateResult.error?.message ?? "Error al confirmar" }, { status: 500 });

@@ -20,6 +20,8 @@ type Props = {
   leadId: string;
   leadDisplayName: string;
   proposalUrl: string | null | undefined;
+  /** Alineado con isCommercialStrategyApproved (lead + docs) en la página. */
+  commercialStrategyApproved?: boolean;
   structureConfirmed: boolean;
   onDocumentCreated: () => void;
   onRegisterCreateAction?: (action: (() => Promise<void>) | null) => void;
@@ -99,6 +101,7 @@ export function Leads87ProposalWorkspace({
   leadId,
   leadDisplayName,
   proposalUrl,
+  commercialStrategyApproved = false,
   structureConfirmed,
   onDocumentCreated,
   onRegisterCreateAction,
@@ -199,6 +202,12 @@ export function Leads87ProposalWorkspace({
 
   return (
     <div id="leads87-proposal-flow" className="space-y-4">
+      {commercialStrategyApproved ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
+          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs font-semibold text-white">Estrategia confirmada</span>
+          <span>Podés generar y revisar la propuesta con normalidad.</span>
+        </div>
+      ) : null}
       <p className="text-sm text-slate-600">
         {hasDoc
           ? "Revisá el borrador, los servicios incluidos y el texto generado. Cuando esté conforme, confirmá la revisión: se guarda en el lead y podés generar la presentación comercial en el paso 6."

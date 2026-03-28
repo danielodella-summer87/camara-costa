@@ -4,9 +4,11 @@
  */
 
 import {
+  isOfficialCrmPersistedDocumentUrl,
   isOfficialPresentationDocumentUrl,
   isTransientGammaExportPdfUrl,
 } from "@/lib/leads/gammaDocumentPolicy";
+import { isCommercialStrategyApproved } from "@/lib/crm/commercialStrategyFlow";
 
 export type LeadFlowStep = {
   id:
@@ -72,6 +74,11 @@ export type LeadFlowLead = {
   proposal_draft_json?: string | null;
   /** Si está definido, la propuesta comercial está confirmada → propuesta = done. */
   proposal_confirmed_at?: string | null;
+  proposal_reviewed?: boolean | null;
+  proposal_doc_url?: string | null;
+  presentation_doc_url?: string | null;
+  strategy_approved_at?: string | null;
+  commercial_strategy_json?: unknown;
 };
 
 function hasProposalDraftWithRows(draftJson: unknown): boolean {
@@ -118,26 +125,35 @@ function getServicesCount(leadServicesOrCount: { length: number } | number): num
 
 export function getPresentationReadySignal(
   lead: LeadFlowLead | null,
-  leadServicesOrCount: { length: number } | number,
-  signals?: PresentationSignals
+  _leadServicesOrCount: { length: number } | number,
+  signals?: PresentationSignals,
+  documents?: { presentation?: string | null } | null
 ): boolean {
   if (!lead) return false;
-  const count = getServicesCount(leadServicesOrCount);
   const pdfUrl = signals?.pdfUrl ?? null;
   if (typeof pdfUrl === "string" && pdfUrl.trim().length > 0) {
     if (!isTransientGammaExportPdfUrl(pdfUrl) && isOfficialPresentationDocumentUrl(pdfUrl)) return true;
   }
-  // No usar solo gamma web como “presentación oficial” del CRM.
-  const aiReport = lead.ai_report;
-  const hasReport = typeof aiReport === "string" && aiReport.trim().length > 0;
-  if (count >= 2 && hasReport) return true;
+  const fromLead = typeof lead.presentation_doc_url === "string" ? lead.presentation_doc_url.trim() : "";
+  const fromDocs = typeof documents?.presentation === "string" ? documents.presentation.trim() : "";
+  const merged = fromLead || fromDocs;
+  if (merged && isOfficialPresentationDocumentUrl(merged)) return true;
+  // No marcar presentación “lista” por heurísticas (p. ej. servicios + informe): solo URL oficial archivada.
   return false;
 }
+
+export type LeadFlowDocumentsMerge = {
+  diagnostic?: string | null;
+  strategy?: string | null;
+  proposal?: string | null;
+  presentation?: string | null;
+} | null;
 
 export function getLeadFlowSignals(
   lead: LeadFlowLead | null,
   leadServicesOrCount: { length: number } | number,
-  presentationSignals?: PresentationSignals
+  presentationSignals?: PresentationSignals,
+  documents?: LeadFlowDocumentsMerge
 ): Record<LeadFlowStep["id"], boolean> {
   const count = getServicesCount(leadServicesOrCount);
   const aiReport = lead?.ai_report;
@@ -154,26 +170,44 @@ export function getLeadFlowSignals(
     lead?.audiencia?.trim(),
     entity?.instagram?.trim() || entity?.facebook?.trim() || lead?.linkedin_empresa?.trim(),
   ].filter(Boolean).length;
-  const presentationReady = getPresentationReadySignal(lead, leadServicesOrCount, presentationSignals);
+  const presentationReady = getPresentationReadySignal(lead, leadServicesOrCount, presentationSignals, documents);
   const proposalConfirmedAt = (lead as LeadFlowLead & { proposal_confirmed_at?: string | null })?.proposal_confirmed_at;
   const hasProposalConfirmed = typeof proposalConfirmedAt === "string" && proposalConfirmedAt.trim().length > 0;
   const draftWithRows = hasProposalDraftWithRows((lead as LeadFlowLead & { proposal_draft_json?: string | null })?.proposal_draft_json);
 
   const serviciosDone = count > 0 || draftWithRows;
-  const propuestaDone = hasProposalConfirmed || count >= 2 || (count > 0 && rawReport.trim().length > 0);
+  const propuestaLegacyDone = hasProposalConfirmed || count >= 2 || (count > 0 && rawReport.trim().length > 0);
   const accionesBase = has("ACCIONES") || has("plan_crecimiento");
+
+  const proposalFromLead = typeof lead?.proposal_doc_url === "string" ? lead.proposal_doc_url.trim() : "";
+  const proposalFromDocs = typeof documents?.proposal === "string" ? documents.proposal.trim() : "";
+  const proposalMerged = proposalFromLead || proposalFromDocs;
+  const proposalOfficial =
+    Boolean(proposalMerged) && isOfficialCrmPersistedDocumentUrl(proposalMerged);
+  const proposalReviewed = lead?.proposal_reviewed === true;
+
+  let propuestaDoneFinal: boolean;
+  if (hasProposalConfirmed) {
+    propuestaDoneFinal = true;
+  } else if (proposalOfficial) {
+    propuestaDoneFinal = proposalReviewed;
+  } else {
+    propuestaDoneFinal = propuestaLegacyDone;
+  }
+
+  const strategyApproved = isCommercialStrategyApproved(lead, documents);
 
   // Una vez confirmada la propuesta económica, el siguiente paso es siempre generar el material final (Gamma/PDF).
   // No volver a mostrar "Acciones definidas" ni "Servicios": forzar acciones/servicios/propuesta = done.
-  const accionesDone = hasProposalConfirmed ? true : accionesBase;
+  const accionesDone = hasProposalConfirmed ? true : strategyApproved ? true : accionesBase;
   const serviciosDoneFinal = hasProposalConfirmed ? true : serviciosDone;
-  const propuestaDoneFinal = hasProposalConfirmed ? true : propuestaDone;
 
   return {
     lead: !!lead?.id,
     datos: datosCount >= 3,
     investigacion: rawReport.length > 50 || has("INVESTIGACION_DIGITAL") || has("REDES_SOCIALES"),
-    diagnostico: has("FODA") || has("OPORTUNIDADES") || has("vision_estrategica"),
+    // vision_estrategica es contenido de estrategia, no de diagnóstico (evita “atascar” el flujo en diagnóstico).
+    diagnostico: has("FODA") || has("OPORTUNIDADES"),
     acciones: accionesDone,
     servicios: serviciosDoneFinal,
     propuesta: propuestaDoneFinal,
@@ -184,9 +218,10 @@ export function getLeadFlowSignals(
 export function getLeadFlowSteps(
   lead: LeadFlowLead | null,
   leadServicesOrCount: { length: number } | number,
-  presentationSignals?: PresentationSignals
+  presentationSignals?: PresentationSignals,
+  documents?: LeadFlowDocumentsMerge
 ): LeadFlowStep[] {
-  const signals = getLeadFlowSignals(lead, leadServicesOrCount, presentationSignals);
+  const signals = getLeadFlowSignals(lead, leadServicesOrCount, presentationSignals, documents);
   const steps: LeadFlowStep[] = [];
   let currentAssigned = false;
   for (const stepId of LEAD_FLOW_STEP_IDS) {

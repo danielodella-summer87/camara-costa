@@ -16,6 +16,7 @@ import { isTransientGammaExportPdfUrl } from "@/lib/leads/presentationUtils";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { categoryBadgeClass, type PromptBlock } from "@/lib/ai/promptBlocks";
 
 type LeadMini = {
   id: string;
@@ -51,6 +52,26 @@ type ClientAiPromptsBundle = {
   meta: { updated_at: { base?: number; modules?: Record<string, number> } };
 };
 
+type PromptUiMeta = {
+  label: string;
+  category: string;
+  category_color: PromptBlock["category_color"];
+};
+
+type VisibleTab = {
+  id: string;
+  label: string;
+  tabId: string;
+  categoryColor?: PromptBlock["category_color"];
+};
+
+type AnalysisProfileOption = {
+  id: string;
+  name: string;
+};
+
+const LEADS87_PRIMARY_PROFILE_NAME = "Agencia de Marketing / MODO EASY";
+
 function hasNonEmptyModuleValues(modules: Record<string, string> | undefined | null): boolean {
   if (!modules || typeof modules !== "object") return false;
   return Object.values(modules).some((v) => typeof v === "string" && v.trim().length > 0);
@@ -70,11 +91,11 @@ function bundleFromServerSnapshot(
   };
 }
 
-async function fetchIaConfigFromApi(): Promise<{ basePrompt: string; modulos: Record<string, string> } | null> {
+async function fetchIaConfigFromApi(): Promise<{ basePrompt: string; modulos: Record<string, string>; prompts?: PromptBlock[] } | null> {
   try {
     const res = await fetch("/api/admin/config/ia", { cache: "no-store" });
     const json = (await res.json().catch(() => ({}))) as {
-      data?: { basePrompt?: string; modulos?: Record<string, string> } | null;
+      data?: { basePrompt?: string; modulos?: Record<string, string>; prompts?: PromptBlock[] } | null;
     };
     const data = json?.data;
     if (!data?.modulos || typeof data.modulos !== "object" || Array.isArray(data.modulos)) return null;
@@ -82,6 +103,7 @@ async function fetchIaConfigFromApi(): Promise<{ basePrompt: string; modulos: Re
     return {
       basePrompt: typeof data.basePrompt === "string" ? data.basePrompt : "",
       modulos: data.modulos as Record<string, string>,
+      prompts: Array.isArray(data.prompts) ? data.prompts : undefined,
     };
   } catch {
     return null;
@@ -515,7 +537,7 @@ export function AiLeadReport({
   const [showPromptPreview, setShowPromptPreview] = useState(false);
   const [missingAnswersText, setMissingAnswersText] = useState<string>("");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [globalConfigFromApi, setGlobalConfigFromApi] = useState<{ basePrompt: string; modulos: Record<string, string> } | null>(null);
+  const [globalConfigFromApi, setGlobalConfigFromApi] = useState<{ basePrompt: string; modulos: Record<string, string>; prompts?: PromptBlock[] } | null>(null);
 
   const [moduleStatus, setModuleStatus] = useState<Record<string, "idle" | "running" | "done" | "error">>({});
   const [aiDoneMsg, setAiDoneMsg] = useState<string>("");
@@ -525,6 +547,9 @@ export function AiLeadReport({
     if (canUseTechnical) return "tecnico";
     return "comercial";
   });
+  const [analysisProfiles, setAnalysisProfiles] = useState<AnalysisProfileOption[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [gammaPromptOpen, setGammaPromptOpen] = useState(false);
   const [gammaPromptText, setGammaPromptText] = useState("");
   const [gammaPromptLoading, setGammaPromptLoading] = useState(false);
@@ -556,6 +581,42 @@ export function AiLeadReport({
     const totalEstimated = elapsed / (analysisPercent / 100);
     return Math.max(1, Math.round(totalEstimated - elapsed));
   }, [isProcessingPhase, analysisStartedAt, analysisPercent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAnalysisProfiles() {
+      try {
+        setLoadingProfiles(true);
+        const res = await fetch("/api/ai/profiles", { cache: "no-store" });
+        const json = (await res.json().catch(() => ([]))) as AnalysisProfileOption[] | { data?: AnalysisProfileOption[] };
+        if (!res.ok || cancelled) return;
+        const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        const saved = typeof window !== "undefined" ? window.localStorage.getItem("ia_profile_id") : null;
+        const leads87Primary = useInvestigacionUiLabels
+          ? rows.find((r) => r.name === LEADS87_PRIMARY_PROFILE_NAME)?.id ?? ""
+          : "";
+        const preferred = saved && rows.some((r) => r.id === saved) ? saved : "";
+        setAnalysisProfiles(rows);
+        setSelectedProfileId((prev) => prev || leads87Primary || preferred || rows[0]?.id || "");
+      } catch {
+        if (!cancelled) {
+          setAnalysisProfiles([]);
+          setSelectedProfileId("");
+        }
+      } finally {
+        if (!cancelled) setLoadingProfiles(false);
+      }
+    }
+    void loadAnalysisProfiles();
+    return () => {
+      cancelled = true;
+    };
+  }, [useInvestigacionUiLabels]);
+
+  useEffect(() => {
+    if (!selectedProfileId || typeof window === "undefined") return;
+    window.localStorage.setItem("ia_profile_id", selectedProfileId);
+  }, [selectedProfileId]);
 
   useEffect(() => {
     if (!onPresentationSignalChange) return;
@@ -794,9 +855,19 @@ export function AiLeadReport({
     }
   }, [leadId, gammaPdfUrl, gammaGenerationId, gammaPersistDocumentType]);
 
-  const visibleTabs = useMemo(() => {
+  const visibleTabs = useMemo<VisibleTab[]>(() => {
     const profileModuleIds = getReportProfile(reportProfile).moduleIds;
     const configuredModules = globalConfigFromApi?.modulos;
+    const promptMetaByModule = new Map<string, PromptUiMeta>();
+    (globalConfigFromApi?.prompts ?? []).forEach((p) => {
+      const moduleId = String(p?.module_id ?? "").trim();
+      if (!moduleId) return;
+      promptMetaByModule.set(moduleId, {
+        label: (p?.label || "").trim() || moduleId,
+        category: (p?.category || "").trim() || "General",
+        category_color: p?.category_color || "slate",
+      });
+    });
     const configuredByLower = configuredModules
       ? (() => {
           const map = new Map<string, string>();
@@ -813,6 +884,13 @@ export function AiLeadReport({
       if (!profileModuleIds.includes(tab.tabId)) return false;
       if (!configuredByLower) return true;
       return configuredByLower.has(tab.tabId.toLowerCase());
+    }).map((tab) => {
+      const meta = promptMetaByModule.get(tab.tabId);
+      return {
+        ...tab,
+        label: meta ? `${meta.category} / ${meta.label}` : tab.label,
+        categoryColor: meta?.category_color ?? "slate",
+      };
     });
   }, [reportProfile, globalConfigFromApi]);
 
@@ -824,11 +902,12 @@ export function AiLeadReport({
         const res = await fetch("/api/admin/config/ia", { cache: "no-store" });
         const json = await res.json().catch(() => ({}));
         if (cancelled) return;
-        const data = (json as { data?: { basePrompt?: string; modulos?: Record<string, string> } | null })?.data;
+        const data = (json as { data?: { basePrompt?: string; modulos?: Record<string, string>; prompts?: PromptBlock[] } | null })?.data;
         if (data) {
           const next = {
             basePrompt: typeof data.basePrompt === "string" ? data.basePrompt : "",
             modulos: data.modulos && typeof data.modulos === "object" && !Array.isArray(data.modulos) ? data.modulos : {},
+            prompts: Array.isArray(data.prompts) ? data.prompts : undefined,
           };
           setGlobalConfigFromApi(next);
           if (process.env.NODE_ENV !== "production") {
@@ -1210,6 +1289,7 @@ export function AiLeadReport({
       force_regenerate: true,
       only_module: onlyModule,
       profile: reportProfile,
+      profile_id: selectedProfileId || undefined,
       prompts: {
         base: promptsData.prompts.base || "",
         modules: { [tabId]: modulePrompt },
@@ -1249,6 +1329,10 @@ export function AiLeadReport({
   };
 
   const regenerateTab = async (tabId: string) => {
+    if (!selectedProfileId) {
+      alert("Selecciona un perfil de análisis");
+      return;
+    }
     setRegeneratingTab(tabId);
     setError(null);
     setToastMessage("Regenerando…");
@@ -1277,6 +1361,10 @@ export function AiLeadReport({
 
   const runFullAiGeneration = async () => {
     if (!leadId?.trim()) return;
+    if (!selectedProfileId) {
+      alert("Selecciona un perfil de análisis");
+      return;
+    }
 
     const rollbackNotStarted = () => {
       setAnalysisPhase("NOT_STARTED");
@@ -1437,6 +1525,7 @@ export function AiLeadReport({
         personalization?: string;
         force_regenerate?: boolean;
         module?: string;
+        profile_id?: string;
         prompts?: AiPromptsPayload;
       };
 
@@ -1448,6 +1537,7 @@ export function AiLeadReport({
         personalization: personalizationText || undefined,
         force_regenerate: !!forceRegenerate,
         module: moduleIdParam || undefined,
+        profile_id: selectedProfileId,
       };
 
       const serverPrompts = await resolveIaPromptsForExecution();
@@ -1668,67 +1758,67 @@ export function AiLeadReport({
         <div className="mt-1 text-xs text-slate-500">
           {subtitleLabel ?? ui.defaultSubtitle}
         </div>
+        <div className="mt-3 max-w-md">
+          <label className="block text-xs font-medium text-slate-700">Perfil de análisis</label>
+          <select
+            value={selectedProfileId}
+            onChange={(e) => setSelectedProfileId(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+            disabled={isProcessingPhase || loadingProfiles}
+          >
+            <option value="">{loadingProfiles ? "Cargando perfiles..." : "Seleccionar perfil..."}</option>
+            {analysisProfiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
         {!(guidedStep1Mode && isProcessingPhase) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {canUseCommercial && (
-            <div className="flex flex-col items-start">
-              {isProcessingPhase ? (
-                <button
-                  type="button"
-                  disabled
-                  className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-300 text-slate-600 cursor-not-allowed"
-                >
-                  <span className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-slate-400 border-t-slate-600" aria-hidden />
-                  Generando…
-                </button>
-              ) : analysisPhase === "COMPLETED" && report.trim() ? (
-                <span
-                  className="inline-flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-500 opacity-90"
-                  title={ui.alreadyTooltip}
-                >
-                  <svg className="h-4 w-4 shrink-0" aria-hidden fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
-                  </svg>
-                  {ui.alreadyChip}
-                </span>
-              ) : (
-                <>
-                  {buttonTooltipContent ? (
-                    <Tooltip content={buttonTooltipContent} maxWidth="320px">
-                      <span className="inline-block">
-                        <button
-                          type="button"
-                          onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
-                          className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
-                        >
-                          {ui.btnCommercial}
-                        </button>
-                      </span>
-                    </Tooltip>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => { setReportProfile("comercial"); runFullAiGeneration(); }}
-                      className="rounded-xl px-4 py-2.5 text-sm font-semibold transition bg-blue-600 text-white hover:bg-blue-700"
-                    >
-                      {ui.btnCommercial}
-                    </button>
-                  )}
-                  {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
-                </>
-              )}
-            </div>
-          )}
-          {canUseTechnical && (
+          {isProcessingPhase ? (
             <button
               type="button"
-              onClick={() => { setReportProfile("tecnico"); runFullAiGeneration(); }}
-              disabled={isProcessingPhase}
-              className="rounded-xl px-4 py-2.5 text-sm font-semibold bg-slate-700 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 cursor-not-allowed"
             >
-              {ui.btnTechnical}
+              <span className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-slate-400 border-t-slate-600" aria-hidden />
+              Generando…
+            </button>
+          ) : analysisPhase === "COMPLETED" && report.trim() ? (
+            <span
+              className="inline-flex cursor-not-allowed items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-500 opacity-90"
+              title={ui.alreadyTooltip}
+            >
+              <svg className="h-4 w-4 shrink-0" aria-hidden fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm2-2v2h6V7a3 3 0 00-6 0v2h2z" clipRule="evenodd" />
+              </svg>
+              {ui.alreadyChip}
+            </span>
+          ) : buttonTooltipContent ? (
+            <Tooltip content={buttonTooltipContent} maxWidth="320px">
+              <span className="inline-block">
+                <button
+                  type="button"
+                  onClick={runFullAiGeneration}
+                  disabled={loadingProfiles || !selectedProfileId}
+                  className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Analizar
+                </button>
+              </span>
+            </Tooltip>
+          ) : (
+            <button
+              type="button"
+              onClick={runFullAiGeneration}
+              disabled={loadingProfiles || !selectedProfileId}
+              className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Analizar
             </button>
           )}
+          {buttonHelperText && <p className="mt-1.5 text-xs text-slate-500 max-w-md">{buttonHelperText}</p>}
         </div>
         )}
       </div>
@@ -2118,7 +2208,7 @@ export function AiLeadReport({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveReportTab(tab.id)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isActive ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"}`}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${isActive ? "bg-slate-900 text-white border-slate-900" : `${categoryBadgeClass(tab.categoryColor ?? "slate")} border-slate-300 hover:brightness-95`}`}
                 title={tab.label}
               >
                 {tab.label}
@@ -2168,7 +2258,7 @@ export function AiLeadReport({
                 {/* Contenido del tab activo (selector de módulos está solo en el bloque "Módulos del análisis" más arriba) */}
                 <div ref={modulePanelRef} className="rounded-xl border bg-white p-6">
                   {/* Título del módulo: barra negra estilo consultoría premium */}
-                  <div className="bg-black text-white font-semibold text-[15px] px-3 py-2 rounded-md mb-3">
+                  <div className={`font-semibold text-[15px] px-3 py-2 rounded-md mb-3 ${categoryBadgeClass((visibleTabs.find(t => t.id === activeReportTab)?.categoryColor ?? "slate"))}`}>
                     {visibleTabs.find(t => t.id === activeReportTab)?.label ?? TABS_CONFIG.find(t => t.id === activeReportTab)?.label ?? "Tab"}
                   </div>
                   <div className="mb-4 space-y-3 border-b border-slate-200 pb-3">

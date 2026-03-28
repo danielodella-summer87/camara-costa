@@ -14,6 +14,7 @@ import {
 import { getLeadProgress, getLeadStage, getLeadStageShortLabel } from "@/lib/crm/getLeadDerivedFlow";
 import { alignMicroStepsWithMacro, getLeadsOkMicroFlow } from "@/lib/crm/leadsOkMicroFlow";
 import {
+  isPdfUrl,
   isLikelyEmbedBlocked,
   isTransientGammaExportPdfUrl,
   PRESENTATION_POPUP_FEATURES,
@@ -35,6 +36,13 @@ import { AiLeadReport } from "@/components/leads/AiLeadReport";
 import { GuiaEstrategicaProceso } from "../components/GuiaEstrategicaProceso";
 import { Leads87AdvancedWorkspace } from "../components/Leads87AdvancedWorkspace";
 import { Leads87DiagnosticBlock } from "../components/Leads87DiagnosticBlock";
+import { Leads87StrategyWorkspace } from "../components/Leads87StrategyWorkspace";
+import {
+  buildStrategyContextForServices,
+  COMMERCIAL_STRATEGY_GATE_ERROR_MESSAGE,
+  isCommercialStrategyApproved,
+  parseCommercialStrategyStored,
+} from "@/lib/crm/commercialStrategyFlow";
 import { Leads87LeadDocumentsBlock } from "../components/Leads87LeadDocumentsBlock";
 import RubroSelect from "../../empresas/RubroSelect";
 
@@ -219,8 +227,6 @@ export default function Leads87DetailPage() {
   const [diagnosticGenError, setDiagnosticGenError] = useState<string | null>(null);
   const [heroStageUpdating, setHeroStageUpdating] = useState(false);
   const [servicesConfirmReady, setServicesConfirmReady] = useState(false);
-  const [servicesConfirmBusy, setServicesConfirmBusy] = useState(false);
-  const servicesConfirmActionRef = useRef<(() => Promise<void>) | null>(null);
   const proposalCreateActionRef = useRef<(() => Promise<void>) | null>(null);
   const [proposalCreateReady, setProposalCreateReady] = useState(false);
   const [proposalCreateBusy, setProposalCreateBusy] = useState(false);
@@ -486,6 +492,23 @@ export default function Leads87DetailPage() {
     [leadForUnifiedFlow, documentsForUnifiedFlow]
   );
 
+  const strategyFlowApproved = useMemo(
+    () => isCommercialStrategyApproved(leadForUnifiedFlow, documentsForUnifiedFlow),
+    [leadForUnifiedFlow, documentsForUnifiedFlow]
+  );
+
+  useEffect(() => {
+    if (strategyFlowApproved && diagnosticGenError === COMMERCIAL_STRATEGY_GATE_ERROR_MESSAGE) {
+      setDiagnosticGenError(null);
+    }
+  }, [strategyFlowApproved, diagnosticGenError]);
+
+  const strategyContextForServices = useMemo(() => {
+    const raw = (leadForUnifiedFlow as { commercial_strategy_json?: unknown } | null)?.commercial_strategy_json;
+    const st = parseCommercialStrategyStored(raw);
+    return buildStrategyContextForServices(st);
+  }, [leadForUnifiedFlow]);
+
   /** Misma derivación que la lista LEADS87 (getLeadStage / getLeadProgress). */
   const heroMacroFlowSnapshot = useMemo(() => {
     const stage = getLeadStage(leadForUnifiedFlow, documentsForUnifiedFlow);
@@ -544,9 +567,13 @@ export default function Leads87DetailPage() {
   }, [effectiveActiveMacroStageId]);
   const gatedFlowMicroStepId = useMemo((): number | null => {
     if (flowActiveMicroStepId == null) return null;
+    /** Sin estrategia confirmada no mostrar workspace de servicios (paso 4) ni posteriores por número de paso. */
+    if (!strategyFlowApproved && flowActiveMicroStepId >= 4) return 3;
     if (!servicesStructureConfirmed && flowActiveMicroStepId >= 5) return 4;
+    /** Monótono: con estructura confirmada no volver a pasos 1–4 aunque macro/align discrepen un momento. */
+    if (servicesStructureConfirmed && flowActiveMicroStepId < 5) return 5;
     return flowActiveMicroStepId;
-  }, [flowActiveMicroStepId, servicesStructureConfirmed]);
+  }, [flowActiveMicroStepId, servicesStructureConfirmed, strategyFlowApproved]);
 
   const blockingMacroStage =
     effectiveActiveMacroStageId == null ? null : macroStages.find((s) => s.id === effectiveActiveMacroStageId) ?? null;
@@ -592,18 +619,9 @@ export default function Leads87DetailPage() {
     }
     if ((leadRes?.data as LeadForLeadsOkMacro)?.ai_report?.trim()) setReportGeneratedLocally(false);
 
-    const nextMacro = getLeadsOkMacroFlow(nextLead, nextDocs);
-    const nextBase = getLeadsOkMicroFlow(nextLead, nextDocs);
-    const nextAligned = alignMicroStepsWithMacro(nextBase, nextMacro);
-    const nextFocus =
-      nextAligned.find((s) => s.status === "active") ?? nextAligned.find((s) => s.status !== "completed");
-    if (nextFocus) {
-      setActiveWorkspaceStep(nextFocus.id);
-      setExpandedStepId(nextFocus.id);
-    } else if (nextAligned.length > 0 && nextAligned.every((s) => s.status === "completed")) {
-      setActiveWorkspaceStep(6);
-      setExpandedStepId(6);
-    }
+    // El paso visible del workspace lo fija solo `gatedFlowMicroStepId` + useEffect([id, gatedFlowMicroStepId]).
+    // No recalcular aquí con alignMicroStepsWithMacro: tras confirmar servicios podía marcar paso 3 activo
+    // (macro vs URL oficial de estrategia) y pisar el avance a propuesta.
   }, [id]);
 
   const handleRecoverLegacyGammaDocs = useCallback(async () => {
@@ -749,6 +767,14 @@ export default function Leads87DetailPage() {
 
   const moveToServicesFromHero = useCallback(async () => {
     if (!id?.trim()) return;
+    if (!strategyFlowApproved) {
+      goToWorkspace(3);
+      requestAnimationFrame(() => {
+        document.getElementById("leads87-strategy-block")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      setDiagnosticGenError(COMMERCIAL_STRATEGY_GATE_ERROR_MESSAGE);
+      return;
+    }
     setHeroStageUpdating(true);
     try {
       const res = await fetch(`/api/admin/leads/${encodeURIComponent(id)}`, {
@@ -761,10 +787,7 @@ export default function Leads87DetailPage() {
         throw new Error(json?.error ?? "No se pudo actualizar la etapa.");
       }
 
-      // Confirmamos estrategia como completada para alinear Hero/Stepper/Workspace en esta vista.
-      setCompletedStepOverrides((prev) => ({ ...prev, 3: true }));
       await refetchLead();
-      // Cambio real de etapa: foco en Servicios (paso 4), sin navegación por scroll.
       setActiveWorkspaceStep(4);
       setExpandedStepId(4);
     } catch (e) {
@@ -773,7 +796,7 @@ export default function Leads87DetailPage() {
     } finally {
       setHeroStageUpdating(false);
     }
-  }, [id, refetchLead]);
+  }, [id, refetchLead, strategyFlowApproved, goToWorkspace]);
 
   const markProposalReviewed = useCallback(async () => {
     if (!id?.trim()) return;
@@ -946,10 +969,19 @@ export default function Leads87DetailPage() {
   }, [presentationGammaUrl, presentationPdfUrl, documentsForUnifiedFlow]);
 
   const moveToCloseFromPresentation = useCallback(async () => {
-    if (!id?.trim()) return;
+    console.debug("[LEADS87][STEP6] moveToCloseFromPresentation:start", {
+      leadId: id,
+      commercialState,
+      hasPresentationDoc: Boolean(documentsForUnifiedFlow?.presentation?.trim()),
+    });
+    if (!id?.trim()) {
+      setDiagnosticGenError("No se encontró el ID del lead para finalizar el proceso.");
+      return;
+    }
     setPresentationCloseBusy(true);
     setDiagnosticGenError(null);
     try {
+      const nowIso = new Date().toISOString();
       const res = await fetch(`/api/admin/leads/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -957,20 +989,23 @@ export default function Leads87DetailPage() {
           commercial_stage: "closing",
           stage: "closing",
           pipeline: "Seguimiento",
+          proposal_sent_at: nowIso,
         }),
       });
+      console.debug("[LEADS87][STEP6] moveToCloseFromPresentation:patch_response", { ok: res.ok, status: res.status });
       if (!res.ok) {
         const json = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(json?.error ?? "No se pudo avanzar a cierre.");
       }
       await refetchLead();
-      goToWorkspace(6);
+      console.debug("[LEADS87][STEP6] moveToCloseFromPresentation:success_redirect", { to: `/admin/leads/${encodeURIComponent(id)}?tab=acciones` });
+      router.push(`/admin/leads/${encodeURIComponent(id)}?tab=acciones`);
     } catch (e) {
       setDiagnosticGenError(e instanceof Error ? e.message : "No se pudo avanzar a cierre.");
     } finally {
       setPresentationCloseBusy(false);
     }
-  }, [id, refetchLead, goToWorkspace]);
+  }, [id, commercialState, documentsForUnifiedFlow?.presentation, refetchLead, router]);
 
   const startEditingFicha = useCallback(() => {
     if (!fullLead) return;
@@ -1150,6 +1185,8 @@ export default function Leads87DetailPage() {
     activeWorkspaceStep === 4 &&
     ctaMicroStepId === 4 &&
     servicesConfirmReady;
+  /** En paso 4, el CTA verde principal vive en el workspace; el hero solo desplaza al bloque de confirmación. */
+  const softenHeroServicesConfirmCta = shouldPromoteServicesConfirmCta;
   const proposalDocUrl = String(documentsForUnifiedFlow?.proposal ?? "").trim();
   const presentationResolved = resolvePresentationResource(
     documentsForUnifiedFlow,
@@ -1165,6 +1202,8 @@ export default function Leads87DetailPage() {
     activeWorkspaceStep === 6 &&
     ctaMicroStepId === 6 &&
     commercialState === "ready_for_presentation";
+  /** En paso 6, el CTA principal vive en el workspace (evita competir con el Hero). */
+  const softenHeroStep6PrimaryCta = activeWorkspaceStep === 6;
   const isPresentationReadyForClose =
     ctaMicroStepId === 6 && commercialState === "presentation_ready";
   /** En paso 6 con presentación lista, el único CTA verde fuerte es «Avanzar a cierre» en el workspace; el hero solo desplaza. */
@@ -1206,21 +1245,24 @@ export default function Leads87DetailPage() {
 
   const heroPrimaryLabel = useMemo(() => {
     if (needsLegacyArchive) return "Archivar documentos (1/3)";
-    if (shouldPromoteServicesConfirmCta) return "Confirmar estructura de propuesta";
+    if (commercialState === "closing") return "Ir a acciones de cierre";
+    if (softenHeroServicesConfirmCta) return "Ir a confirmar estructura y avanzar a propuesta";
     if (shouldPromoteProposalCreateCta) return "Generar propuesta comercial";
     if (shouldPromotePresentationGenerateCta) return "Generar presentación comercial";
     if (heroPresentationCloseNavigateOnly) return "Ir a presentación comercial para cerrar la etapa";
+    if (softenHeroStep6PrimaryCta) return "Ir al bloque final de cierre en presentación";
     if (softenHeroPresentationCloseCta) return "Ir al botón «Avanzar a cierre» en el workspace";
     if (softenHeroProposalReviewCta) return "Ir al bloque de revisión de propuesta";
-    if ((ctaMicroStepId === 5 || ctaMicroStepId === 6) && commercialState !== "closing") {
+    if (ctaMicroStepId === 5 || ctaMicroStepId === 6) {
       return commercialStepHeroPrimaryLabel(commercialState);
     }
     return heroCtaLabel;
   }, [
-    shouldPromoteServicesConfirmCta,
+    softenHeroServicesConfirmCta,
     shouldPromoteProposalCreateCta,
     shouldPromotePresentationGenerateCta,
     heroPresentationCloseNavigateOnly,
+    softenHeroStep6PrimaryCta,
     softenHeroPresentationCloseCta,
     softenHeroProposalReviewCta,
     needsLegacyArchive,
@@ -1239,6 +1281,8 @@ export default function Leads87DetailPage() {
   const handleHeroCta = useCallback(() => {
     if (needsLegacyArchive) {
       void handleRecoverLegacyGammaDocs();
+    } else if (commercialState === "closing" && id?.trim()) {
+      router.push(`/admin/leads/${encodeURIComponent(id)}?tab=acciones`);
     } else if (hasBlocking && !shouldForceFlowProgress) {
       goToFichaAndEdit();
     } else if (ctaMicroStepId === 3) {
@@ -1253,8 +1297,11 @@ export default function Leads87DetailPage() {
     } else if (ctaMicroStepId === 5 && commercialState === "ready_for_presentation") {
       goToWorkspace(6);
       void generatePresentationCommercial();
-    } else if (ctaMicroStepId === 6 && commercialState === "ready_for_presentation") {
-      void generatePresentationCommercial();
+    } else if (activeWorkspaceStep === 6) {
+      // En paso 6, el Hero solo guía al bloque final; no compite con CTA principal del workspace.
+      requestAnimationFrame(() => {
+        document.getElementById("leads87-presentation-close")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } else if (isPresentationReadyForClose) {
       goToWorkspace(6);
       requestAnimationFrame(() => {
@@ -1262,8 +1309,10 @@ export default function Leads87DetailPage() {
       });
     } else if (shouldPromoteProposalCreateCta && proposalCreateActionRef.current) {
       void proposalCreateActionRef.current();
-    } else if (shouldPromoteServicesConfirmCta && servicesConfirmActionRef.current) {
-      void servicesConfirmActionRef.current();
+    } else if (softenHeroServicesConfirmCta) {
+      requestAnimationFrame(() => {
+        document.getElementById("leads87-services-confirm")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } else if (ctaMicroStepId != null) {
       handleStepAction(ctaMicroStepId);
     }
@@ -1276,10 +1325,12 @@ export default function Leads87DetailPage() {
     goToFichaAndEdit,
     handleStepAction,
     moveToServicesFromHero,
-    shouldPromoteServicesConfirmCta,
+    softenHeroServicesConfirmCta,
     shouldPromoteProposalCreateCta,
     proposalDocUrl,
     commercialState,
+    router,
+    id,
     goToWorkspace,
     activeWorkspaceStep,
     generatePresentationCommercial,
@@ -1724,7 +1775,6 @@ export default function Leads87DetailPage() {
               disabled={
                 heroCtaIsComplete ||
                 heroStageUpdating ||
-                (shouldPromoteServicesConfirmCta && servicesConfirmBusy) ||
                 (shouldPromoteProposalCreateCta && proposalCreateBusy) ||
                 (shouldPromotePresentationGenerateCta && presentationGenerationBusy) ||
                 (isPresentationReadyForClose && presentationCloseBusy) ||
@@ -1735,7 +1785,10 @@ export default function Leads87DetailPage() {
               className={`w-full rounded-xl px-6 py-4 text-lg font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed ${
                 heroCtaIsComplete
                   ? "bg-slate-200 text-slate-500 focus:ring-slate-400"
-                  : softenHeroProposalReviewCta || softenHeroPresentationCloseCta
+                  : softenHeroProposalReviewCta ||
+                      softenHeroPresentationCloseCta ||
+                      softenHeroStep6PrimaryCta ||
+                      softenHeroServicesConfirmCta
                     ? "border-2 border-slate-300 bg-white text-slate-800 hover:bg-slate-50 focus:ring-slate-400"
                     : "bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500"
               }`}
@@ -1752,8 +1805,6 @@ export default function Leads87DetailPage() {
                   ? "Actualizando etapa…"
                   : ctaMicroStepId === 5 && proposalReviewPatchBusy
                     ? "Guardando revisión…"
-                  : shouldPromoteServicesConfirmCta && servicesConfirmBusy
-                    ? "Confirmando estructura…"
                     : heroPrimaryLabel}
             </button>
           </div>
@@ -2138,7 +2189,7 @@ export default function Leads87DetailPage() {
               {activeWorkspaceStep === 3 && "Estrategia de crecimiento"}
               {activeWorkspaceStep === 4 && "Estructura de servicios"}
               {activeWorkspaceStep === 5 && "Propuesta comercial"}
-              {activeWorkspaceStep === 6 && "Presentación para el cliente"}
+              {activeWorkspaceStep === 6 && (commercialState === "closing" ? "Cierre comercial (seguimiento)" : "Presentación para el cliente")}
             </p>
             {!isProcessComplete && (
               <p className="mt-1 text-xs text-slate-400">
@@ -2150,7 +2201,7 @@ export default function Leads87DetailPage() {
                 Misma lógica que la tabla y el hero «Siguiente acción».
               </p>
             )}
-            {diagnosticGenError && activeWorkspaceStep === 5 && (
+            {diagnosticGenError && (activeWorkspaceStep === 3 || activeWorkspaceStep === 5 || activeWorkspaceStep === 6) && (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
                 {diagnosticGenError}
               </div>
@@ -2240,27 +2291,46 @@ export default function Leads87DetailPage() {
                       versionHint={docVersionHistoryHints.strategy ?? null}
                     />
                   ) : null}
-                <AiLeadReport
-                  key={`leads87-s3-${id}`}
-                  leadId={id}
-                  lead={fullLead as any}
-                  allowedProfiles={["comercial"]}
-                  initialProfile="comercial"
-                  useInvestigacionUiLabels
-                  gammaPersistDocumentType="strategy"
-                  onBeforeGenerate={async () => {}}
-                  onPromptSaved={refetchLead}
-                  onReportGenerated={handleReportGenerated}
-                  onPresentationSignalChange={(signal) => {
-                    if (signal?.gammaUrl != null) setPresentationGammaUrl(signal.gammaUrl ?? null);
-                    if (signal?.pdfUrl != null) setPresentationPdfUrl(signal.pdfUrl ?? null);
-                  }}
-                  titleLabel="Paso 3 — Estrategia de crecimiento"
-                  subtitleLabel="La visión estratégica conecta el diagnóstico con el plan de crecimiento."
-                  buttonHelperText="Revisá el informe y las exportaciones vinculadas a la estrategia."
-                  buttonTooltipContent="Herramientas de IA y exportación del tab comercial."
-                  guidedStep1Mode={false}
-                />
+                  <Leads87StrategyWorkspace
+                    leadId={id}
+                    commercialStrategyJson={(fullLead as { commercial_strategy_json?: unknown } | null)?.commercial_strategy_json}
+                    strategyApprovedAt={(fullLead as { strategy_approved_at?: string | null } | null)?.strategy_approved_at}
+                    investigationComplete={isInvestigationCompleted}
+                    diagnosticComplete={isDiagnosticCompleted}
+                    onUpdated={() => void refetchLead()}
+                  />
+                  <details className="mt-8 rounded-xl border border-slate-200 bg-slate-50/50">
+                    <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-100/80">
+                      Exportación avanzada — informe IA y documento Gamma/PDF de estrategia
+                    </summary>
+                    <div className="border-t border-slate-200 px-3 pb-4 pt-3">
+                      <p className="mb-3 text-xs text-slate-600">
+                        Opcional: generar o archivar el tab de visión estratégica como PDF en el CRM. La etapa comercial se guía
+                        por el bloque «Estrategia comercial» de arriba.
+                      </p>
+                      <AiLeadReport
+                        key={`leads87-s3-${id}`}
+                        leadId={id}
+                        lead={fullLead as any}
+                        allowedProfiles={["comercial"]}
+                        initialProfile="comercial"
+                        useInvestigacionUiLabels
+                        gammaPersistDocumentType="strategy"
+                        onBeforeGenerate={async () => {}}
+                        onPromptSaved={refetchLead}
+                        onReportGenerated={handleReportGenerated}
+                        onPresentationSignalChange={(signal) => {
+                          if (signal?.gammaUrl != null) setPresentationGammaUrl(signal.gammaUrl ?? null);
+                          if (signal?.pdfUrl != null) setPresentationPdfUrl(signal.pdfUrl ?? null);
+                        }}
+                        titleLabel="Herramienta de informe — estrategia (referencia)"
+                        subtitleLabel="No reemplaza la confirmación del bloque de estrategia comercial."
+                        buttonHelperText="Revisá el informe y las exportaciones vinculadas a la estrategia."
+                        buttonTooltipContent="Herramientas de IA y exportación del tab comercial."
+                        guidedStep1Mode={false}
+                      />
+                    </div>
+                  </details>
                 </>
               ) : activeWorkspaceStep >= 4 && activeWorkspaceStep <= 6 ? (
                 <>
@@ -2279,9 +2349,8 @@ export default function Leads87DetailPage() {
                       label="Presentación comercial (documento en CRM)"
                       entry={archiveByType.presentation}
                       versionHint={docVersionHistoryHints.presentation ?? null}
-                      openButtonVariant={
-                        commercialState === "presentation_ready" ? "quiet" : "prominent"
-                      }
+                      openButtonVariant="quiet"
+                      openButtonLabel={isPdfUrl(archiveByType.presentation?.officialUrl ?? "") ? "Ver PDF" : "Abrir documento"}
                     />
                   ) : null}
                 <Leads87AdvancedWorkspace
@@ -2294,18 +2363,16 @@ export default function Leads87DetailPage() {
                       : activeWorkspaceStep) as 4 | 5 | 6}
                   documents={documentsForUnifiedFlow}
                   aiReport={fullLead?.ai_report ?? null}
+                  strategyApproved={strategyFlowApproved}
+                  strategyContextText={strategyContextForServices}
                   proposalConfirmedAt={(fullLead as { proposal_confirmed_at?: string | null } | null)?.proposal_confirmed_at}
                   proposalSentAt={(fullLead as { proposal_sent_at?: string | null } | null)?.proposal_sent_at}
                   presentationGammaUrl={presentationGammaUrl}
                   presentationPdfUrl={presentationPdfUrl}
                   commercialState={commercialState}
                   onStructureConfirmed={refetchLead}
-                  onRegisterConfirmAction={(action) => {
-                    servicesConfirmActionRef.current = action;
-                  }}
-                  onConfirmReadinessChange={(ready, busy) => {
+                  onConfirmReadinessChange={(ready) => {
                     setServicesConfirmReady(ready);
-                    setServicesConfirmBusy(busy);
                   }}
                   onProposalDocumentCreated={() => {
                     setDiagnosticGenError(null);
@@ -2332,6 +2399,10 @@ export default function Leads87DetailPage() {
                   onGeneratePresentation={generatePresentationCommercial}
                   onOpenPresentation={presentationResolved.openUrl ? openPresentationFromHero : undefined}
                   onAdvanceToClose={moveToCloseFromPresentation}
+                  onGoToClosingActions={() => {
+                    if (!id?.trim()) return;
+                    router.push(`/admin/leads/${encodeURIComponent(id)}?tab=acciones`);
+                  }}
                 />
                 </>
               ) : (

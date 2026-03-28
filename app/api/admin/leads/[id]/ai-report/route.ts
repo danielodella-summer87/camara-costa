@@ -5,6 +5,7 @@ import { getReportProfile } from "@/lib/ai/reportProfiles";
 import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getAllowedLeadProfilesByRole, getRoleNameByRoleId } from "@/lib/rbac/leadProfiles";
 import { parseLeadCustomPrompt, getModuleCustomPrompt } from "@/lib/leads/customPrompt";
+import { normalizeIAPromptsConfig } from "@/lib/ai/promptBlocks";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -459,7 +460,7 @@ async function getPromptBase(): Promise<string> {
       .eq("key", CONFIG_IA_KEY)
       .maybeSingle();
     const parsed = dataV1?.value ? JSON.parse(String(dataV1.value)) : null;
-    return (parsed?.basePrompt ?? "").trim();
+    return normalizeIAPromptsConfig(parsed).basePrompt.trim();
   } catch (e: any) {
     console.error("Error inesperado leyendo prompt base:", e);
     return "";
@@ -479,14 +480,248 @@ async function getIAConfigFromDB(): Promise<{ base?: string; modules?: Record<st
       .maybeSingle();
 
     if (error || !data?.value) return {};
-    const parsed = JSON.parse(String(data.value)) as { basePrompt?: string; modulos?: Record<string, string> };
+    const parsed = normalizeIAPromptsConfig(JSON.parse(String(data.value)));
     return {
-      base: typeof parsed.basePrompt === "string" ? parsed.basePrompt : "",
-      modules: parsed.modulos && typeof parsed.modulos === "object" ? parsed.modulos : {},
+      base: parsed.basePrompt,
+      modules: parsed.modulos,
     };
   } catch (e: any) {
     if (process.env.NODE_ENV !== "production") console.warn("[AI] getIAConfigFromDB:", e?.message);
     return {};
+  }
+}
+
+type ActiveAIPromptRow = {
+  id: string;
+  name: string;
+  prompt_content: string;
+};
+
+type ProfileExecutionConfig = {
+  basePrompt: string;
+  modules: Array<{ id: string; label: string; prompt: string }>;
+  cierreOfertaPrincipal?: string | null;
+  tipoOrganizacionVendedora?: string | null;
+};
+
+/** Módulos que reciben resumen de salidas previas (anti-redundancia en cadena). */
+const MODULE_IDS_WITH_ACCUMULATED_MEMORY = new Set([
+  "oportunidades",
+  "vision_estrategica",
+  "plan_de_crecimiento",
+  "propuesta_de_crecimiento_easy",
+]);
+
+function stripTabHeaderForMemory(raw: string): string {
+  return raw.replace(/^###\s+TAB:[^\s]+\s*\n+/i, "").trim();
+}
+
+function buildAccumulatedMemoryBlock(
+  moduleResults: string[],
+  modules: Array<{ id: string; label: string }>,
+  currentIndex: number,
+  maxCharsPerModule = 500,
+  maxTotalChars = 7500
+): string {
+  if (currentIndex === 0) return "";
+  const parts: string[] = [];
+  let total = 0;
+  for (let j = 0; j < currentIndex; j++) {
+    const label = modules[j]?.label ?? `Módulo ${j + 1}`;
+    let raw = stripTabHeaderForMemory(moduleResults[j] ?? "");
+    let brief = raw.length > maxCharsPerModule ? raw.slice(0, maxCharsPerModule) + "…" : raw;
+    const chunk = `**[${label}]**\n${brief}`;
+    if (total + chunk.length > maxTotalChars) {
+      const room = Math.max(0, maxTotalChars - total - 80);
+      brief = brief.slice(0, room) + "…";
+      parts.push(`**[${label}]**\n${brief}`);
+      break;
+    }
+    total += chunk.length;
+    parts.push(chunk);
+  }
+  const detectedLines = parts
+    .map((chunk, idx) => {
+      const firstLine = String(chunk).split("\n").slice(1).join(" ").trim().slice(0, 150);
+      return `${idx + 1}) ${firstLine || "Hallazgo previo resumido"}`;
+    })
+    .join("\n");
+
+  return `**MEMORIA ACUMULADA (módulos anteriores):**\n\n${parts.join("\n\n---\n\n")}\n\n**LÍNEAS YA DETECTADAS (NO repetir literal):**\n${detectedLines}\n\n**REGLA OBLIGATORIA DE NO REPETICIÓN:**\n- Está PROHIBIDO repetir tácticas/diagnósticos de esta memoria como hallazgo nuevo.\n- Si un punto previo se vuelve prioritario, solo puede aparecer como re-priorización explícita con evidencia nueva y justificación de cambio de prioridad.`;
+}
+
+function moduleReceivesAccumulatedMemory(moduleId: string): boolean {
+  return MODULE_IDS_WITH_ACCUMULATED_MEMORY.has(String(moduleId || "").toLowerCase());
+}
+
+function isCierreVentaModuleId(moduleId: string): boolean {
+  const id = String(moduleId || "").toLowerCase();
+  return id === "cierre_venta" || id === "cierre_de_venta";
+}
+
+function applyCierrePromptVars(
+  prompt: string,
+  oferta: string | null | undefined,
+  tipoOrg: string | null | undefined
+): string {
+  const o =
+    (oferta ?? "").trim() ||
+    "[Configurar en perfil: oferta principal — campo cierre_oferta_principal]";
+  const t =
+    (tipoOrg ?? "").trim() ||
+    "[Configurar en perfil: tipo de organización vendedora — campo tipo_organizacion_vendedora]";
+  return prompt
+    .replace(/\{\{oferta_principal_nuestra_organizacion\}\}/g, o)
+    .replace(/\{\{tipo_organizacion_vendedora\}\}/g, t);
+}
+
+function normalizeForSimilarity(text: string): string[] {
+  return String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
+}
+
+function jaccardSimilarity(a: string, b: string): number {
+  const sa = new Set(normalizeForSimilarity(a));
+  const sb = new Set(normalizeForSimilarity(b));
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of sa) {
+    if (sb.has(t)) intersection++;
+  }
+  const union = sa.size + sb.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function moduleNeedsCrossModuleSimilarityCheck(moduleId: string): boolean {
+  const id = String(moduleId || "").toLowerCase();
+  return id === "oportunidades" || id === "vision_estrategica" || id === "propuesta_de_crecimiento_easy";
+}
+
+function hasRequiredCierreOfferAnchor(content: string, oferta: string | null | undefined): boolean {
+  const text = String(content || "").toLowerCase();
+  const ofertaNorm = String(oferta || "").trim().toLowerCase();
+  if (ofertaNorm) return text.includes(ofertaNorm);
+  return text.includes("oferta usada para cerrar") || text.includes("{{oferta_principal_nuestra_organizacion}}");
+}
+
+function enforceOpportunityEvidenceFields(content: string): { sanitized: string; removed: number } {
+  const lines = String(content || "").split("\n");
+  const kept: string[] = [];
+  let removed = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isCandidateItem =
+      /^\d+[\.\)]\s/.test(trimmed) || /^[-*]\s/.test(trimmed);
+    if (!isCandidateItem) {
+      kept.push(line);
+      continue;
+    }
+    const lc = trimmed.toLowerCase();
+    const hasEvidence = lc.includes("evidencia nueva");
+    const hasReprior = lc.includes("justificacion de re-priorizacion") || lc.includes("justificación de re-priorización");
+    if (hasEvidence || hasReprior) {
+      kept.push(line);
+    } else {
+      removed++;
+    }
+  }
+  const sanitized = removed > 0
+    ? `${kept.join("\n")}\n\n[Control V2.3] Se descartaron ${removed} oportunidad(es) por no incluir "Evidencia nueva" o "Justificación de re-priorización".`
+    : String(content || "");
+  return { sanitized, removed };
+}
+
+function toFlexibleModuleId(name: string, id: string): string {
+  const n = String(name || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return n || `prompt_${id.slice(0, 8)}`;
+}
+
+async function getActiveAIPromptsFromDB(): Promise<ActiveAIPromptRow[]> {
+  try {
+    const sb = supabaseAdmin();
+    const { data, error } = await sb
+      .from("ai_prompts")
+      .select("id,name,prompt_content,status")
+      .eq("status", "validated")
+      .order("updated_at", { ascending: false });
+    if (error) return [];
+    const rows = Array.isArray(data) ? data : [];
+    return rows
+      .filter((r: any) => typeof r?.prompt_content === "string" && r.prompt_content.trim())
+      .map((r: any) => ({
+        id: String(r.id),
+        name: String(r.name ?? "").trim() || "Prompt",
+        prompt_content: String(r.prompt_content),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+async function getProfileExecutionConfig(profileId: string): Promise<ProfileExecutionConfig | null> {
+  try {
+    const sb = supabaseAdmin();
+    const { data: profile, error: profileError } = await sb
+      .from("ai_analysis_profiles")
+      .select("id,name,base_instructions,is_active,cierre_oferta_principal,tipo_organizacion_vendedora")
+      .eq("id", profileId)
+      .maybeSingle();
+
+    if (profileError || !profile || profile.is_active !== true) return null;
+
+    const { data: profilePrompts, error: promptsError } = await sb
+      .from("ai_profile_prompts")
+      .select(`
+        prompt_id,
+        execution_order,
+        enabled_by_default,
+        ai_prompts (
+          id,
+          name,
+          prompt_content,
+          status
+        )
+      `)
+      .eq("profile_id", profileId)
+      .eq("enabled_by_default", true)
+      .order("execution_order", { ascending: true });
+
+    if (promptsError) return null;
+
+    const rows = Array.isArray(profilePrompts) ? profilePrompts : [];
+    const modules = rows
+      .map((row: any) => {
+        const p = row?.ai_prompts;
+        if (!p || p.status !== "validated") return null;
+        const promptText = typeof p.prompt_content === "string" ? p.prompt_content.trim() : "";
+        if (!promptText) return null;
+        return {
+          id: toFlexibleModuleId(String(p.name ?? ""), String(p.id ?? row.prompt_id ?? "")),
+          label: String(p.name ?? "Prompt"),
+          prompt: promptText,
+        };
+      })
+      .filter(Boolean) as Array<{ id: string; label: string; prompt: string }>;
+
+    return {
+      basePrompt: String(profile.base_instructions ?? "").trim(),
+      modules,
+      cierreOfertaPrincipal: profile.cierre_oferta_principal != null ? String(profile.cierre_oferta_principal) : null,
+      tipoOrganizacionVendedora: profile.tipo_organizacion_vendedora != null ? String(profile.tipo_organizacion_vendedora) : null,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -1028,13 +1263,17 @@ ENTREGABLES:
 4) Objeciones típicas y respuestas (mínimo 6).
 5) Plan de follow-up 72h (WhatsApp + Email + LinkedIn), mensajes listos para copiar.
 6) Señales de avance y señales de riesgo (qué observar).
+
+REGLA V2.3 (HARD-FAIL SEMÁNTICO):
+- Debes usar explícitamente la oferta principal de nuestra organización en la propuesta de cierre.
+- Queda inválida cualquier respuesta genérica que no ancle el cierre a la oferta concreta.
 `;
   
-  // Agregar frame extra si es CIERRE_VENTA
-  const modulePromptFinal = moduleId === "CIERRE_VENTA"
+  // Agregar frame extra si es Cierre de venta (IDs legacy o flexibles desde BD)
+  const modulePromptFinal = isCierreVentaModuleId(moduleId)
     ? `${modulePromptOriginal}\n\n${cierreFrameExtra}`
     : modulePromptOriginal;
-  
+
   console.log("[AI] module prompt head:", (modulePromptFinal || "").slice(0, 120));
 
   const moduleUserPrompt = `${userPrompt}\n\n**TAREA ESPECÍFICA:**\n${modulePromptFinal}\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${moduleId}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
@@ -1117,7 +1356,8 @@ async function generateAiReportAI(
   },
   customPrompts?: { base?: string; modules?: Record<string, string> },
   ctx?: ResolvedContext,
-  moduleIdsToRun?: string[]
+  moduleIdsToRun?: string[],
+  executionProfile?: ProfileExecutionConfig | null
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   console.log("OPENAI_API_KEY presente:", Boolean(process.env.OPENAI_API_KEY));
@@ -1128,10 +1368,12 @@ async function generateAiReportAI(
   const ya_es_cliente_agencia = !!(lead as any)._ya_es_cliente_agencia;
   const contacts = (lead as any)._contacts ?? [];
 
-  // PRIORIDAD 1: Leer prompt base (customPrompts > DB > fallback)
+  // PRIORIDAD 1: Leer prompt base (customPrompts > perfil seleccionado > DB > fallback)
   let promptBase = "";
   if (customPrompts?.base?.trim()) {
     promptBase = customPrompts.base.trim();
+  } else if (executionProfile?.basePrompt?.trim()) {
+    promptBase = executionProfile.basePrompt.trim();
   } else {
     promptBase = (await getPromptBase()).trim();
   }
@@ -1161,12 +1403,15 @@ REGLAS DE TONO (PROSPECCIÓN):
 - Podés detectar gaps y oportunidades con tacto. Mantené tono consultivo y constructivo.`;
   }
 
-  // Detectar tipo de organización del vendedor desde systemPrompt para el frame de CIERRE_VENTA
-  const sellerHint =
+  // Tipo de organización vendedora: perfil (columna) gana sobre heurística del system prompt (frame Cierre)
+  const sellerHintFromSystem =
     systemPrompt.toLowerCase().includes("cámara") ? "cámara" :
     systemPrompt.toLowerCase().includes("agencia") ? "agencia" :
     systemPrompt.toLowerCase().includes("consultora") ? "consultora" :
     "organización";
+
+  const sellerHint =
+    executionProfile?.tipoOrganizacionVendedora?.trim() || sellerHintFromSystem;
 
   // Usar contexto resuelto si está disponible, sino resolver desde lead
   const resolvedCtx = ctx || resolveLeadContext(lead, null);
@@ -1392,94 +1637,177 @@ Reglas finales:
 - No cierres con frases abiertas.` },
   ];
 
-  const configModuleKeys = Object.keys(customPrompts?.modules ?? {});
-  const defaultIds = defaultModules.map((m) => m.id);
-  const allModuleIds = moduleIdsToRun?.length
-    ? moduleIdsToRun
-    : [...new Set([...defaultIds, ...configModuleKeys])];
-
+  const profileModules = executionProfile?.modules ?? [];
+  const activePrompts = profileModules.length ? [] : await getActiveAIPromptsFromDB();
   const fallbackPrompt = "Genera análisis para este módulo. Responde SOLO con el contenido, sin introducciones ni títulos adicionales.";
-  const modules = allModuleIds.map((moduleId) => {
-    const def = defaultModules.find((m) => m.id === moduleId);
-    const prompt = customPrompts?.modules?.[moduleId] ?? def?.prompt ?? fallbackPrompt;
-    return { id: moduleId, label: def?.label ?? moduleId, prompt };
-  });
+  const modules = profileModules.length
+    ? profileModules
+    : activePrompts.length
+    ? activePrompts.map((p) => ({
+        id: toFlexibleModuleId(p.name, p.id),
+        label: p.name,
+        prompt: p.prompt_content,
+      }))
+    : (() => {
+        const configModuleKeys = Object.keys(customPrompts?.modules ?? {});
+        const defaultIds = defaultModules.map((m) => m.id);
+        const allModuleIds = moduleIdsToRun?.length
+          ? moduleIdsToRun
+          : [...new Set([...defaultIds, ...configModuleKeys])];
+        return allModuleIds.map((moduleId) => {
+          const def = defaultModules.find((m) => m.id === moduleId);
+          const prompt = customPrompts?.modules?.[moduleId] ?? def?.prompt ?? fallbackPrompt;
+          return { id: moduleId, label: def?.label ?? moduleId, prompt };
+        });
+      })();
 
   try {
     const moduleResults: string[] = [];
 
     // Generar cada módulo con una llamada separada a OpenAI
-    for (const module of modules) {
+    for (let i = 0; i < modules.length; i++) {
+      const module = modules[i];
       try {
-        // Construir prompt del módulo: usar prompt original y agregar frame extra si es CIERRE_VENTA
-        const modulePromptOriginal = module.prompt;
-        const modulePromptFinal = module.id === "CIERRE_VENTA"
+        // Variables de cierre ({{...}}) desde perfil + frame extra si aplica
+        let modulePromptOriginal = module.prompt;
+        if (isCierreVentaModuleId(module.id)) {
+          modulePromptOriginal = applyCierrePromptVars(
+            modulePromptOriginal,
+            executionProfile?.cierreOfertaPrincipal,
+            executionProfile?.tipoOrganizacionVendedora
+          );
+        }
+        const modulePromptFinal = isCierreVentaModuleId(module.id)
           ? `${modulePromptOriginal}\n\n${cierreFrameExtra}`
           : modulePromptOriginal;
-        
+
         // Construir prompt del módulo con personalización IA al inicio (si existe)
         const personalizacionBlock = buildPersonalizacionIABlock(lead.custom_prompt, module.id);
-        
-        // Construir el prompt del módulo: personalización primero, luego contexto base, luego tarea específica
+
+        // Construir el prompt del módulo: personalización primero, luego contexto base, luego memoria acumulada (módulos tardíos), luego tarea
         const moduleContextParts: string[] = [];
-        
+
         // PRIORIDAD 1: Personalización IA al inicio
         if (personalizacionBlock) {
           moduleContextParts.push(personalizacionBlock);
-          
+
           // Log server-only
           console.log(`[AI] Módulo ${module.id}: Personalización IA incluida (length: ${lead.custom_prompt?.trim().length || 0})`);
         }
-        
+
         // PRIORIDAD 2: Contexto base del lead
         moduleContextParts.push(userPrompt);
-        
+
+        // PRIORIDAD 2b: Memoria de módulos ya generados (evita repetir tácticas en Oportunidades, Visión, Plan, Propuesta)
+        if (moduleReceivesAccumulatedMemory(module.id) && i > 0) {
+          const mem = buildAccumulatedMemoryBlock(moduleResults, modules, i);
+          if (mem) moduleContextParts.push(mem);
+        }
+
         // PRIORIDAD 3: Tarea específica del módulo
         moduleContextParts.push(`**TAREA ESPECÍFICA:**\n${modulePromptFinal}`);
         
-        const moduleUserPrompt = moduleContextParts.join("\n\n") + `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${module.id}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
+        const baseModuleUserPrompt = moduleContextParts.join("\n\n") + `\n\n**FORMATO OBLIGATORIO:**\nTu respuesta DEBE comenzar exactamente así:\n\n### TAB:${module.id}\n\nY luego el contenido del análisis. NO incluyas otros tabs ni texto fuera de este bloque.`;
 
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            messages: [
-              {
-                role: "system",
-                content: systemPrompt,
-              },
-              {
-                role: "user",
-                content: moduleUserPrompt,
-              },
-            ],
-            temperature: 0.7,
-            max_tokens: 1500, // Reducido por módulo
-          }),
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          console.error(`[AI] Error en módulo ${module.id}:`, errorData);
-          // Continuar con otros módulos aunque uno falle
-          moduleResults.push(`### TAB:${module.id}\n\nError generando este módulo.`);
-          continue;
+        async function runModuleAttempt(extraInstruction?: string): Promise<string> {
+          const moduleUserPrompt = extraInstruction
+            ? `${baseModuleUserPrompt}\n\n**CORRECCIÓN OBLIGATORIA V2.3:**\n${extraInstruction}`
+            : baseModuleUserPrompt;
+          const response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                {
+                  role: "system",
+                  content: systemPrompt,
+                },
+                {
+                  role: "user",
+                  content: moduleUserPrompt,
+                },
+              ],
+              temperature: 0.7,
+              max_tokens: 1500,
+            }),
+          });
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`HTTP error módulo ${module.id}: ${JSON.stringify(errorData)}`);
+          }
+          const data = (await response.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+          return data?.choices?.[0]?.message?.content?.trim() ?? "";
         }
 
-        const data = (await response.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-
-        const moduleContent = data?.choices?.[0]?.message?.content?.trim() ?? "";
+        let moduleContent = await runModuleAttempt();
 
         if (!moduleContent) {
           console.warn(`[AI] Módulo ${module.id} devolvió contenido vacío`);
           moduleResults.push(`### TAB:${module.id}\n\nSin contenido generado.`);
           continue;
+        }
+
+        // V2.3: Hard-fail semántico para Cierre de Venta si no ancla oferta concreta.
+        if (isCierreVentaModuleId(module.id)) {
+          const anchorOk = hasRequiredCierreOfferAnchor(moduleContent, executionProfile?.cierreOfertaPrincipal);
+          if (!anchorOk) {
+            console.warn(`[AI] Módulo ${module.id}: sin anclaje explícito de oferta. Regenerando (V2.3 hard-fail).`);
+            moduleContent = await runModuleAttempt(
+              `Respuesta inválida por genérica. Debes anclar explícitamente el cierre a la oferta principal "${executionProfile?.cierreOfertaPrincipal ?? "{{oferta_principal_nuestra_organizacion}}"}". Si no lo haces, la respuesta será descartada.`
+            );
+          }
+          const anchorStillMissing = !hasRequiredCierreOfferAnchor(moduleContent, executionProfile?.cierreOfertaPrincipal);
+          if (anchorStillMissing) {
+            moduleResults.push(`### TAB:${module.id}\n\n[INVALIDADO V2.3] El módulo no ancló el cierre a la oferta principal requerida.`);
+            continue;
+          }
+        }
+
+        // V2.3: Oportunidades exige evidencia nueva o justificación de re-priorización por ítem.
+        if (String(module.id).toLowerCase() === "oportunidades") {
+          const sanitized = enforceOpportunityEvidenceFields(moduleContent);
+          if (sanitized.removed > 0) {
+            console.warn(`[AI] Módulo ${module.id}: se descartaron ${sanitized.removed} ítems sin evidencia/justificación.`);
+          }
+          moduleContent = sanitized.sanitized;
+        }
+
+        // V2.3: anti-redundancia cross-module con chequeo simple de similitud + 1 regeneración.
+        if (moduleNeedsCrossModuleSimilarityCheck(module.id) && i > 0) {
+          const currentBody = stripTabHeaderForMemory(moduleContent);
+          let maxSim = 0;
+          let similarModuleLabel = "";
+          for (let j = 0; j < i; j++) {
+            const prevBody = stripTabHeaderForMemory(moduleResults[j] ?? "");
+            const sim = jaccardSimilarity(currentBody, prevBody);
+            if (sim > maxSim) {
+              maxSim = sim;
+              similarModuleLabel = modules[j]?.label ?? modules[j]?.id ?? `módulo_${j + 1}`;
+            }
+          }
+          const similarityThreshold = 0.62;
+          if (maxSim >= similarityThreshold) {
+            console.warn(`[AI] Módulo ${module.id}: similitud alta (${maxSim.toFixed(2)}) con ${similarModuleLabel}. Regenerando.`);
+            moduleContent = await runModuleAttempt(
+              `Tu salida es demasiado similar (${maxSim.toFixed(2)}) a hallazgos previos (${similarModuleLabel}). Reescribe con foco en valor incremental y decisiones nuevas. Elimina bloques redundantes.`
+            );
+            const rerollBody = stripTabHeaderForMemory(moduleContent);
+            let maxAfter = 0;
+            for (let j = 0; j < i; j++) {
+              const prevBody = stripTabHeaderForMemory(moduleResults[j] ?? "");
+              maxAfter = Math.max(maxAfter, jaccardSimilarity(rerollBody, prevBody));
+            }
+            if (maxAfter >= similarityThreshold) {
+              moduleResults.push(`### TAB:${module.id}\n\n[INVALIDADO V2.3] Similitud excesiva con módulos previos (${maxAfter.toFixed(2)}).`);
+              continue;
+            }
+          }
         }
 
         // Asegurar que el contenido tenga el formato correcto
@@ -1587,6 +1915,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       | {
           custom_prompt?: string | null;
           personalization?: string | null; // Nuevo campo explícito
+          runtime_context?: string | null; // Contexto adicional para generación puntual de módulos (Paso 6, asistentes, etc.)
           force_regenerate?: boolean;
           only_module?: string | null;
           module_id?: string | null; // backward compatibility
@@ -1601,6 +1930,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
               modules?: Record<string, number>;
             };
           };
+          profile_id?: string | null;
         }
       | null;
 
@@ -1623,6 +1953,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       "ACCIONES",
       "MATERIALES_LISTOS",
       "CIERRE_VENTA",
+      "cierre_de_venta",
       "vision_estrategica",
       "linkedin_decision_makers",
       "north_star_metric",
@@ -1650,6 +1981,22 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Fuente de verdad: prioridad 1) body.personalization, 2) body.custom_prompt, 3) lead.ai_custom_prompt, 4) null
     const bodyCustomPrompt = (typeof body?.personalization === "string" ? body.personalization.trim() : null) ||
                              (typeof body?.custom_prompt === "string" ? body.custom_prompt.trim() : null);
+
+    const profileIdForExecution = typeof body?.profile_id === "string" ? body.profile_id.trim() : "";
+    if (!profileIdForExecution) {
+      return NextResponse.json(
+        { data: null, error: "profile_id required" } satisfies ApiResp<null>,
+        { status: 400 }
+      );
+    }
+
+    const executionProfile = await getProfileExecutionConfig(profileIdForExecution);
+    if (!executionProfile) {
+      return NextResponse.json(
+        { data: null, error: "Perfil de análisis inválido o sin prompts activos" } satisfies ApiResp<null>,
+        { status: 400 }
+      );
+    }
 
     const profileId = String(body?.profile ?? "comercial").trim().toLowerCase();
     const reportProfile = getReportProfile(profileId);
@@ -1915,13 +2262,15 @@ Reglas finales:
           throw new Error(`Prompt no proporcionado para módulo ${only_module}`);
         }
         
-        // Detectar tipo de organización del vendedor desde basePrompt para el frame de CIERRE_VENTA
+        // Tipo de organización vendedora: columna de perfil gana sobre heurística del prompt base (frame Cierre)
         const basePromptForHint = effectivePrompts?.base || "";
-        const sellerHint =
+        const sellerHintFromBase =
           basePromptForHint.toLowerCase().includes("cámara") ? "cámara" :
           basePromptForHint.toLowerCase().includes("agencia") ? "agencia" :
           basePromptForHint.toLowerCase().includes("consultora") ? "consultora" :
           "organización";
+        const sellerHint =
+          executionProfile?.tipoOrganizacionVendedora?.trim() || sellerHintFromBase;
         
         // Frame extra para módulo CIERRE_VENTA (agnóstico y universal, adaptado según sellerHint)
         const cierreFrameExtra = `
@@ -1942,6 +2291,9 @@ ENTREGABLES:
 6) Señales de avance y señales de riesgo (qué observar).
 `;
         
+        const runtimeContext =
+          typeof body?.runtime_context === "string" ? body.runtime_context.trim() : "";
+
         // Caso especial: vision_estrategica usa el informe completo como contexto
         let newTabContent: string;
         if (only_module === "vision_estrategica") {
@@ -1963,12 +2315,20 @@ ENTREGABLES:
             cliente
           );
         } else {
-          // Construir prompt del módulo: agregar frame extra si es CIERRE_VENTA, o instagram si es REDES_SOCIALES
+          // Construir prompt del módulo: agregar frame extra si es Cierre de venta, o instagram si es REDES_SOCIALES
           let finalModulePrompt = modulePrompt;
-          if (only_module === "CIERRE_VENTA") {
-            finalModulePrompt = `${modulePrompt}\n\n${cierreFrameExtra}`;
+          if (isCierreVentaModuleId(only_module)) {
+            const withVars = applyCierrePromptVars(
+              modulePrompt,
+              executionProfile?.cierreOfertaPrincipal,
+              executionProfile?.tipoOrganizacionVendedora
+            );
+            finalModulePrompt = `${withVars}\n\n${cierreFrameExtra}`;
           } else if (only_module === "REDES_SOCIALES" && ctx.instagram) {
             finalModulePrompt = `Instagram detectado: ${ctx.instagram}. Analizá su presencia y contenido basado en ese perfil real. ${modulePrompt}`;
+          }
+          if (runtimeContext) {
+            finalModulePrompt = `${finalModulePrompt}\n\n**CONTEXTO ADICIONAL (runtime):**\n${runtimeContext}`;
           }
           
           newTabContent = await generateSingleModuleWithPrompt(
@@ -2107,7 +2467,8 @@ ENTREGABLES:
         leadForAI,
         effectivePrompts ?? undefined,
         ctx,
-        filteredModuleIds
+        filteredModuleIds,
+        executionProfile
       );
       // Construir contexto para guardar (usar contexto resuelto)
       aiContext = [

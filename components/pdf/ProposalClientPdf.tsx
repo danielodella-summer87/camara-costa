@@ -48,34 +48,6 @@ const styles = StyleSheet.create({
   conditionsLabel: { fontWeight: "bold", marginBottom: 2 },
 });
 
-/** Bloques de contenido para "Servicios incluidos" (claridad comercial). */
-const SERVICIOS_INCLUIDOS = {
-  crm: {
-    titulo: "Implementación CRM",
-    intro: "Implementación de una infraestructura comercial basada en CRM para ordenar el proceso de captación, seguimiento y conversión de clientes.",
-    bullets: [
-      "Configuración completa del CRM",
-      "Creación de pipelines comerciales",
-      "Configuración de campos personalizados",
-      "Configuración de usuarios y roles",
-      "Capacitación inicial del equipo",
-      "Guía de uso para adopción del sistema",
-    ],
-  },
-  consultoria: {
-    titulo: "Consultoría Growth",
-    intro: "Consultoría estratégica orientada a estructurar el crecimiento comercial del negocio y optimizar los procesos de captación y conversión de clientes.",
-    bullets: [
-      "Auditoría del negocio y presencia digital",
-      "Identificación de oportunidades de crecimiento",
-      "Diseño del roadmap comercial",
-      "Definición de pipeline comercial",
-      "Definición de métricas de ventas",
-      "Reuniones de seguimiento estratégico mensuales",
-    ],
-  },
-} as const;
-
 const MEETING_LOCATION_LINES = ["World Trade Center Torre 4", "Piso 40", "Montevideo, Uruguay"];
 
 type Props = { payload: ProposalExportPayload; generatedAt?: string };
@@ -83,6 +55,11 @@ type Props = { payload: ProposalExportPayload; generatedAt?: string };
 export default function ProposalClientPdf({ payload, generatedAt }: Props) {
   const { lead, proposal, monthlyTable, services, narrative, contact } = payload;
   const clientName = lead.empresa || lead.nombre || "Cliente";
+  const hasServices = services.length > 0;
+  const serviceNames = hasServices
+    ? services.map((s) => sanitize(s.nombre) || sanitize(s.codigo)).filter(Boolean)
+    : [];
+  const uniqueBillingTypes = [...new Set(services.map((s) => String(s.billingType ?? "").toLowerCase()).filter(Boolean))];
 
   return (
     <Document>
@@ -95,7 +72,7 @@ export default function ProposalClientPdf({ payload, generatedAt }: Props) {
 
         <Text style={styles.h2}>Resumen ejecutivo</Text>
         <Text style={styles.body}>
-          Esta propuesta presenta un plan de trabajo orientado a estructurar el crecimiento comercial de {sanitize(clientName)} mediante consultoría estratégica y la implementación de un CRM que permita gestionar oportunidades de forma profesional.
+          Esta propuesta presenta un plan de trabajo orientado a estructurar el crecimiento comercial de {sanitize(clientName)} con servicios adaptados al alcance acordado y foco en resultados medibles.
         </Text>
         <View style={styles.conditionsItem}>
           <Text style={[styles.body, styles.conditionsLabel]}>Cliente</Text>
@@ -103,7 +80,7 @@ export default function ProposalClientPdf({ payload, generatedAt }: Props) {
         </View>
         <View style={styles.conditionsItem}>
           <Text style={[styles.body, styles.conditionsLabel]}>Servicios</Text>
-          <Text style={styles.body}>{services.length > 0 ? services.map((s) => sanitize(s.nombre) || sanitize(s.codigo)).filter(Boolean).join(" · ") : "Consultoría Growth · Implementación CRM"}</Text>
+          <Text style={styles.body}>{serviceNames.length > 0 ? serviceNames.join(" · ") : "Sin servicios definidos"}</Text>
         </View>
         <View style={styles.conditionsItem}>
           <Text style={[styles.body, styles.conditionsLabel]}>Inversión Total</Text>
@@ -116,23 +93,29 @@ export default function ProposalClientPdf({ payload, generatedAt }: Props) {
         <Text style={styles.h2}>Objetivo de la propuesta</Text>
         <Text style={styles.body}>{narrative.objectives?.length ? narrative.objectives.join(". ") : "Alinear expectativas e implementación según lo acordado."}</Text>
 
-        {services.length > 0 && (
+        {hasServices && (
           <>
             <Text style={styles.h2}>Servicios incluidos</Text>
-            <View style={{ marginBottom: 12 }}>
-              <Text style={[styles.body, { fontWeight: "bold" }]}>{SERVICIOS_INCLUIDOS.crm.titulo}</Text>
-              <Text style={styles.body}>{SERVICIOS_INCLUIDOS.crm.intro}</Text>
-              {SERVICIOS_INCLUIDOS.crm.bullets.map((b, i) => (
-                <Text key={i} style={[styles.body, styles.bullet]}>{`• ${b}`}</Text>
-              ))}
-            </View>
-            <View style={{ marginBottom: 8 }}>
-              <Text style={[styles.body, { fontWeight: "bold" }]}>{SERVICIOS_INCLUIDOS.consultoria.titulo}</Text>
-              <Text style={styles.body}>{SERVICIOS_INCLUIDOS.consultoria.intro}</Text>
-              {SERVICIOS_INCLUIDOS.consultoria.bullets.map((b, i) => (
-                <Text key={i} style={[styles.body, styles.bullet]}>{`• ${b}`}</Text>
-              ))}
-            </View>
+            {services.map((svc, idx) => {
+              const displayName = sanitize(svc.nombre) || sanitize(svc.codigo) || `Servicio ${idx + 1}`;
+              const billingLabel =
+                String(svc.billingType ?? "").toLowerCase() === "one_time"
+                  ? "Pago único"
+                  : String(svc.billingType ?? "").toLowerCase() === "monthly"
+                    ? "Mensual"
+                    : "No especificado";
+              return (
+                <View key={`${svc.proposalId}-${idx}`} style={{ marginBottom: 10 }}>
+                  <Text style={[styles.body, { fontWeight: "bold" }]}>{displayName}</Text>
+                  <Text style={styles.body}>Tipo: {billingLabel} · Base: {sanitize(svc.priceBaseText) || "—"}</Text>
+                  {sanitize(svc.salesArgument) ? (
+                    <Text style={[styles.body, styles.bullet]}>{`• ${sanitize(svc.salesArgument)}`}</Text>
+                  ) : (
+                    <Text style={[styles.body, styles.bullet]}>• Alcance a detallar en reunión de validación.</Text>
+                  )}
+                </View>
+              );
+            })}
           </>
         )}
 
@@ -165,17 +148,27 @@ export default function ProposalClientPdf({ payload, generatedAt }: Props) {
             </View>
             <Text style={[styles.body, { marginTop: 4 }]}>Total general: {monthlyTable.grandTotal.toLocaleString("es-UY")}</Text>
             <Text style={[styles.body, { marginTop: 8, fontSize: 9.5, color: "#64748b" }]}>
-              La implementación del CRM se realiza en el primer mes. A partir del segundo mes la inversión corresponde al acompañamiento estratégico mensual.
+              La inversión se distribuye según los servicios seleccionados y su modalidad de cobro.
             </Text>
             <Text style={styles.h2}>Condiciones Comerciales</Text>
-            <View style={styles.conditionsItem}>
-              <Text style={[styles.body, styles.conditionsLabel]}>Implementación CRM</Text>
-              <Text style={styles.body}>Pago único en el inicio del proyecto.</Text>
-            </View>
-            <View style={styles.conditionsItem}>
-              <Text style={[styles.body, styles.conditionsLabel]}>Consultoría Growth</Text>
-              <Text style={styles.body}>Facturación mensual durante el período de acompañamiento.</Text>
-            </View>
+            {uniqueBillingTypes.length === 0 && (
+              <View style={styles.conditionsItem}>
+                <Text style={[styles.body, styles.conditionsLabel]}>Modalidad</Text>
+                <Text style={styles.body}>Se confirma según estructura de servicios acordada.</Text>
+              </View>
+            )}
+            {uniqueBillingTypes.includes("one_time") && (
+              <View style={styles.conditionsItem}>
+                <Text style={[styles.body, styles.conditionsLabel]}>Servicios de pago único</Text>
+                <Text style={styles.body}>Se facturan al inicio del proyecto.</Text>
+              </View>
+            )}
+            {uniqueBillingTypes.includes("monthly") && (
+              <View style={styles.conditionsItem}>
+                <Text style={[styles.body, styles.conditionsLabel]}>Servicios mensuales</Text>
+                <Text style={styles.body}>Se facturan mes a mes durante el período de acompañamiento.</Text>
+              </View>
+            )}
             <View style={styles.conditionsItem}>
               <Text style={[styles.body, styles.conditionsLabel]}>Duración del acompañamiento</Text>
               <Text style={styles.body}>6 meses de trabajo conjunto.</Text>

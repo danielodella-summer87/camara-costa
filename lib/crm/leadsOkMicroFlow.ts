@@ -4,6 +4,7 @@
  */
 
 import type { LeadForLeadsOkMacro, LeadsOkDocuments, MacroStage } from "./leadsOkMacroFlow";
+import { isCommercialStrategyApproved } from "./commercialStrategyFlow";
 
 function hasStr(v: unknown): boolean {
   return typeof v === "string" && v.trim().length > 0;
@@ -42,14 +43,14 @@ export function getLeadsOkMicroFlow(
 ): MicroStep[] {
   const hasAiReport = lead ? hasStr(lead.ai_report) : false;
   const hasDiagnostic = Boolean(documents?.diagnostic);
-  const hasStrategy = Boolean(documents?.strategy);
+  const hasStrategyClosed = isCommercialStrategyApproved(lead, documents);
   const hasProposalConfirmed = Boolean(lead?.proposal_confirmed_at);
   const hasProposal = Boolean(documents?.proposal);
   const hasProposalSent = Boolean(lead?.proposal_sent_at);
 
   const step1Complete = hasAiReport;
   const step2Complete = hasDiagnostic;
-  const step3Complete = hasStrategy;
+  const step3Complete = hasStrategyClosed;
   const step4Complete = hasProposalConfirmed;
   const step5Complete = hasProposal;
   const step6Complete = hasProposalSent;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requirePermission } from "@/lib/rbac/requirePermission";
+import { normalizeIAPromptsConfig, type PromptBlock } from "@/lib/ai/promptBlocks";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ type ApiResp<T> = { data?: T | null; error?: string | null };
 export type IAPromptsPayload = {
   basePrompt: string;
   modulos: Record<string, string>;
+  prompts?: PromptBlock[];
   updatedAt?: string;
 };
 
@@ -62,10 +64,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const parsed = JSON.parse(row.value) as IAPromptsPayload;
+    const parsed = JSON.parse(row.value) as unknown;
+    const normalized = normalizeIAPromptsConfig(parsed);
     const payload: IAPromptsPayload = {
-      basePrompt: typeof parsed.basePrompt === "string" ? parsed.basePrompt : "",
-      modulos: parsed.modulos && typeof parsed.modulos === "object" ? parsed.modulos : {},
+      basePrompt: normalized.basePrompt,
+      modulos: normalized.modulos,
+      prompts: normalized.prompts,
       updatedAt: row.updated_at ?? undefined,
     };
 
@@ -104,13 +108,11 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    const basePrompt = typeof body.basePrompt === "string" ? body.basePrompt : "";
-    const modulos =
-      body.modulos && typeof body.modulos === "object" && !Array.isArray(body.modulos)
-        ? body.modulos
-        : {};
-
-    const value = JSON.stringify({ basePrompt, modulos });
+    const normalized = normalizeIAPromptsConfig(body);
+    const basePrompt = normalized.basePrompt;
+    const modulos = normalized.modulos;
+    const prompts = normalized.prompts;
+    const value = JSON.stringify({ basePrompt, prompts, modulos });
     const sb = supabaseAdmin();
 
     const { data: row, error } = await sb
@@ -124,6 +126,7 @@ export async function PUT(req: NextRequest) {
     const payload: IAPromptsPayload = {
       basePrompt,
       modulos,
+      prompts,
       updatedAt: row?.updated_at ?? undefined,
     };
 

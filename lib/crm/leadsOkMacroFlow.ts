@@ -7,6 +7,7 @@ import {
   isOfficialCrmPersistedDocumentUrl,
   isOfficialPresentationDocumentUrl,
 } from "@/lib/leads/gammaDocumentPolicy";
+import { isCommercialStrategyApproved } from "./commercialStrategyFlow";
 
 export type MacroStageStatus = "completed" | "active" | "pending";
 
@@ -51,6 +52,9 @@ export type LeadForLeadsOkMacro = {
   presentation_doc_url?: string | null;
   proposal_reviewed?: boolean | null;
   commercial_stage?: string | null;
+  /** JSON LEADS87: { generated, edited, userInputs } */
+  commercial_strategy_json?: unknown;
+  strategy_approved_at?: string | null;
   ai_report?: string | null;
   // Rubro proviene de `empresas:empresa_id(... rubros:rubro_id(id,nombre))`.
   empresas?: { nombre?: string | null; rubros?: { id?: string | null } | null } | null;
@@ -160,8 +164,8 @@ export function getLeadsOkMacroFlow(
   const etapa3Done =
     etapa2Done &&
     Boolean(documents?.diagnostic && isOfficialCrmPersistedDocumentUrl(documents.diagnostic));
-  const etapa4Done =
-    etapa3Done && Boolean(documents?.strategy && isOfficialCrmPersistedDocumentUrl(documents.strategy));
+  /** Etapa 4 — Estrategia: confirmación explícita o legado con documento archivado (sin borrador JSON nuevo). */
+  const etapa4Done = etapa3Done && isCommercialStrategyApproved(lead, documents);
   const etapa5Done = etapa4Done && Boolean(lead.proposal_confirmed_at);
   const proposalUrlPersisted =
     Boolean(documents?.proposal && isOfficialCrmPersistedDocumentUrl(documents.proposal)) ||

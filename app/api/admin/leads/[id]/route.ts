@@ -44,9 +44,9 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
 
     // Intento principal: tabla "leads" con join a empresas
     const selectLeadWithSnapshot =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
     const selectLeadLegacy =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
     let q1 = await sb
       .from("leads")
@@ -236,6 +236,28 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     if (body.proposal_reviewed !== undefined) {
       updateData.proposal_reviewed = Boolean(body.proposal_reviewed);
     }
+    if (body.commercial_strategy_json !== undefined) {
+      const v = body.commercial_strategy_json;
+      if (v === null || v === "") {
+        updateData.commercial_strategy_json = null;
+      } else if (typeof v === "string") {
+        try {
+          updateData.commercial_strategy_json = JSON.parse(v);
+        } catch {
+          return NextResponse.json({ data: null, error: "commercial_strategy_json inválido" } satisfies ApiResp<null>, {
+            status: 400,
+          });
+        }
+      } else {
+        updateData.commercial_strategy_json = v;
+      }
+    }
+    if (body.strategy_approved_at !== undefined) {
+      updateData.strategy_approved_at =
+        body.strategy_approved_at === null || body.strategy_approved_at === ""
+          ? null
+          : String(body.strategy_approved_at);
+    }
     if (body.proposal_doc_url !== undefined) {
       updateData.proposal_doc_url =
         body.proposal_doc_url === null || body.proposal_doc_url === ""
@@ -318,6 +340,8 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         key !== "proposal_confirmed_at" &&
         key !== "proposal_sent_at" &&
         key !== "proposal_reviewed" &&
+        key !== "commercial_strategy_json" &&
+        key !== "strategy_approved_at" &&
         key !== "proposal_doc_url" &&
         key !== "presentation_doc_url" &&
         key !== "commercial_stage" &&

@@ -37,9 +37,12 @@ type Suggested = {
 type Props = {
   leadId: string;
   aiReport?: string | null;
+  /** Sin esto no se puede confirmar estructura ni priorizar sugerencias solo con informe. */
+  strategyApproved?: boolean;
+  /** Contenido de estrategia (aprobada o borrador) para matchear servicios. */
+  strategyContextText?: string;
   proposalConfirmedAt?: string | null;
   onStructureConfirmed?: () => void;
-  onRegisterConfirmAction?: (action: (() => Promise<void>) | null) => void;
   onConfirmReadinessChange?: (ready: boolean, busy: boolean) => void;
 };
 
@@ -78,9 +81,10 @@ function matchesService(s: EasyService, words: string[]) {
 export function Leads87ServicesWorkspace({
   leadId,
   aiReport,
+  strategyApproved = false,
+  strategyContextText = "",
   proposalConfirmedAt,
   onStructureConfirmed,
-  onRegisterConfirmAction,
   onConfirmReadinessChange,
 }: Props) {
   const [loading, setLoading] = useState(true);
@@ -96,7 +100,7 @@ export function Leads87ServicesWorkspace({
   const [selectedNotes, setSelectedNotes] = useState("");
   const cols = useMemo(() => getCols(months), [months]);
   const confirmed = Boolean(proposalConfirmedAt?.trim());
-  const canConfirmStructure = !loading && !confirmed && rows.length > 0;
+  const canConfirmStructure = !loading && !confirmed && rows.length > 0 && strategyApproved;
 
   useEffect(() => {
     let cancelled = false;
@@ -130,7 +134,9 @@ export function Leads87ServicesWorkspace({
   const suggested = useMemo(() => {
     const used = new Set(rows.map((r) => r.service_id));
     const tabs = parseTabs(String(aiReport ?? ""));
-    const source = [tabs.ACCIONES, tabs.plan_crecimiento, tabs.OPORTUNIDADES, tabs.propuesta_easy].filter(Boolean).join("\n\n");
+    const fromStrategy = String(strategyContextText ?? "").trim();
+    const fromReport = [tabs.ACCIONES, tabs.plan_crecimiento, tabs.OPORTUNIDADES, tabs.propuesta_easy].filter(Boolean).join("\n\n");
+    const source = fromStrategy.length > 0 ? fromStrategy : fromReport;
     if (!source.trim()) return [] as Suggested[];
     const out: Suggested[] = [];
     const add = (sourceWords: string[], svcWords: string[], priority: Suggested["priority"], reason: string) => {
@@ -152,7 +158,7 @@ export function Leads87ServicesWorkspace({
       if (!prev || rank[s.priority] < rank[prev.priority]) byId.set(s.service.id, s);
     }
     return Array.from(byId.values()).slice(0, 6);
-  }, [catalog, rows, aiReport]);
+  }, [catalog, rows, aiReport, strategyContextText]);
 
   const byMonthTotal = useMemo(() => {
     const totals: Record<string, number> = {};
@@ -253,23 +259,23 @@ export function Leads87ServicesWorkspace({
     onConfirmReadinessChange?.(canConfirmStructure, confirming);
   }, [canConfirmStructure, confirming, onConfirmReadinessChange]);
 
-  useEffect(() => {
-    if (!onRegisterConfirmAction) return;
-    if (canConfirmStructure) {
-      onRegisterConfirmAction(async () => {
-        await confirmStructure();
-      });
-    } else {
-      onRegisterConfirmAction(null);
-    }
-    return () => onRegisterConfirmAction(null);
-  }, [canConfirmStructure, onRegisterConfirmAction]);
-
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
         Armá la propuesta comercial inteligente sin salir de LEADS87: sugerencias, estructura por mes, narrativa y fases.
       </p>
+      {strategyApproved ? (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-950">
+          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs font-semibold text-white">Estrategia confirmada</span>
+          <span>Podés armar la estructura de servicios y confirmarla cuando esté lista.</span>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <span className="font-semibold">Estrategia pendiente.</span> Volvé al Paso 3 y confirmá la estrategia comercial para
+          habilitar la confirmación de estructura de servicios. Las sugerencias usan el informe solo como respaldo hasta que
+          haya texto de estrategia.
+        </div>
+      )}
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
       {loading ? (
         <p className="text-sm text-slate-500">Cargando catálogo y propuesta…</p>
@@ -277,6 +283,11 @@ export function Leads87ServicesWorkspace({
         <>
           <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <h3 className="text-sm font-semibold text-slate-800">Servicios sugeridos</h3>
+            {strategyApproved ? (
+              <p className="mt-1 text-xs text-slate-600">Priorización según estrategia confirmada (canales y foco declarados).</p>
+            ) : (
+              <p className="mt-1 text-xs text-amber-800">Sin estrategia confirmada: sugerencias basadas en el informe IA (modo respaldo).</p>
+            )}
             <div className="mt-3 space-y-2">
               {suggested.length === 0 ? (
                 <p className="text-xs text-slate-500">Sin sugerencias automáticas por ahora.</p>
@@ -306,7 +317,12 @@ export function Leads87ServicesWorkspace({
                 {catalog.map((s) => <option key={s.id} value={s.id}>{s.codigo} — {s.nombre}</option>)}
               </select>
               <input value={selectedPrice} onChange={(e) => setSelectedPrice(e.target.value)} type="number" step={0.01} placeholder="Precio" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <button type="button" onClick={() => addService(selectedServiceId, selectedScope, selectedNotes, selectedPrice === "" ? null : Number(selectedPrice))} disabled={saving || confirmed} className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              <button
+                type="button"
+                onClick={() => addService(selectedServiceId, selectedScope, selectedNotes, selectedPrice === "" ? null : Number(selectedPrice))}
+                disabled={saving || confirmed}
+                className="rounded-lg border-2 border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
                 Agregar a propuesta
               </button>
             </div>
@@ -320,9 +336,6 @@ export function Leads87ServicesWorkspace({
               <div className="flex items-center gap-2">
                 <button type="button" onClick={() => setMonths((m) => Math.max(1, m - 1))} disabled={confirmed} className="rounded border px-2 py-1 text-xs">- Mes</button>
                 <button type="button" onClick={() => setMonths((m) => Math.min(24, m + 1))} disabled={confirmed} className="rounded border px-2 py-1 text-xs">+ Mes</button>
-                <button type="button" onClick={confirmStructure} disabled={confirming || rows.length === 0 || confirmed} className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50">
-                  {confirmed ? "Estructura confirmada" : confirming ? "Confirmando…" : "Confirmar estructura"}
-                </button>
               </div>
             </div>
             {rows.length === 0 ? (
@@ -359,6 +372,30 @@ export function Leads87ServicesWorkspace({
                   </tfoot>
                 </table>
               </div>
+            )}
+          </div>
+
+          <div id="leads87-services-confirm" className="scroll-mt-4 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+            <h3 className="text-sm font-semibold text-emerald-950">Avanzar en el flujo</h3>
+            <p className="mt-1 text-xs text-emerald-900/85">
+              Al confirmar se guarda la estructura de servicios y podés continuar con la propuesta comercial (Paso 5).
+            </p>
+            {confirmed ? (
+              <p className="mt-3 text-sm font-medium text-emerald-800">Estructura confirmada — seguí en Propuesta comercial.</p>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void confirmStructure()}
+                  disabled={loading || confirming || rows.length === 0}
+                  className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-3.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {confirming ? "Confirmando…" : "Confirmar estructura y avanzar a propuesta"}
+                </button>
+                {rows.length === 0 && !loading ? (
+                  <p className="mt-2 text-xs text-slate-600">Agregá al menos un servicio para habilitar el avance.</p>
+                ) : null}
+              </>
             )}
           </div>
 
