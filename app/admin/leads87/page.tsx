@@ -12,7 +12,11 @@ import {
   commercialSummaryBucketForDerivedStage,
   type Leads87CommercialSummaryBucket,
 } from "@/lib/crm/leads87CommercialSummary";
-import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
+import {
+  calcularEstadoReal,
+  getLeadEtapaActual,
+  isLeadActive,
+} from "@/lib/leads/leadStatusPolicy";
 
 type LeadOption = {
   id: string;
@@ -45,6 +49,11 @@ type LeadOption = {
   facebook?: string | null;
   initiative_kind?: string | null;
   project_description?: string | null;
+  /** Etapa del flujo (persistida o espejo de pipeline vía API). */
+  etapa_actual?: string | null;
+  closed_at?: string | null;
+  /** p. ej. `won` | `lost` cuando exista cierre explícito. */
+  closed_result?: string | null;
 };
 
 function toMacroLead(l: LeadOption): LeadForLeadsOkMacro {
@@ -119,7 +128,7 @@ const NORM_TO_KANBAN_COLUMN: Record<string, string> = {
   seguimiento: "Seguimiento",
 };
 
-/** Salud del lead: texto breve y coherente (reutiliza score_categoria si existe). */
+/** Salud del lead: texto breve (score_categoria); sin usar % de avance del flujo LEADS87. */
 function getLeadSalud(l: LeadOption): { label: string; status: "ok" | "medio" | "bajo" | "nuevo" } {
   if (l.score_categoria && hasStr(l.score_categoria)) {
     const c = (l.score_categoria as string).toLowerCase();
@@ -127,45 +136,69 @@ function getLeadSalud(l: LeadOption): { label: string; status: "ok" | "medio" | 
     if (c.includes("desarrollo") || c.includes("medio")) return { label: "En desarrollo", status: "medio" };
     if (c.includes("frío") || c.includes("bajo")) return { label: "Frío", status: "bajo" };
   }
-  const { stage, progress } = getLeadFlowSnapshot(l);
-  if (stage === "completo" || progress >= 100) return { label: "Completo", status: "ok" };
-  if (progress > 0) return { label: "En curso", status: "medio" };
-  return { label: "Nuevo", status: "nuevo" };
+  const cierre = calcularEstadoReal(l);
+  if (cierre === "Cerrado") return { label: "Ganado", status: "ok" };
+  if (cierre === "Perdido") return { label: "Perdido", status: "bajo" };
+  const hasNombreOrEmpresa = hasStr(l.empresas?.nombre) || hasStr(l.nombre);
+  const hasAnyContact = hasStr(l.contacto) || hasStr(l.telefono) || hasStr(l.email);
+  if (!hasNombreOrEmpresa || !hasAnyContact) return { label: "Bloqueado", status: "bajo" };
+  const p = normPipeline(l.pipeline);
+  if (!p || p === "nuevo") return { label: "Nuevo", status: "nuevo" };
+  return { label: "En curso", status: "medio" };
 }
 
-/** Estado visual: verde Completo, amarillo Activo, rojo Bloqueado (sin datos mínimos), gris Nuevo. */
-function getLeadEstadoVisual(l: LeadOption): "finalizado" | "en_curso" | "nuevo" | "bloqueado" {
-  const { stage, progress } = getLeadFlowSnapshot(l);
-  if (stage === "completo" || progress >= 100) return "finalizado";
-  if (progress > 0) return "en_curso";
+/**
+ * Clasificación operativa para fondos de fila y “Salud del proceso” (no confundir con `calcularEstadoReal`).
+ * No usa % avance ni etapa derivada “completo” del macro flow.
+ */
+type LeadProcesoVisual = "cerrado_ganado" | "cerrado_perdido" | "en_curso" | "nuevo" | "bloqueado";
+
+function getLeadEstadoVisual(l: LeadOption): LeadProcesoVisual {
   const hasNombreOrEmpresa = hasStr(l.empresas?.nombre) || hasStr(l.nombre);
   const hasAnyContact = hasStr(l.contacto) || hasStr(l.telefono) || hasStr(l.email);
   if (!hasNombreOrEmpresa || !hasAnyContact) return "bloqueado";
-  return "nuevo";
+
+  const cierre = calcularEstadoReal(l);
+  if (cierre === "Cerrado") return "cerrado_ganado";
+  if (cierre === "Perdido") return "cerrado_perdido";
+
+  const p = normPipeline(l.pipeline);
+  if (!p || p === "nuevo") return "nuevo";
+  return "en_curso";
 }
 
-type SaludCounts = { completo: number; activo: number; bloqueado: number; nuevo: number; total: number };
+type SaludCounts = {
+  completo: number;
+  perdido: number;
+  activo: number;
+  bloqueado: number;
+  nuevo: number;
+  total: number;
+};
 
 function computeSaludCounts(items: LeadOption[]): SaludCounts {
   let completo = 0;
+  let perdido = 0;
   let activo = 0;
   let bloqueado = 0;
   let nuevo = 0;
   for (const l of items) {
     const e = getLeadEstadoVisual(l);
-    if (e === "finalizado") completo++;
+    if (e === "cerrado_ganado") completo++;
+    else if (e === "cerrado_perdido") perdido++;
     else if (e === "en_curso") activo++;
     else if (e === "bloqueado") bloqueado++;
     else nuevo++;
   }
-  return { completo, activo, bloqueado, nuevo, total: items.length };
+  return { completo, perdido, activo, bloqueado, nuevo, total: items.length };
 }
 
-type SaludAccionTipo = "bloqueado" | "activo" | "nuevo" | "completo";
+type SaludAccionTipo = "bloqueado" | "activo" | "nuevo" | "completo" | "perdido";
 
 function matchesSaludAccion(l: LeadOption, tipo: SaludAccionTipo): boolean {
   const e = getLeadEstadoVisual(l);
-  if (tipo === "completo") return e === "finalizado";
+  if (tipo === "completo") return e === "cerrado_ganado";
+  if (tipo === "perdido") return e === "cerrado_perdido";
   if (tipo === "activo") return e === "en_curso";
   if (tipo === "bloqueado") return e === "bloqueado";
   return e === "nuevo";
@@ -173,16 +206,18 @@ function matchesSaludAccion(l: LeadOption, tipo: SaludAccionTipo): boolean {
 
 /** Una línea de insight con proporciones (no altera conteos). */
 function saludInsightLine(c: SaludCounts): string | null {
-  const { completo, activo, nuevo, total } = c;
+  const { completo, perdido, activo, nuevo, total } = c;
   if (total === 0) return null;
   if (nuevo > activo && nuevo > 0) {
     return "Hay más leads nuevos que activos.";
   }
   const pA = Math.round((activo / total) * 100);
   const pC = Math.round((completo / total) * 100);
+  const pP = Math.round((perdido / total) * 100);
   if (pA >= 45) return `El ${pA}% está en curso.`;
-  if (pC <= 15 && total >= 4) return `Solo el ${pC}% está completo.`;
-  if (pC >= 40) return `El ${pC}% ya está completo.`;
+  if (pC <= 15 && total >= 4) return `Solo el ${pC}% está ganado.`;
+  if (pC >= 40) return `El ${pC}% ya está ganado.`;
+  if (pP >= 25 && total >= 4) return `El ${pP}% está en perdido.`;
   return null;
 }
 
@@ -197,7 +232,7 @@ function SaludProcesoBlock({
   loading: boolean;
   onVerGrupo: (tipo: SaludAccionTipo) => void;
 }) {
-  const { completo, activo, bloqueado, nuevo, total } = counts;
+  const { completo, perdido, activo, bloqueado, nuevo, total } = counts;
   const w = (n: number) => (total > 0 ? (n / total) * 100 : 0);
   const insight = saludInsightLine(counts);
   const wrap =
@@ -205,7 +240,7 @@ function SaludProcesoBlock({
       ? "mt-2 rounded-lg border border-slate-200/70 bg-slate-50/50 px-3 py-2.5"
       : "mt-2 rounded-lg border border-slate-200/70 bg-slate-100/40 px-3 py-2.5";
 
-  const m = Math.max(completo, activo, nuevo);
+  const m = Math.max(completo, perdido, activo, nuevo);
   const linkBtn =
     "ml-1 inline align-baseline text-xs font-semibold text-slate-700 underline decoration-slate-400 underline-offset-2 hover:text-slate-900";
 
@@ -229,7 +264,7 @@ function SaludProcesoBlock({
           </button>
         </>
       );
-    } else if (m === activo && activo > completo) {
+    } else if (m === activo && activo > completo && activo > perdido && activo > nuevo) {
       primaryLine = (
         <>
           <span className="text-base" aria-hidden>
@@ -244,7 +279,7 @@ function SaludProcesoBlock({
           </button>
         </>
       );
-    } else if (m === nuevo && nuevo > activo && nuevo > completo) {
+    } else if (m === nuevo && nuevo > activo && nuevo > completo && nuevo > perdido) {
       primaryLine = (
         <>
           <span className="text-base" aria-hidden>
@@ -261,14 +296,14 @@ function SaludProcesoBlock({
           </button>
         </>
       );
-    } else if (m === completo && completo > activo && completo > 0) {
+    } else if (m === completo && completo > activo && completo > perdido && completo > nuevo && completo > 0) {
       primaryLine = (
         <>
           <span className="text-base" aria-hidden>
             🟢
           </span>{" "}
           <span className="font-medium text-slate-800">
-            {completo === 1 ? "1 lead completo" : `${completo} leads completos`}
+            {completo === 1 ? "1 lead ganado" : `${completo} leads ganados`}
           </span>
           {" — "}
           <button type="button" className={linkBtn} onClick={() => onVerGrupo("completo")}>
@@ -276,9 +311,32 @@ function SaludProcesoBlock({
           </button>
         </>
       );
+    } else if (m === perdido && perdido > activo && perdido > completo && perdido > nuevo && perdido > 0) {
+      primaryLine = (
+        <>
+          <span className="text-base" aria-hidden>
+            📉
+          </span>{" "}
+          <span className="font-medium text-slate-800">
+            {perdido === 1 ? "1 lead perdido" : `${perdido} leads perdidos`}
+          </span>
+          {" — "}
+          <button type="button" className={linkBtn} onClick={() => onVerGrupo("perdido")}>
+            ver listado
+          </button>
+        </>
+      );
     } else {
       const fallback: SaludAccionTipo =
-        activo >= nuevo && activo >= completo && activo > 0 ? "activo" : nuevo > 0 ? "nuevo" : completo > 0 ? "completo" : "activo";
+        activo >= nuevo && activo >= completo && activo >= perdido && activo > 0
+          ? "activo"
+          : nuevo > 0
+            ? "nuevo"
+            : completo > 0
+              ? "completo"
+              : perdido > 0
+                ? "perdido"
+                : "activo";
       primaryLine = (
         <>
           <span className="font-medium text-slate-700">Distribución equilibrada</span>
@@ -313,10 +371,20 @@ function SaludProcesoBlock({
               onClick={() => completo > 0 && onVerGrupo("completo")}
               disabled={completo === 0}
               className="inline-flex items-baseline gap-1 rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-100 disabled:opacity-50"
-              title="Ver completos"
+              title="Ver ganados"
             >
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" aria-hidden />
-              Completo: <span className="tabular-nums">{completo}</span>
+              Ganado: <span className="tabular-nums">{completo}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => perdido > 0 && onVerGrupo("perdido")}
+              disabled={perdido === 0}
+              className="inline-flex items-baseline gap-1 rounded-md bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-900 ring-1 ring-rose-100 disabled:opacity-50"
+              title="Ver perdidos"
+            >
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-400" aria-hidden />
+              Perdido: <span className="tabular-nums">{perdido}</span>
             </button>
             <button
               type="button"
@@ -352,10 +420,13 @@ function SaludProcesoBlock({
           <div
             className="flex h-1.5 w-full overflow-hidden rounded-full bg-slate-200/90 shadow-inner"
             role="img"
-            aria-label={`Salud: ${completo} completo, ${activo} activo, ${bloqueado} bloqueado, ${nuevo} nuevo`}
+            aria-label={`Salud: ${completo} ganado, ${perdido} perdido, ${activo} activo, ${bloqueado} bloqueado, ${nuevo} nuevo`}
           >
             {completo > 0 && (
-              <div className="h-full min-w-px shrink-0 bg-emerald-400/90" style={{ width: `${w(completo)}%` }} title={`Completo: ${completo}`} />
+              <div className="h-full min-w-px shrink-0 bg-emerald-400/90" style={{ width: `${w(completo)}%` }} title={`Ganado: ${completo}`} />
+            )}
+            {perdido > 0 && (
+              <div className="h-full min-w-px shrink-0 bg-rose-400/90" style={{ width: `${w(perdido)}%` }} title={`Perdido: ${perdido}`} />
             )}
             {activo > 0 && (
               <div className="h-full min-w-px shrink-0 bg-amber-300" style={{ width: `${w(activo)}%` }} title={`Activo: ${activo}`} />
@@ -448,18 +519,27 @@ function NextActionPanel({
       </div>
     );
   }
-  const estado = getLeadEstadoVisual(lead);
+  const proceso = getLeadEstadoVisual(lead);
+  const estadoComercial = calcularEstadoReal(lead);
   const { action, href } = getNextAction(lead);
   const estadoLabel =
-    estado === "finalizado" ? "Completo" : estado === "en_curso" ? "En curso" : estado === "bloqueado" ? "Bloqueado" : "Nuevo";
+    proceso === "bloqueado"
+      ? "Bloqueado"
+      : estadoComercial === "Cerrado"
+        ? "Cerrado"
+        : estadoComercial === "Perdido"
+          ? "Perdido"
+          : "Activo";
   const estadoClass =
-    estado === "bloqueado"
+    proceso === "bloqueado"
       ? "bg-red-100 text-red-800"
-      : estado === "en_curso"
-        ? "bg-amber-100 text-amber-800"
-        : estado === "finalizado"
-          ? "bg-emerald-100 text-emerald-800"
-          : "bg-slate-100 text-slate-700";
+      : estadoComercial === "Cerrado"
+        ? "bg-emerald-100 text-emerald-800"
+        : estadoComercial === "Perdido"
+          ? "bg-rose-100 text-rose-900"
+          : proceso === "en_curso"
+            ? "bg-amber-100 text-amber-800"
+            : "bg-slate-100 text-slate-700";
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -486,7 +566,7 @@ function NextActionPanel({
 type ViewMode = "kanban" | "listado";
 const PIPELINE_FILTER_OPTIONS = ["Todos", ...KANBAN_COLUMNS];
 
-const SALUD_URL_KEYS = ["bloqueado", "activo", "nuevo", "completo"] as const;
+const SALUD_URL_KEYS = ["bloqueado", "activo", "nuevo", "completo", "perdido"] as const;
 
 const SEGMENTO_URL_KEYS = ["nuevas", "activas", "en_propuesta", "en_seguimiento"] as const;
 
@@ -788,7 +868,8 @@ export default function Leads87Page() {
     bloqueado: "bloqueados (faltan datos)",
     activo: "activos en curso",
     nuevo: "sin trabajar",
-    completo: "completados",
+    completo: "ganados",
+    perdido: "perdidos",
   };
 
   const segmentoDrillLabels: Record<Leads87CommercialSummaryBucket, string> = {
@@ -812,7 +893,7 @@ export default function Leads87Page() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
   }, [comercialesCatalog, leads]);
 
-  /** Conteos por etapa derivada (getLeadStage), mismo criterio que columna «Etapa actual» del listado. */
+  /** Conteos por etapa derivada del flujo LEADS87 (getLeadStage); la columna «Etapa actual» del listado usa `etapa_actual` / pipeline. */
   const globalCommercialSummary = useMemo(
     () => countLeads87CommercialSummary(leads.map(commercialSummaryInputFromLead)),
     [leads],
@@ -1298,33 +1379,39 @@ export default function Leads87Page() {
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
                     {displayLeads.map((l) => {
-                      const { progress, label: etapa } = getLeadFlowSnapshot(l);
+                      const { progress } = getLeadFlowSnapshot(l);
+                      const etapa = getLeadEtapaActual(l);
                       const salud = getLeadSalud(l);
-                      const estado = getLeadEstadoVisual(l);
+                      const proceso = getLeadEstadoVisual(l);
+                      const estadoComercial = calcularEstadoReal(l);
                       const rowBg =
-                        estado === "finalizado"
+                        proceso === "cerrado_ganado"
                           ? "bg-emerald-50/50"
-                          : estado === "en_curso"
-                            ? "bg-amber-50/30"
-                            : estado === "bloqueado"
-                              ? "bg-red-50/30"
-                              : "bg-slate-50/20";
+                          : proceso === "cerrado_perdido"
+                            ? "bg-rose-50/40"
+                            : proceso === "en_curso"
+                              ? "bg-amber-50/30"
+                              : proceso === "bloqueado"
+                                ? "bg-red-50/30"
+                                : "bg-slate-50/20";
                       const estadoLabel =
-                        estado === "finalizado"
-                          ? "Completo"
-                          : estado === "en_curso"
-                            ? "Activo"
-                            : estado === "bloqueado"
-                              ? "Bloqueado"
-                              : "Nuevo";
+                        proceso === "bloqueado"
+                          ? "Bloqueado"
+                          : estadoComercial === "Cerrado"
+                            ? "Cerrado"
+                            : estadoComercial === "Perdido"
+                              ? "Perdido"
+                              : "Activo";
                       const estadoBadgeClass =
-                        estado === "finalizado"
-                          ? "bg-emerald-100 text-emerald-800"
-                          : estado === "en_curso"
-                            ? "bg-amber-100 text-amber-800"
-                            : estado === "bloqueado"
-                              ? "bg-red-100 text-red-800"
-                              : "bg-slate-200 text-slate-700";
+                        proceso === "bloqueado"
+                          ? "bg-red-100 text-red-800"
+                          : estadoComercial === "Cerrado"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : estadoComercial === "Perdido"
+                              ? "bg-rose-100 text-rose-900"
+                              : proceso === "en_curso"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-slate-200 text-slate-700";
                       const saludBadgeClass =
                         salud.status === "ok"
                           ? "bg-emerald-100 text-emerald-700"
@@ -1351,9 +1438,7 @@ export default function Leads87Page() {
                           <td className="px-4 py-3 text-sm font-medium tabular-nums text-slate-700">
                             {progress}%
                           </td>
-                          <td className="px-4 py-3 text-sm text-slate-600">
-                            {etapa}
-                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-600">{etapa}</td>
                           <td className="px-4 py-3">
                             <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${estadoBadgeClass}`}>
                               {estadoLabel}
@@ -1418,7 +1503,8 @@ export default function Leads87Page() {
                         </div>
                         <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                           {columnLeads.map((l) => {
-                            const { progress, label: etapa } = getLeadFlowSnapshot(l);
+                            const { progress } = getLeadFlowSnapshot(l);
+                            const etapa = getLeadEtapaActual(l);
                             const salud = getLeadSalud(l);
                             const saludBadgeClass =
                               salud.status === "ok"
@@ -1471,7 +1557,8 @@ export default function Leads87Page() {
                       </div>
                       <div className="p-2 space-y-2 overflow-y-auto max-h-[70vh] select-none">
                         {(leadsByColumn["Otros"] ?? []).map((l) => {
-                          const { progress, label: etapa } = getLeadFlowSnapshot(l);
+                          const { progress } = getLeadFlowSnapshot(l);
+                          const etapa = getLeadEtapaActual(l);
                           const salud = getLeadSalud(l);
                           const saludBadgeClass =
                             salud.status === "ok"

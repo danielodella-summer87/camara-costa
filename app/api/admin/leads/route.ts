@@ -388,8 +388,13 @@ export async function GET(req: Request) {
 
     const normalizedData = (data ?? []).map((lead: any) => {
       const shaped = shapeLeadRowLinkedinForApi(lead as Record<string, unknown>);
+      const pipelineStr =
+        typeof shaped.pipeline === "string" && shaped.pipeline.trim() ? shaped.pipeline.trim() : "";
+      const etapaDb =
+        typeof lead.etapa_actual === "string" && lead.etapa_actual.trim() ? lead.etapa_actual.trim() : "";
       return {
         ...shaped,
+        etapa_actual: etapaDb || pipelineStr || null,
         comercial: Array.isArray(lead.comerciales)
           ? lead.comerciales[0] ?? null
           : lead.comerciales ?? null,

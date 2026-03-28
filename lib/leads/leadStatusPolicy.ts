@@ -54,3 +54,35 @@ export function isLeadClosedFromRow(lead: { pipeline?: string | null } | null | 
   if (!lead) return false;
   return isLeadClosed(lead.pipeline);
 }
+
+/** Estado comercial en UI (listados): prioriza `closed_*` si existen; si no, pipeline de cierre. */
+export type LeadCierreEstadoUi = "Activo" | "Cerrado" | "Perdido";
+
+export function calcularEstadoReal(lead: {
+  closed_at?: string | null;
+  closed_result?: string | null;
+  pipeline?: string | null;
+}): LeadCierreEstadoUi {
+  const ts = typeof lead.closed_at === "string" ? lead.closed_at.trim() : "";
+  if (ts.length > 0) {
+    return lead.closed_result === "won" ? "Cerrado" : "Perdido";
+  }
+  if (isLeadClosed(lead.pipeline)) {
+    return isLeadWon(lead.pipeline) ? "Cerrado" : "Perdido";
+  }
+  return "Activo";
+}
+
+/**
+ * Etapa del flujo mostrada en listados: `etapa_actual` cuando exista en API/DB;
+ * si no, `pipeline` (CRM / kanban).
+ */
+export function getLeadEtapaActual(lead: {
+  etapa_actual?: string | null;
+  pipeline?: string | null;
+}): string {
+  const e = typeof lead.etapa_actual === "string" ? lead.etapa_actual.trim() : "";
+  if (e) return e;
+  const p = typeof lead.pipeline === "string" ? lead.pipeline.trim() : "";
+  return p || "—";
+}
