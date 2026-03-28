@@ -1,9 +1,5 @@
 import Link from "next/link";
 import EmpresasTable from "./EmpresasTable";
-import {
-  ESTADOS_REVISION_INICIATIVA,
-  labelEstadoRevisionIniciativa,
-} from "@/lib/crm/iniciativaEstadoRevision";
 
 export const dynamic = "force-dynamic";
 
@@ -15,21 +11,21 @@ export default function EmpresasPage() {
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold text-slate-900">Iniciativas</h1>
             <p className="mt-1 text-sm text-slate-600">
-              Ingreso preliminar y validación antes del <strong className="font-medium text-slate-800">lead</strong>{" "}
-              comercial. Los datos viven aquí hasta que convertís; el lead queda con snapshot propio en LEADS87.
+              Bandeja para decidir rápido: filtrá por estado, convertí a lead o descartá desde cada fila. El detalle sigue
+              disponible para editar datos finos antes de convertir.
             </p>
             <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/90 p-4 text-sm text-slate-700">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Operación diaria</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cómo usarla</p>
               <ul className="mt-2 list-disc space-y-1.5 pl-5 text-slate-600">
                 <li>
-                  Usá <strong className="font-medium text-slate-800">búsqueda</strong> y{" "}
-                  <strong className="font-medium text-slate-800">filtro por estado de revisión</strong> en el listado.
+                  Arriba del listado: <strong className="font-medium text-slate-800">totales</strong> y chips{" "}
+                  <strong className="font-medium text-slate-800">Todos / Nuevos / Revisados / Convertidos / Descartados</strong>{" "}
+                  (solo en esta pantalla).
                 </li>
                 <li>
-                  <strong className="font-medium text-slate-800">Ver</strong> abre la ficha: editar datos,{" "}
-                  <span className="whitespace-nowrap">fuente remota</span>, score preliminar y{" "}
-                  <strong className="font-medium text-slate-800">convertir a lead</strong> (una sola vez; si ya hay lead,
-                  usá <strong className="font-medium text-slate-800">Abrir lead</strong>).
+                  En cada fila hay un único botón verde <strong className="font-medium text-slate-800">Convertir a Lead</strong>
+                  , más <strong className="font-medium text-slate-800">Descartar</strong> y{" "}
+                  <strong className="font-medium text-slate-800">Detalle</strong>.
                 </li>
                 <li>
                   Altas masivas:{" "}
@@ -44,8 +40,7 @@ export default function EmpresasPage() {
                 </li>
               </ul>
               <p className="mt-3 text-xs leading-relaxed text-slate-500">
-                Estados de revisión:{" "}
-                {ESTADOS_REVISION_INICIATIVA.map((k) => labelEstadoRevisionIniciativa(k)).join(" · ")}.
+                Los badges resumen el estado en cuatro grupos: Nuevo, Revisado, Convertido y Descartado.
               </p>
             </div>
           </div>

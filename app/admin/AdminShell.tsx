@@ -8,6 +8,7 @@ import UserMenu from "@/app/admin/components/UserMenu";
 import { usePersonalizacion } from "@/lib/personalizacion";
 import { BreadcrumbContext } from "@/app/admin/context/BreadcrumbContext";
 import { mergeAdminSidebarModules, type AdminSidebarModule } from "@/lib/admin/adminSidebarModules";
+import { APP_SUITE_CONFIG } from "@/lib/config/appSuiteConfig";
 
 const SIDEBAR_STORAGE_KEY = "admin_sidebar_collapsed";
 
@@ -31,42 +32,47 @@ function isActive(pathname: string | null, href: string) {
   return pathname.startsWith(href);
 }
 
-/** Partes del breadcrumb: [ "Admin", "Leads", "Nombre del lead" ]. */
+/** Partes del breadcrumb: [ suite, sección, … ]. */
 function getBreadcrumbParts(
   pathname: string | null,
   breadcrumbSegment: string | null,
   clientePlural: string
 ): string[] {
-  if (!pathname || !pathname.startsWith("/admin")) return ["Admin", "Dashboard"];
+  const suite = APP_SUITE_CONFIG.suiteName;
+
+  if (!pathname || !pathname.startsWith("/admin")) return [suite, "Dashboard"];
 
   const segments = pathname.replace(/^\/admin\/?/, "").split("/").filter(Boolean);
 
-  if (pathname === "/admin") return ["Admin", "Centro de control rápido"];
-  if (pathname === "/admin/dashboard") return ["Admin", "Dashboard comercial completo"];
+  if (pathname === "/admin") return [suite, "Centro de control rápido"];
+  if (pathname === "/admin/dashboard") return [suite, "Dashboard"];
 
   if (pathname.startsWith("/admin/leads/") && segments[0] === "leads" && segments[1] === "kanban")
-    return ["Admin", "Leads", "Pipeline visual"];
+    return [suite, "Leads", "Pipeline visual"];
   if (pathname.startsWith("/admin/leads/") && segments[0] === "leads" && segments.length >= 2) {
     const last = breadcrumbSegment?.trim() || "Detalle";
-    return ["Admin", "Leads", last];
+    return [suite, "Leads", last];
   }
   if (pathname.startsWith("/admin/leads87/") && segments[0] === "leads87" && segments.length >= 2) {
     const last = breadcrumbSegment?.trim() || "Oportunidad";
-    return ["Admin", "LEADS87", last];
+    return [suite, APP_SUITE_CONFIG.modules.leads.name, last];
   }
-  if (pathname.startsWith("/admin/leads87")) return ["Admin", "LEADS87"];
-  if (pathname.startsWith("/admin/leads")) return ["Admin", "Leads", "Gestión operativa"];
-  if (pathname.startsWith("/admin/leadsok")) return ["Admin", "LeadsOk"];
+  if (pathname.startsWith("/admin/leads87")) return [suite, APP_SUITE_CONFIG.modules.leads.name];
+  if (pathname.startsWith("/admin/leads")) return [suite, "Leads", "Gestión operativa"];
+  if (pathname.startsWith("/admin/leadsok")) return [suite, "LeadsOk"];
+  if (pathname.startsWith("/admin/copilot")) return [suite, APP_SUITE_CONFIG.modules.copilot.name];
 
   const labelMap: Record<string, string> = {
     empresas: "Iniciativas",
-    socios: clientePlural.trim() || "Socios",
+    socios: "Clientes",
+    dashboard: "Dashboard",
     agenda: "Agenda",
     reuniones: "Reuniones",
     operaciones: "Operaciones",
     reportes: "Reportes",
     oportunidades: "Oportunidades",
-    leads87: "LEADS87",
+    leads87: APP_SUITE_CONFIG.modules.leads.name,
+    copilot: APP_SUITE_CONFIG.modules.copilot.name,
     eventos: "Eventos",
     "mesa-de-ayuda": "Mesa de ayuda",
     neuroventas: "Manual de neuroventas",
@@ -75,7 +81,7 @@ function getBreadcrumbParts(
   };
   const first = segments[0] ?? "";
   const label = labelMap[first] ?? first;
-  return ["Admin", label];
+  return [suite, label];
 }
 
 function normalizeRole(role: string | null | undefined): RoleKey | null {
@@ -89,11 +95,11 @@ function normalizeRole(role: string | null | undefined): RoleKey | null {
 
 /**
  * Filtra items del NAV según rol (app_user.role desde /api/auth/me).
- * Mesa de ayuda se muestra para TODOS los roles.
+ * Mesa de ayuda se muestra para todos los roles que mantengan el ítem en el menú mergeado.
  * - admin: ve todo
- * - comercial: Dashboard, Iniciativas, Leads, Socios, Agenda, Reportes, Eventos, Mesa de ayuda. NO: Operaciones, IA, Personalización, Configuración
- * - operador: Dashboard, Leads, Operaciones, Mesa de ayuda, Agenda, Reportes (+ Iniciativas, Socios, Eventos). NO: IA, Personalización, Configuración
- * - viewer: Dashboard, Iniciativas, Leads, Reportes, Mesa de ayuda (lectura). NO: Operaciones, IA, Personalización, Configuración, Socios, Agenda, Eventos
+ * - comercial: oculta Configuración y Personalización
+ * - operador: oculta Configuración y Personalización
+ * - viewer: oculta Socios/Clientes, Agenda y Eventos (prefijos legacy aún filtrados)
  */
 function filterNavByRole(role: RoleKey | null, nav: AdminSidebarModule[]): AdminSidebarModule[] {
   if (!role) return nav;
@@ -176,7 +182,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         });
         const json = (await res.json()) as { data?: { sidebar_modules?: unknown } };
         if (!cancelled && json?.data) {
-          setSidebarModules(mergeAdminSidebarModules(json.data.sidebar_modules as never));
+          const merged = mergeAdminSidebarModules(json.data.sidebar_modules as never);
+          if (process.env.NODE_ENV === "development") {
+            console.debug("[AdminShell] sidebar tras portal + merge", {
+              hasPersistedSidebar: Array.isArray(json.data.sidebar_modules),
+              count: merged.length,
+              keys: merged.map((m) => m.key),
+            });
+          }
+          setSidebarModules(merged);
         }
       } catch {
         /* defaults ya en estado inicial */
@@ -195,6 +209,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     const visible = sidebarModules.filter((m) => m.status !== "oculto");
     return filterNavByRole(role, visible);
   }, [role, sidebarModules]);
+
+  const mainNav = useMemo(
+    () => filteredNav.filter((m) => m.navGroup !== "footer"),
+    [filteredNav]
+  );
+  const footerNav = useMemo(
+    () => filteredNav.filter((m) => m.navGroup === "footer"),
+    [filteredNav]
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [breadcrumbSegment, setBreadcrumbSegment] = useState<string | null>(null);
 
@@ -228,6 +251,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           className={cx(
             "bg-[#0b1220] text-white border-r border-white/10",
             "fixed md:static inset-y-0 left-0 z-40",
+            "flex flex-col min-h-0",
             "transition-[width,transform] duration-200 ease-out",
             "w-64",
             sidebarCollapsed && "md:w-0 md:overflow-hidden",
@@ -237,12 +261,16 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         >
           <div className="p-4 border-b border-white/10">
             <div className="rounded-xl overflow-hidden bg-white/5 p-3 flex items-center justify-center">
-              <img src="/licencia.png" alt="Licencia Cámara Costa" className="max-h-24 object-contain" />
+              <img
+                src="/licencia.png"
+                alt={`${APP_SUITE_CONFIG.suiteName} — identidad visual`}
+                className="max-h-24 object-contain"
+              />
             </div>
           </div>
 
-          <nav className="p-3 space-y-1">
-            {filteredNav.map((item) => {
+          <nav className="p-3 space-y-1 flex flex-col flex-1 min-h-0">
+            {mainNav.map((item) => {
               const active = isActive(pathname, item.href);
               const isActivo = item.status === "activo";
               const isPrep = item.status === "en_preparacion";
@@ -280,13 +308,58 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                 </Link>
               );
             })}
+            {footerNav.length > 0 ? (
+              <>
+                <div className="mx-1 my-2 border-t border-white/10 pt-2 space-y-1" role="presentation" />
+                {footerNav.map((item) => {
+                  const active = isActive(pathname, item.href);
+                  const isActivo = item.status === "activo";
+                  const isPrep = item.status === "en_preparacion";
+                  const displayLabel = item.useMemberPluralLabel
+                    ? clientePlural.trim() || "Socios"
+                    : item.label;
+                  return (
+                    <Link
+                      key={item.key}
+                      href={item.href}
+                      onClick={() => {
+                        if (typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches) {
+                          setMobileOpen(false);
+                        }
+                      }}
+                      className={cx(
+                        "flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors",
+                        isActivo
+                          ? active
+                            ? "bg-white/10 font-semibold text-white"
+                            : "font-semibold text-white hover:bg-white/5 hover:text-white"
+                          : isPrep
+                            ? active
+                              ? "bg-white/5 font-normal text-gray-300"
+                              : "cursor-not-allowed font-normal text-gray-400 opacity-70 hover:bg-transparent hover:text-gray-400"
+                            : active
+                              ? "bg-white/5 font-normal text-gray-300"
+                              : "font-normal text-gray-400"
+                      )}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center text-lg leading-none" aria-hidden>
+                        {item.icon || "·"}
+                      </span>
+                      <span>{displayLabel}</span>
+                    </Link>
+                  );
+                })}
+              </>
+            ) : null}
           </nav>
 
           <div className="mt-auto p-4 border-t border-white/10">
             {roleLoading ? (
               <div className="rounded-xl bg-white/5 p-3 text-xs text-white/60">Cargando…</div>
             ) : (
-              <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">Cámara Costa • Admin UI</div>
+              <div className="rounded-xl bg-white/5 p-3 text-xs text-white/70">
+                {APP_SUITE_CONFIG.suiteName} • panel admin
+              </div>
             )}
           </div>
         </aside>
@@ -321,11 +394,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
                   )}
                 </button>
                 <div className="text-sm text-gray-500">
-                  {breadcrumbParts.slice(0, -1).map((part) => (
-                    <span key={part}>{part} / </span>
+                  {breadcrumbParts.slice(0, -1).map((part, i) => (
+                    <span key={`bc-${i}-${part}`}>
+                      {part}
+                      {" / "}
+                    </span>
                   ))}
                   <span className="text-gray-900 font-medium">
-                    {breadcrumbParts[breadcrumbParts.length - 1]}
+                    {breadcrumbParts[breadcrumbParts.length - 1] ?? ""}
                   </span>
                 </div>
               </div>

@@ -38,10 +38,9 @@ export function findSidebarModuleForPath(
  *
  * Prioridad:
  * 1. `admin_landing_path` en portal_config, solo si el módulo asociado está **activo** (no en_preparacion / oculto).
- * 2. Módulo **Centro de control** (`/admin`, key `dashboard`) si está **activo**.
- * 3. **Dashboard comercial** si está **activo**.
- * 4. Primer módulo **activo** en el orden del menú.
- * 5. Fallback `/admin/dashboard`.
+ * 2. **Dashboard** (`/admin/dashboard`, key `dashboard_comercial`) si está **activo**.
+ * 3. Primer módulo **activo** en el orden del menú.
+ * 4. Fallback `/admin/dashboard`.
  *
  * Nunca devuelve una ruta cuyo módulo no esté `activo` (salvo fallback).
  */
@@ -67,9 +66,6 @@ export async function resolveAdminLandingPath(): Promise<string> {
     const mod = findSidebarModuleForPath(merged, adminLandingPath);
     if (mod && isModuleActive(mod)) return adminLandingPath;
   }
-
-  const centro = merged.find((m) => m.key === "dashboard");
-  if (centro && isModuleActive(centro)) return "/admin";
 
   const comercial = merged.find((m) => m.key === "dashboard_comercial");
   if (comercial && isModuleActive(comercial)) return "/admin/dashboard";

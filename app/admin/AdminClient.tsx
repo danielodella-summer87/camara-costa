@@ -8,6 +8,7 @@ import { RolePanels } from "@/components/reports/RolePanels";
 import { WhatsAppCallCard } from "@/components/admin/WhatsAppCallCard";
 import { usePersonalizacion } from "@/lib/personalizacion";
 import { resolveEntityName } from "@/lib/ui/labels";
+import { APP_SUITE_CONFIG } from "@/lib/config/appSuiteConfig";
 
 type TabKey =
   | "resumen"
@@ -43,6 +44,12 @@ export default function AdminClient() {
     <PageContainer>
       <div className="mx-auto w-full max-w-5xl space-y-6">
         <div className="rounded-2xl border bg-white p-6">
+          <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
+            <span className="font-medium text-slate-800">Suite:</span> {APP_SUITE_CONFIG.suiteName}
+            <span className="mx-2 text-slate-300">·</span>
+            <span className="font-medium text-slate-800">Módulo activo principal:</span>{" "}
+            {APP_SUITE_CONFIG.modules.leads.name}
+          </div>
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900">Centro de control rápido</h1>
@@ -70,10 +77,10 @@ export default function AdminClient() {
                 Dashboard comercial
               </Link>
               <Link
-                href="/admin/leads"
-                className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+                href={APP_SUITE_CONFIG.modules.leads.href}
+                className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
               >
-                Ir a Leads
+                {APP_SUITE_CONFIG.modules.leads.name}
               </Link>
               <Link
                 href="/admin/socios"

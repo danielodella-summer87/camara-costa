@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
-import { List, LayoutGrid, FileText, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { List, LayoutGrid, FileText, ExternalLink, ChevronDown, ChevronRight, BookOpen } from "lucide-react";
 import type { LeadForLeadsOkMacro, LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
 import { getLeadMacroFlowDisplay, getLeadStage, type DerivedLeadStage } from "@/lib/crm/getLeadDerivedFlow";
 import {
@@ -1079,6 +1079,15 @@ export default function Leads87Page() {
               </Link>
             );
           })}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-4">
+          <Link
+            href="/admin/neuroventas"
+            className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-slate-900"
+          >
+            <BookOpen className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+            Manual de neuroventas
+          </Link>
         </div>
       </div>
 

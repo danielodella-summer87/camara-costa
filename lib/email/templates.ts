@@ -1,5 +1,5 @@
 export function inviteEmailSubject() {
-  return "Acceso habilitado al CRM (Ingreso con Google)";
+  return "Acceso habilitado — Summer87 Intelligence (Ingreso con Google)";
 }
 
 export function inviteEmailHtml(params: {
@@ -11,9 +11,9 @@ export function inviteEmailHtml(params: {
 
   return `
   <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111">
-    <h2>Acceso habilitado al CRM</h2>
+    <h2>Acceso habilitado — Summer87 Intelligence</h2>
     <p>Hola,</p>
-    <p>Se habilitó tu acceso al CRM con el correo:</p>
+    <p>Se habilitó tu acceso a la suite con el correo:</p>
     <p><strong>${email}</strong>${roleName ? ` (Rol: ${roleName})` : ""}</p>
     <p>Para ingresar, utilizá el botón <strong>"Continuar con Google"</strong> con este mismo correo.</p>
     <p style="margin:20px 0">

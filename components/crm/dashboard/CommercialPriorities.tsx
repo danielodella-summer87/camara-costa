@@ -49,7 +49,7 @@ export function CommercialPriorities({ priorities }: Props) {
         <ul className="mt-4 space-y-4">
           {priorities.map((item, index) => (
             <li
-              key={item.leadId}
+              key={item.leadId ? String(item.leadId) : `priority-${index}`}
               className="flex flex-col gap-2 rounded-xl border border-slate-100 bg-slate-50/30 px-4 py-3"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">

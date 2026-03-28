@@ -49,7 +49,8 @@ function statusLabel(
   type: LeadDocumentType,
   entry: LeadDocumentArchiveEntry | null | undefined,
   docUrl: string,
-  presentationResolved: ResolvedPresentationResource | null
+  presentationResolved: ResolvedPresentationResource | null,
+  strategyApprovedAt: string | null | undefined
 ): { text: string; tone: "ok" | "pending" | "missing" | "error" } {
   if (type === "presentation" && presentationResolved) {
     const official =
@@ -62,6 +63,16 @@ function statusLabel(
     if (presentationResolved.gammaUrl) return { text: "Solo en Gamma (externo)", tone: "pending" };
     if (docUrl) return { text: "Disponible", tone: "pending" };
     return { text: "Sin documento", tone: "missing" };
+  }
+
+  /** Estrategia LEADS87: puede estar confirmada sin PDF en CRM (`strategy_approved_at`). */
+  if (type === "strategy") {
+    const approved = typeof strategyApprovedAt === "string" && strategyApprovedAt.trim().length > 0;
+    if (approved) {
+      if (entry?.status === "failed") return { text: "Error al archivar", tone: "error" };
+      if (entry?.officialUrl?.trim()) return { text: "En CRM", tone: "ok" };
+      return { text: "Estrategia confirmada", tone: "ok" };
+    }
   }
 
   if (!entry || entry.status === "missing") {
@@ -82,6 +93,8 @@ type Props = {
   presentationPdfUrl: string | null;
   legacyTransientTypes: LeadDocumentType[];
   recoverBusy: boolean;
+  /** Confirmación explícita en LEADS87 (paso 3); no requiere documento archivado. */
+  strategyApprovedAt?: string | null;
   onGoToWorkspace: (step: number) => void;
   onRecoverLegacy: () => void;
   /** Abre presentación archivada / PDF (misma lógica que el hero). */
@@ -113,6 +126,7 @@ export function Leads87LeadDocumentsBlock({
   presentationPdfUrl,
   legacyTransientTypes,
   recoverBusy,
+  strategyApprovedAt,
   onGoToWorkspace,
   onRecoverLegacy,
   onOpenPresentationOfficial,
@@ -134,7 +148,7 @@ export function Leads87LeadDocumentsBlock({
           const label = DOC_LABELS[type];
           const entry = archiveByType?.[type];
           const docUrl = String(documents?.[type] ?? "").trim();
-          const st = statusLabel(type, entry, docUrl, presentationResolved);
+          const st = statusLabel(type, entry, docUrl, presentationResolved, strategyApprovedAt);
 
           const officialNonPresentation =
             type !== "presentation" ? (entry?.officialUrl?.trim() || null) : null;

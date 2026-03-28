@@ -28,7 +28,7 @@ export default function NeuroventasPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Manual de neuroventas</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Material de consulta y capacitación comercial integrado al CRM.
+            Material de consulta y capacitación comercial dentro de Summer87 Intelligence.
           </p>
         </div>
         <div className="flex flex-shrink-0 flex-wrap gap-2">
@@ -61,7 +61,7 @@ export default function NeuroventasPage() {
         >
           <div className="min-h-[480px] sm:min-h-[560px] lg:min-h-[720px] w-full">
             <iframe
-              title="Manual de neuroventas — CRM con Inteligencia Comercial"
+              title="Manual de neuroventas — Summer87 Intelligence"
               src={FLIPBOOK_URL}
               className="h-full min-h-[480px] w-full sm:min-h-[560px] lg:min-h-[720px]"
               allowFullScreen

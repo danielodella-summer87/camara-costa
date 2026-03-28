@@ -34,6 +34,7 @@ import {
 } from "@/components/crm/dashboard/PropuestasEsperandoRespuesta";
 import Link from "next/link";
 import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
+import { APP_SUITE_CONFIG } from "@/lib/config/appSuiteConfig";
 
 /** Normaliza string | null | undefined a string | null para tipos estrictos. */
 function normalizeNullableString(value: string | null | undefined): string | null {
@@ -124,7 +125,16 @@ export default function DashboardPage() {
     let cancelled = false;
     setError(null);
     setLoading(true);
-    fetch("/api/admin/leads", { cache: "no-store", headers: { "Cache-Control": "no-store" } })
+
+    const ac = new AbortController();
+    const timeoutMs = 45_000;
+    const timeoutId = window.setTimeout(() => ac.abort(), timeoutMs);
+
+    fetch("/api/admin/leads", {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-store" },
+      signal: ac.signal,
+    })
       .then(async (res) => {
         const json = (await res.json()) as ApiResp<Lead[]>;
         if (!res.ok) throw new Error(json?.error ?? "Error cargando leads");
@@ -136,14 +146,22 @@ export default function DashboardPage() {
         setLeads(data);
       })
       .catch((e) => {
-        if (!cancelled) setError(e?.message ?? "Error cargando datos");
+        if (cancelled) return;
+        if (e instanceof Error && e.name === "AbortError") {
+          setError(`La carga de leads superó ${timeoutMs / 1000}s. Revisá la red o la sesión.`);
+        } else {
+          setError(e instanceof Error ? e.message : "Error cargando datos");
+        }
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
+      ac.abort();
+      window.clearTimeout(timeoutId);
     };
   }, []);
 
@@ -194,6 +212,12 @@ export default function DashboardPage() {
   return (
     <PageContainer>
       <div className="rounded-2xl border bg-white p-6">
+        <div className="mb-4 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
+          <span className="font-medium text-slate-800">Suite:</span> {APP_SUITE_CONFIG.suiteName}
+          <span className="mx-2 text-slate-300">·</span>
+          <span className="font-medium text-slate-800">Módulo activo principal:</span>{" "}
+          {APP_SUITE_CONFIG.modules.leads.name}
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Dashboard comercial completo</h1>
@@ -202,6 +226,12 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={APP_SUITE_CONFIG.modules.leads.href}
+              className="rounded-xl border border-slate-900 bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              {APP_SUITE_CONFIG.modules.leads.name}
+            </Link>
             <Link
               href="/admin/agenda"
               className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"

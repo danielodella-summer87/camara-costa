@@ -2492,6 +2492,7 @@ export default function Leads87DetailPage() {
                 presentationPdfUrl={presentationPdfUrl}
                 legacyTransientTypes={legacyGammaTransientTypes}
                 recoverBusy={legacyRecoverBusy}
+                strategyApprovedAt={fullLead?.strategy_approved_at ?? null}
                 onGoToWorkspace={goToWorkspace}
                 onRecoverLegacy={handleRecoverLegacyGammaDocs}
                 onOpenPresentationOfficial={openPresentationFromHero}

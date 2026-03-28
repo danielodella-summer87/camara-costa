@@ -13,8 +13,8 @@ import "./globals.css";
 // });
 
 export const metadata: Metadata = {
-  title: "Cámara Costa",
-  description: "Admin Cámara",
+  title: "Summer87 Intelligence",
+  description: "Suite Summer87 Intelligence — administración",
 };
 
 export default function RootLayout({

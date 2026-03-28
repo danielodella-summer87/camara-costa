@@ -81,6 +81,12 @@ export async function GET() {
       const config = JSON.parse(data.value) as PortalConfig;
       // Mergear con defaults para asegurar que todos los campos existan
       const merged = { ...DEFAULT_CONFIG, ...config };
+      if (process.env.NODE_ENV === "development" && Array.isArray(config.sidebar_modules)) {
+        console.debug(
+          "[portal_config GET] sidebar_modules desde DB (antes del merge en cliente; labels aquí pisan defaults en AdminShell):",
+          config.sidebar_modules
+        );
+      }
       return NextResponse.json(
         { data: merged },
         { status: 200, headers: { "Cache-Control": "no-store" } }
