@@ -13,6 +13,7 @@ export type OportunidadLeadProp = {
   email?: string | null;
   website?: string | null;
   linkedin_empresa?: string | null;
+  linkedin_personal?: string | null;
   linkedin_director?: string | null;
   pipeline?: string | null;
   origen?: string | null;
@@ -33,7 +34,7 @@ type ContextoEditForm = {
   telefono: string;
   website: string;
   linkedin_empresa: string;
-  linkedin_director: string;
+  linkedin_personal: string;
   rubro_id: string | null;
   origen: string;
   objetivos: string;
@@ -186,7 +187,7 @@ function getContextoCompletitud(lead: OportunidadLeadProp): number {
   if (!lead) return 0;
   const empresa = lead.empresas?.nombre ?? lead.nombre;
   const rubro = lead.empresas?.rubros?.nombre;
-  const linkedin = lead.linkedin_empresa ?? lead.linkedin_director;
+  const linkedin = lead.linkedin_empresa ?? lead.linkedin_personal ?? lead.linkedin_director;
   const fields = [
     hasValue(empresa),
     hasValue(lead.contacto),
@@ -236,7 +237,7 @@ function calculateLeadScore(lead: OportunidadLeadProp): LeadScoreResult {
   const calidadLead = Math.round((calidadCount / 5) * 25);
 
   const web = hasValue(lead.website);
-  const linkedin = hasValue(lead.linkedin_empresa ?? lead.linkedin_director);
+  const linkedin = hasValue(lead.linkedin_empresa ?? lead.linkedin_personal ?? lead.linkedin_director);
   const redes = false; // no hay campo en lead
   const presenciaCount = [web, linkedin, redes].filter(Boolean).length;
   const presenciaDigital = Math.round((presenciaCount / 3) * 25);
@@ -287,7 +288,7 @@ const emptyContextoForm: ContextoEditForm = {
   telefono: "",
   website: "",
   linkedin_empresa: "",
-  linkedin_director: "",
+  linkedin_personal: "",
   rubro_id: null,
   origen: "",
   objetivos: "",
@@ -327,7 +328,7 @@ export function OportunidadWorkspace({ lead, id, activeStageIndex = 0, onLeadUpd
       telefono: (lead.telefono ?? "").trim(),
       website: (lead.website ?? "").trim(),
       linkedin_empresa: (lead.linkedin_empresa ?? "").trim(),
-      linkedin_director: (lead.linkedin_director ?? "").trim(),
+      linkedin_personal: (lead.linkedin_personal ?? lead.linkedin_director ?? "").trim(),
       rubro_id: lead.empresas?.rubro_id ?? lead.empresas?.rubros?.id ?? null,
       origen: (lead.origen ?? "").trim(),
       objetivos: (lead.objetivos ?? "").trim(),
@@ -349,11 +350,11 @@ export function OportunidadWorkspace({ lead, id, activeStageIndex = 0, onLeadUpd
         telefono: editFormContexto.telefono || null,
         website: editFormContexto.website || null,
         linkedin_empresa: editFormContexto.linkedin_empresa || null,
-        linkedin_director: editFormContexto.linkedin_director || null,
+        linkedin_personal: editFormContexto.linkedin_personal || null,
         origen: editFormContexto.origen || null,
         objetivos: editFormContexto.objetivos || null,
       };
-      if (!editFormContexto.linkedin_empresa && !editFormContexto.linkedin_director) body.allow_clear_linkedin = true;
+      if (!editFormContexto.linkedin_empresa && !editFormContexto.linkedin_personal) body.allow_clear_linkedin = true;
       const res = await fetch(`/api/admin/leads/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -727,8 +728,8 @@ export function OportunidadWorkspace({ lead, id, activeStageIndex = 0, onLeadUpd
                       <label className="block text-xs text-slate-500">LinkedIn</label>
                       <input
                         type="text"
-                        value={editFormContexto.linkedin_empresa || editFormContexto.linkedin_director}
-                        onChange={(e) => setEditFormContexto((f) => ({ ...f, linkedin_empresa: e.target.value, linkedin_director: e.target.value }))}
+                        value={editFormContexto.linkedin_empresa || editFormContexto.linkedin_personal}
+                        onChange={(e) => setEditFormContexto((f) => ({ ...f, linkedin_empresa: e.target.value, linkedin_personal: e.target.value }))}
                         className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                         placeholder="URL LinkedIn empresa o perfil"
                       />
@@ -762,7 +763,7 @@ export function OportunidadWorkspace({ lead, id, activeStageIndex = 0, onLeadUpd
                     <div><p className="text-xs text-slate-500">Rubro</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.empresas?.rubros?.nombre) || "—"}</p></div>
                     <div><p className="text-xs text-slate-500">Origen</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.origen) || "—"}</p></div>
                     <div><p className="text-xs text-slate-500">Web</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.website) || "—"}</p></div>
-                    <div><p className="text-xs text-slate-500">LinkedIn</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.linkedin_empresa ?? lead?.linkedin_director) || "—"}</p></div>
+                    <div><p className="text-xs text-slate-500">LinkedIn</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.linkedin_empresa ?? lead?.linkedin_personal ?? lead?.linkedin_director) || "—"}</p></div>
                     <div><p className="text-xs text-slate-500">Redes</p><p className="mt-0.5 font-medium text-slate-800">—</p></div>
                     <div><p className="text-xs text-slate-500">Objetivo</p><p className="mt-0.5 font-medium text-slate-800">{format(lead?.objetivos) || "—"}</p></div>
                   </div>

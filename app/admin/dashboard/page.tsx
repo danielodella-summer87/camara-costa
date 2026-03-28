@@ -10,8 +10,16 @@ import {
   getCommercialAlerts,
   type LeadForMetrics,
 } from "@/lib/crm/metrics";
+import { mergeDocumentsForFlow, getLeadMacroFlowDisplay } from "@/lib/crm/getLeadDerivedFlow";
+import {
+  toMacroLeadFromApiRow,
+  getDashboardCommercialBucket,
+  summarizeCommercialFlowKpis,
+} from "@/lib/crm/dashboardCommercialFlow";
+import type { LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
 import { getLeadHealthSummary } from "@/lib/crm/leadHealth";
 import { getCommercialPriorities } from "@/lib/crm/priorityEngine";
+import { CommercialFlowKpis } from "@/components/crm/dashboard/CommercialFlowKpis";
 import { PipelineSummary } from "@/components/crm/dashboard/PipelineSummary";
 import { LeadHealthSummary } from "@/components/crm/dashboard/LeadHealthSummary";
 import { CommercialPriorities } from "@/components/crm/dashboard/CommercialPriorities";
@@ -25,6 +33,7 @@ import {
   type PropuestaEnviadaLead,
 } from "@/components/crm/dashboard/PropuestasEsperandoRespuesta";
 import Link from "next/link";
+import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
 
 /** Normaliza string | null | undefined a string | null para tipos estrictos. */
 function normalizeNullableString(value: string | null | undefined): string | null {
@@ -36,6 +45,7 @@ function normalizeNullableString(value: string | null | undefined): string | nul
 type Lead = {
   id: string;
   nombre: string | null;
+  contacto?: string | null;
   pipeline: string | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -44,8 +54,23 @@ type Lead = {
   rating?: number | null;
   email?: string | null;
   telefono?: string | null;
+  website?: string | null;
+  objetivos?: string | null;
+  audiencia?: string | null;
+  tamano?: string | null;
+  notas?: string | null;
+  ai_report?: string | null;
   proposal_confirmed_at?: string | null;
   proposal_sent_at?: string | null;
+  proposal_doc_url?: string | null;
+  presentation_doc_url?: string | null;
+  proposal_reviewed?: boolean | null;
+  commercial_stage?: string | null;
+  commercial_strategy_json?: unknown;
+  strategy_approved_at?: string | null;
+  empresas?: { nombre?: string | null } | null;
+  flow_documents?: LeadsOkDocuments;
+  pending_agenda_accion?: { tipo: string; fecha_limite: string; hora?: string | null } | null;
 };
 
 type ApiResp<T> = { data?: T | null; error?: string | null };
@@ -59,9 +84,27 @@ function toLeadForMetrics(l: Lead): LeadForMetrics {
     updated_at: l.updated_at,
     next_activity_type: l.next_activity_type,
     next_activity_at: l.next_activity_at,
+    pending_agenda_accion: l.pending_agenda_accion ?? null,
     rating: l.rating,
     proposal_confirmed_at: l.proposal_confirmed_at,
     proposal_sent_at: l.proposal_sent_at,
+  };
+}
+
+function enrichLeadForMetrics(l: Lead): LeadForMetrics {
+  const macro = toMacroLeadFromApiRow(l);
+  const docs = mergeDocumentsForFlow(macro, l.flow_documents ?? null);
+  const snap = getLeadMacroFlowDisplay(macro, docs);
+  const bucket = getDashboardCommercialBucket(macro, docs, l.pipeline);
+  return {
+    ...toLeadForMetrics(l),
+    leads87Flow: {
+      progress: snap.progress,
+      stageLabel: snap.label,
+      isFlowCompleted: snap.isFlowCompleted,
+      bucket,
+    },
+    leads87_flow_completed: snap.isFlowCompleted,
   };
 }
 
@@ -70,12 +113,6 @@ function daysSinceSent(iso: string | null | undefined): number {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return 0;
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / (24 * 60 * 60 * 1000)));
-}
-
-const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
-
-function norm(s: string | null | undefined): string {
-  return (s ?? "").trim().toLowerCase();
 }
 
 export default function DashboardPage() {
@@ -110,9 +147,18 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const forMetrics = useMemo(() => leads.map(toLeadForMetrics), [leads]);
-  const activeLeads = useMemo(
-    () => leads.filter((l) => !CLOSED_PIPELINES.has(norm(l.pipeline))),
+  const forMetrics = useMemo(() => leads.map(enrichLeadForMetrics), [leads]);
+  const activeLeads = useMemo(() => leads.filter((l) => isLeadActive(l.pipeline)), [leads]);
+
+  const commercialFlowKpis = useMemo(
+    () =>
+      summarizeCommercialFlowKpis(
+        leads.map((l) => {
+          const macro = toMacroLeadFromApiRow(l);
+          const docs = mergeDocumentsForFlow(macro, l.flow_documents ?? null);
+          return { macroLead: macro, documents: docs, pipeline: l.pipeline };
+        })
+      ),
     [leads]
   );
 
@@ -130,7 +176,7 @@ export default function DashboardPage() {
         (l) =>
           l.proposal_confirmed_at &&
           l.proposal_sent_at &&
-          !CLOSED_PIPELINES.has(norm(l.pipeline))
+          isLeadActive(l.pipeline)
       )
       .map((l): PropuestaEnviadaLead => {
         const sentAt = normalizeNullableString(l.proposal_sent_at);
@@ -189,6 +235,7 @@ export default function DashboardPage() {
           </div>
         ) : (
           <div className="mt-8 space-y-8">
+            <CommercialFlowKpis summary={commercialFlowKpis} />
             <PipelineSummary
               pipelineCounts={pipelineCounts}
               totalActive={activeLeads.length}

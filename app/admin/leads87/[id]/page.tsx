@@ -45,6 +45,7 @@ import {
 } from "@/lib/crm/commercialStrategyFlow";
 import { Leads87LeadDocumentsBlock } from "../components/Leads87LeadDocumentsBlock";
 import RubroSelect from "../../empresas/RubroSelect";
+import { linkedinExternalHref } from "@/lib/social/linkedinUrl";
 
 const PROGRESS_STAGES = ["Lead", "Investigación", "Diagnóstico", "Estrategia", "Servicios", "Propuesta", "Presentación", "Cierre"];
 
@@ -255,7 +256,7 @@ export default function Leads87DetailPage() {
     instagram: string;
     direccion: string;
     linkedin_empresa: string;
-    linkedin_director: string;
+    linkedin_personal: string;
     rubro_id: string | null;
     origen: string;
     objetivos: string;
@@ -271,7 +272,7 @@ export default function Leads87DetailPage() {
     instagram: "",
     direccion: "",
     linkedin_empresa: "",
-    linkedin_director: "",
+    linkedin_personal: "",
     rubro_id: null,
     origen: "",
     objetivos: "",
@@ -1024,6 +1025,7 @@ export default function Leads87DetailPage() {
       instagram?: string | null;
       direccion?: string | null;
       linkedin_empresa?: string | null;
+      linkedin_personal?: string | null;
       linkedin_director?: string | null;
       origen?: string | null;
       objetivos?: string | null;
@@ -1040,7 +1042,7 @@ export default function Leads87DetailPage() {
       instagram: (lead.instagram ?? emp?.instagram ?? "").trim(),
       direccion: (lead.direccion ?? emp?.direccion ?? "").trim(),
       linkedin_empresa: (lead.linkedin_empresa ?? "").trim(),
-      linkedin_director: (lead.linkedin_director ?? "").trim(),
+      linkedin_personal: (lead.linkedin_personal ?? lead.linkedin_director ?? "").trim(),
       rubro_id: emp?.rubro_id ?? (emp as { rubros?: { id?: string | null } | null })?.rubros?.id ?? null,
       origen: (lead.origen ?? "").trim(),
       objetivos: (lead.objetivos ?? "").trim(),
@@ -1065,7 +1067,7 @@ export default function Leads87DetailPage() {
         instagram: editForm.instagram.trim() || null,
         direccion: editForm.direccion.trim() || null,
         linkedin_empresa: editForm.linkedin_empresa.trim() || null,
-        linkedin_director: editForm.linkedin_director.trim() || null,
+        linkedin_personal: editForm.linkedin_personal.trim() || null,
         origen: editForm.origen.trim() || null,
         objetivos: editForm.objetivos.trim() || null,
         audiencia: editForm.audiencia.trim() || null,
@@ -1119,7 +1121,7 @@ export default function Leads87DetailPage() {
         });
         if (!empRes.ok) {
           const empJson = (await empRes.json()) as { error?: string };
-          setFichaError(empJson?.error ?? "Error al guardar datos de la entidad vinculada");
+          setFichaError(empJson?.error ?? "Error al guardar datos de la iniciativa vinculada");
           return;
         }
       }
@@ -1415,13 +1417,15 @@ export default function Leads87DetailPage() {
     comercial?: { id?: string; nombre?: string } | null;
     website?: string | null;
     linkedin_empresa?: string | null;
-    linkedin_director?: string | null;
+    linkedin_personal?: string | null;
   };
   const comercialNombre = leadWithExtras?.comercial?.nombre ?? (Array.isArray(leadWithExtras?.comerciales) ? leadWithExtras?.comerciales?.[0]?.nombre : leadWithExtras?.comerciales?.nombre) ?? null;
   const rubroNombre = leadWithExtras?.empresas?.rubros?.nombre ?? null;
   const web = leadWithExtras?.website ?? leadWithExtras?.empresas?.web ?? null;
   const linkedinEmpresa = leadWithExtras?.linkedin_empresa ?? null;
-  const linkedinDirector = leadWithExtras?.linkedin_director ?? null;
+  const linkedinContactValue = leadWithExtras?.linkedin_personal?.trim() || null;
+  const linkedinEmpresaHref = linkedinExternalHref(linkedinEmpresa);
+  const linkedinContactHref = linkedinExternalHref(linkedinContactValue);
   const instagramDisplay = leadWithExtras?.instagram ?? leadWithExtras?.empresas?.instagram ?? null;
   const direccionDisplay = leadWithExtras?.direccion ?? leadWithExtras?.empresas?.direccion ?? null;
   const empresaOrigenId = leadWithExtras?.empresa_id ?? leadWithExtras?.empresas?.id ?? null;
@@ -1469,6 +1473,32 @@ export default function Leads87DetailPage() {
           )}
         </h1>
         <p className="mt-2 text-sm text-slate-600">Versión definitiva del sistema comercial. Un solo flujo, toda la información.</p>
+
+        {!loadingLead && fullLead && (linkedinEmpresaHref || linkedinContactHref) ? (
+          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-200 bg-slate-50/90 px-3 py-2.5 text-sm">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">LinkedIn</span>
+            {linkedinEmpresaHref ? (
+              <a
+                href={linkedinEmpresaHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-emerald-700 hover:text-emerald-800 hover:underline"
+              >
+                Empresa
+              </a>
+            ) : null}
+            {linkedinContactHref ? (
+              <a
+                href={linkedinContactHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-emerald-700 hover:text-emerald-800 hover:underline"
+              >
+                Contacto
+              </a>
+            ) : null}
+          </div>
+        ) : null}
 
         {!loadingLead && fullLead && fichaLeadOpen && (
           <div ref={fichaRef} className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm scroll-mt-4">
@@ -1524,21 +1554,21 @@ export default function Leads87DetailPage() {
             {empresaOrigenId ? (
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm">
                 <p className="text-slate-700">
-                  <span className="font-semibold text-slate-800">Entidad origen:</span>{" "}
+                  <span className="font-semibold text-slate-800">Iniciativa origen:</span>{" "}
                   {empresaOrigenNombre ? <span>{empresaOrigenNombre}</span> : <span className="text-slate-500">(sin nombre en ficha)</span>}
                 </p>
                 <Link
                   href={`/admin/empresas/${empresaOrigenId}`}
                   className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                 >
-                  Ver entidad
+                  Ver iniciativa
                 </Link>
               </div>
             ) : null}
             {editingFicha ? (
               <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                 <div>
-                  <label className="block text-xs text-slate-500">Empresa</label>
+                  <label className="block text-xs text-slate-500">Organización</label>
                   <input
                     type="text"
                     value={editForm.nombre}
@@ -1611,12 +1641,12 @@ export default function Leads87DetailPage() {
                         placeholder="Seleccionar rubro…"
                       />
                     ) : (
-                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-500">Sin empresa vinculada</p>
+                      <p className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-500">Sin iniciativa vinculada</p>
                     )}
                   </div>
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-xs text-slate-500">LinkedIn (empresa o director)</label>
+                  <label className="block text-xs text-slate-500">LinkedIn empresa / contacto</label>
                   <div className="mt-0.5 grid grid-cols-2 gap-2">
                     <input
                       type="text"
@@ -1627,9 +1657,9 @@ export default function Leads87DetailPage() {
                     />
                     <input
                       type="text"
-                      placeholder="Director"
-                      value={editForm.linkedin_director}
-                      onChange={(e) => setEditForm((f) => ({ ...f, linkedin_director: e.target.value }))}
+                      placeholder="Contacto"
+                      value={editForm.linkedin_personal}
+                      onChange={(e) => setEditForm((f) => ({ ...f, linkedin_personal: e.target.value }))}
                       className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                     />
                   </div>
@@ -1673,7 +1703,7 @@ export default function Leads87DetailPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <div><p className="text-xs text-slate-500">Empresa</p><p className="font-medium text-slate-800">{cell(leadWithExtras?.empresas?.nombre ?? fullLead?.nombre)}</p></div>
+                <div><p className="text-xs text-slate-500">Organización</p><p className="font-medium text-slate-800">{cell(leadWithExtras?.empresas?.nombre ?? fullLead?.nombre)}</p></div>
                 <div><p className="text-xs text-slate-500">Contacto</p><p className="font-medium text-slate-800">{cell(fullLead?.contacto)}</p></div>
                 <div><p className="text-xs text-slate-500">Email</p><p className="font-medium text-slate-800">{cell(fullLead?.email)}</p></div>
                 <div><p className="text-xs text-slate-500">Teléfono</p><p className="font-medium text-slate-800">{cell(fullLead?.telefono)}</p></div>
@@ -1681,8 +1711,36 @@ export default function Leads87DetailPage() {
                 <div><p className="text-xs text-slate-500">Web</p><p className="font-medium text-slate-800">{cell(web)}</p></div>
                 <div><p className="text-xs text-slate-500">Instagram</p><p className="font-medium text-slate-800">{cell(instagramDisplay)}</p></div>
                 <div className="col-span-2"><p className="text-xs text-slate-500">Dirección</p><p className="font-medium text-slate-800">{cell(direccionDisplay)}</p></div>
-                <div><p className="text-xs text-slate-500">LinkedIn empresa</p><p className="font-medium text-slate-800">{cell(linkedinEmpresa)}</p></div>
-                <div><p className="text-xs text-slate-500">LinkedIn director</p><p className="font-medium text-slate-800">{cell(linkedinDirector)}</p></div>
+                <div>
+                  <p className="text-xs text-slate-500">LinkedIn (organización)</p>
+                  {linkedinEmpresaHref ? (
+                    <a
+                      href={linkedinEmpresaHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-emerald-700 hover:underline"
+                    >
+                      Abrir perfil
+                    </a>
+                  ) : (
+                    <p className="font-medium text-slate-800">{cell(linkedinEmpresa)}</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">LinkedIn contacto</p>
+                  {linkedinContactHref ? (
+                    <a
+                      href={linkedinContactHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-emerald-700 hover:underline"
+                    >
+                      Abrir perfil
+                    </a>
+                  ) : (
+                    <p className="font-medium text-slate-800">{cell(linkedinContactValue)}</p>
+                  )}
+                </div>
                 <div><p className="text-xs text-slate-500">Origen</p><p className="font-medium text-slate-800">{cell((fullLead as { origen?: string | null }).origen)}</p></div>
                 <div><p className="text-xs text-slate-500">Objetivo</p><p className="font-medium text-slate-800">{cell((fullLead as { objetivos?: string | null }).objetivos)}</p></div>
                 <div><p className="text-xs text-slate-500">Audiencia</p><p className="font-medium text-slate-800">{cell((fullLead as { audiencia?: string | null }).audiencia)}</p></div>
@@ -1692,7 +1750,7 @@ export default function Leads87DetailPage() {
                 <p className="col-span-2 mt-2 text-xs text-slate-500">Pipeline y responsable solo se editan en Oportunidades.</p>
                 {empresaOrigenId ? (
                   <p className="col-span-2 mt-1 text-xs text-slate-500">
-                    RUT, ciudad, país, Facebook, celular alternativo y etiquetas de la entidad siguen viviendo en la ficha de Entidad; aquí operás el snapshot comercial del lead.
+                    RUT, ciudad, país, Facebook, celular alternativo y etiquetas de la iniciativa siguen viviendo en la ficha de Iniciativa; aquí operás el snapshot comercial del lead.
                   </p>
                 ) : null}
               </div>
@@ -1883,7 +1941,7 @@ export default function Leads87DetailPage() {
         <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/50 p-5">
           <p className="text-sm font-medium text-slate-800">
             {missingLeadContext.isEmpresaId
-              ? "Este ID corresponde a una entidad, no a un lead."
+              ? "Este ID corresponde a una iniciativa, no a un lead."
               : "Lead no encontrado."}
           </p>
           {leadLoadError ? (
@@ -1893,7 +1951,7 @@ export default function Leads87DetailPage() {
           ) : null}
           <p className="mt-1 text-sm text-slate-600">
             {missingLeadContext.isEmpresaId
-              ? `ID recibido: ${id}. ${missingLeadContext.empresaNombre ? `Entidad: ${missingLeadContext.empresaNombre}. ` : ""}Para abrir en LEADS87 primero hay que crear/usar un lead vinculado.`
+              ? `ID recibido: ${id}. ${missingLeadContext.empresaNombre ? `Iniciativa: ${missingLeadContext.empresaNombre}. ` : ""}Para abrir en LEADS87 primero hay que crear/usar un lead vinculado.`
               : `ID recibido: ${id}. Puede haber sido eliminado o la URL puede apuntar a un objeto distinto.`}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -1908,7 +1966,7 @@ export default function Leads87DetailPage() {
                 href={`/admin/empresas/${encodeURIComponent(id)}`}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
-                Ir a la entidad
+                Ir a la iniciativa
               </Link>
             ) : null}
           </div>

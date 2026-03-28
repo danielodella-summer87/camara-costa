@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
+import { isLeadClosed } from "@/lib/leads/leadStatusPolicy";
 
 import {
   DndContext,
@@ -554,9 +555,8 @@ export default function LeadsKanbanPage() {
     if (activeType === "card") {
       const activeLead = leads.find((l) => String(l.id) === String(activeId));
       if (activeLead) {
-        const currentPipeline = norm(activeLead.pipeline);
-        if (currentPipeline === "ganado" || currentPipeline === "perdido") {
-          setError("Lead cerrado: Ganado/Perdido no se puede mover.");
+        if (isLeadClosed(activeLead.pipeline)) {
+          setError("Lead cerrado: no se puede mover desde un pipeline de cierre.");
           setActiveDrag(null);
           return;
         }
@@ -914,9 +914,7 @@ function LeadCard({
     patch: Partial<Pick<Lead, "rating" | "next_activity_type" | "next_activity_at">>
   ) => Promise<void>;
 }) {
-  // Verificar si el lead está cerrado (Ganado/Perdido)
-  const currentPipeline = norm(lead.pipeline);
-  const isClosed = currentPipeline === "ganado" || currentPipeline === "perdido";
+  const isClosed = isLeadClosed(lead.pipeline);
 
   const s = useSortable({
     id: lead.id,

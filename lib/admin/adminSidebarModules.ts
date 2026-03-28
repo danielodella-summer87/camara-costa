@@ -25,7 +25,7 @@ export type SidebarModulePersisted = {
 export const DEFAULT_ADMIN_SIDEBAR_MODULES: AdminSidebarModule[] = [
   { key: "dashboard", label: "Centro de control", href: "/admin", icon: "🏠", status: "en_preparacion" },
   { key: "dashboard_comercial", label: "Dashboard comercial", href: "/admin/dashboard", icon: "📈", status: "activo" },
-  { key: "entidades", label: "Entidades", href: "/admin/empresas", icon: "🏢", status: "activo" },
+  { key: "entidades", label: "Iniciativas", href: "/admin/empresas", icon: "🏢", status: "activo" },
   { key: "oportunidades", label: "Oportunidades", href: "/admin/oportunidades", icon: "💼", status: "en_preparacion" },
   { key: "leads87", label: "LEADS87", href: "/admin/leads87", icon: "🎯", status: "activo" },
   {
@@ -63,9 +63,16 @@ export function mergeAdminSidebarModules(
       o?.status === "activo" || o?.status === "en_preparacion" || o?.status === "oculto"
         ? o.status
         : def.status;
+    const persistedLabel =
+      typeof o?.label === "string" && o.label.trim() ? o.label.trim() : "";
+    // Label legado en portal_config: ignorar solo el texto antiguo "Entidades" para mostrar "Iniciativas".
+    const label =
+      def.key === "entidades" && /^entidades$/i.test(persistedLabel)
+        ? def.label
+        : persistedLabel || def.label;
     return {
       ...def,
-      label: typeof o?.label === "string" && o.label.trim() ? o.label.trim() : def.label,
+      label,
       icon: typeof o?.icon === "string" && o.icon.trim() ? o.icon.trim() : def.icon,
       status,
     };

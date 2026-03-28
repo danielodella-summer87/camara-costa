@@ -295,7 +295,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!tipo_empresa) {
-        errors.push({ row: rowNum, field: "tipo", message: "Fila " + rowNum + ": tipo de entidad es obligatorio" });
+        errors.push({ row: rowNum, field: "tipo", message: "Fila " + rowNum + ": tipo de iniciativa es obligatorio" });
       } else if (!isValidTipo(tipo_empresa)) {
         errors.push({
           row: rowNum,

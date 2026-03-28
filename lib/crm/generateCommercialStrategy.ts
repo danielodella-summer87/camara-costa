@@ -12,6 +12,8 @@ export type GenerateStrategyLeadInput = {
   website?: string | null;
   objetivos?: string | null;
   audiencia?: string | null;
+  initiative_kind?: string | null;
+  project_description?: string | null;
 };
 
 const JSON_KEYS = COMMERCIAL_STRATEGY_FIELD_KEYS.join('", "');
@@ -38,8 +40,15 @@ export async function generateCommercialStrategyContent(args: {
   if (!apiKey) throw new Error("OPENAI_API_KEY no configurada");
 
   const { lead, investigationExcerpt, diagnosticExcerpt, userInputs } = args;
+  const isStartup = String(lead.initiative_kind ?? "").trim().toLowerCase() === "startup";
   const userBlock = [
     `Lead: ${lead.nombre ?? ""} / Empresa: ${lead.empresa ?? ""}`,
+    isStartup
+      ? "Tipo de iniciativa: startup / proyecto temprano — no asumir presencia digital madura; basar el razonamiento en la descripción del proyecto y los extractos."
+      : "",
+    lead.project_description?.trim()
+      ? `Descripción del proyecto (prioritaria):\n${clip(lead.project_description, 6000)}`
+      : "",
     lead.website ? `Web: ${lead.website}` : "",
     lead.objetivos ? `Objetivos declarados: ${lead.objetivos}` : "",
     lead.audiencia ? `Audiencia: ${lead.audiencia}` : "",

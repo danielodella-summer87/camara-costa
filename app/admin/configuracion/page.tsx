@@ -10,6 +10,7 @@ import EstadosTab from "./components/EstadosTab";
 import RolesTab from "./components/RolesTab";
 import ComercialesTab from "./components/ComercialesTab";
 import { AlertTriangle } from "lucide-react";
+import { InitiativeLeadsPolicyCard } from "./components/InitiativeLeadsPolicyCard";
 
 type Tab = "rubros" | "pipelines" | "estados" | "roles" | "comerciales";
 
@@ -83,6 +84,8 @@ function ConfiguracionContent() {
             </div>
           </Link>
         </div>
+
+        <InitiativeLeadsPolicyCard />
 
         {/* Tabs */}
         <div className="rounded-2xl border bg-white p-4">

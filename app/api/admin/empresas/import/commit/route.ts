@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
     // 1. Verificar que el batch existe y está en estado "validated"
     const { data: batch, error: batchError } = await supabase
       .from("entity_import_batches")
-      .select("id, status, total_rows, filename")
+      .select("id, status, total_rows, filename, concepto")
       .eq("id", batchId)
       .single();
 
@@ -244,6 +244,12 @@ export async function POST(req: NextRequest) {
     // 5. Preparar inserts
     const inserts: any[] = [];
     const errors: Array<{ row: number; message: string }> = [];
+    const batchRow = batch as { filename?: string | null; concepto?: string | null };
+    const fuenteRemotaImport =
+      batchRow.filename?.trim() ||
+      (batchRow.concepto?.trim()
+        ? `import_excel: ${batchRow.concepto.trim().slice(0, 200)}`
+        : "import_excel");
 
     rows.forEach((row) => {
       // Validar rubro existe
@@ -262,6 +268,9 @@ export async function POST(req: NextRequest) {
         direccion: row.direccion.trim(),
         web: normalizeWebsite(row.web),
         instagram: cleanStr(row.instagram),
+        import_batch_id: batch.id,
+        estado_revision: "importada",
+        fuente_remota: fuenteRemotaImport,
       });
     });
 

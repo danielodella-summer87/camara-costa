@@ -28,7 +28,7 @@ type CommitResponse = {
   error?: string | null;
 };
 
-export default function ImportarEntidadesPage() {
+export default function ImportarIniciativasPage() {
   const router = useRouter();
 
   const [file, setFile] = useState<File | null>(null);
@@ -136,7 +136,8 @@ export default function ImportarEntidadesPage() {
             <div>
               <h1 className="text-2xl font-semibold text-slate-900">Importar Iniciativas (Excel)</h1>
               <p className="mt-2 text-sm text-slate-600">
-                Subí el archivo Excel (.xlsx) usando la plantilla oficial. Columnas obligatorias:{" "}
+                Subí el archivo Excel (.xlsx) usando la plantilla oficial. Cada fila crea una iniciativa. Columnas
+                obligatorias (nombres del archivo):{" "}
                 <span className="font-semibold">nombre, tipo_empresa, rubro, telefono, email, direccion</span>.
               </p>
             </div>
@@ -456,7 +457,7 @@ export default function ImportarEntidadesPage() {
             )}
             {commitResult.inserted > 0 && (
               <div className="mt-3 text-sm text-emerald-700 font-medium">
-                ✓ Importación completada: {commitResult.inserted} entidad(es) creada(s) correctamente. Redirigiendo al listado...
+                ✓ Importación completada: {commitResult.inserted} iniciativa(s) creada(s) correctamente. Redirigiendo al listado...
               </div>
             )}
             {commitResult.inserted === 0 && !commitResult.errors?.length && (

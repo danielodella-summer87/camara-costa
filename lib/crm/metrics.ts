@@ -1,7 +1,18 @@
 /**
  * Helpers para métricas del Dashboard Comercial.
- * Usa solo datos existentes de leads (pipeline, created_at, updated_at, etc.).
+ * Lectura de avance / etapa LEADS87 vía `leads87Flow` (macro flow); el pipeline CRM queda como referencia secundaria donde aplica.
  */
+
+import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
+import type { DashboardCommercialBucket } from "./dashboardCommercialFlow";
+import {
+  getLeadNextActionResult,
+  hasUnifiedNextAction,
+  isUnifiedNextActionOverdue,
+  overdueWholeDaysFrom,
+  type LeadNextActionInput,
+  type PendingAgendaAccion,
+} from "./leadNextAction";
 
 export type LeadForMetrics = {
   id: string;
@@ -11,10 +22,44 @@ export type LeadForMetrics = {
   updated_at?: string | null;
   next_activity_type?: string | null;
   next_activity_at?: string | null;
+  /** Próxima acción pendiente en socio_acciones (GET /api/admin/leads la adjunta). */
+  pending_agenda_accion?: PendingAgendaAccion | null;
   rating?: number | null;
   proposal_confirmed_at?: string | null;
   proposal_sent_at?: string | null;
+  /** Derivado de getLeadMacroFlowDisplay (misma fuente que ficha/listado LEADS87). */
+  leads87Flow?: {
+    progress: number;
+    stageLabel: string;
+    isFlowCompleted: boolean;
+    bucket: DashboardCommercialBucket;
+  };
+  /** Duplicado para leadHealth / prioridad sin acoplar tipos. */
+  leads87_flow_completed?: boolean;
 };
+
+/** Lead con flujo LEADS87 terminado (100%): no debe generar alertas de “falta avance” ni bajar KPIs. */
+export function isLeads87FlowCompletedMetric(lead: LeadForMetrics): boolean {
+  return Boolean(lead.leads87_flow_completed || lead.leads87Flow?.isFlowCompleted);
+}
+
+export function leadNextActionInput(lead: LeadForMetrics): LeadNextActionInput {
+  return {
+    next_activity_type: lead.next_activity_type,
+    next_activity_at: lead.next_activity_at,
+    pending_agenda_accion: lead.pending_agenda_accion ?? null,
+  };
+}
+
+/** Hay al menos una acción pendiente: meta del lead o fila pendiente en agenda (socio_acciones). */
+export function hasLeadNextAction(lead: LeadForMetrics): boolean {
+  return hasUnifiedNextAction(leadNextActionInput(lead));
+}
+
+/** La acción más próxima (lead o agenda) ya pasó respecto de ahora. */
+export function isLeadNextCommercialOverdue(lead: LeadForMetrics): boolean {
+  return isUnifiedNextActionOverdue(leadNextActionInput(lead));
+}
 
 function norm(s: string | null | undefined): string {
   return (s ?? "").trim().toLowerCase();
@@ -68,11 +113,14 @@ export type StalledLead = {
   nombre: string | null;
   pipeline: string | null;
   daysInStage: number;
+  leads87StageLabel?: string | null;
+  leads87Progress?: number | null;
 };
 
 export function getStalledLeads(leads: LeadForMetrics[], limit = 10): StalledLead[] {
   return leads
     .filter((l) => {
+      if (isLeads87FlowCompletedMetric(l)) return false;
       const days = daysInStage(l.updated_at, l.created_at);
       if (days == null) return false;
       const threshold = getStalledThreshold(l.pipeline);
@@ -83,6 +131,8 @@ export function getStalledLeads(leads: LeadForMetrics[], limit = 10): StalledLea
       nombre: l.nombre,
       pipeline: l.pipeline,
       daysInStage: daysInStage(l.updated_at, l.created_at) ?? 0,
+      leads87StageLabel: l.leads87Flow?.stageLabel ?? null,
+      leads87Progress: l.leads87Flow?.progress ?? null,
     }))
     .sort((a, b) => b.daysInStage - a.daysInStage)
     .slice(0, limit);
@@ -159,10 +209,12 @@ export function getConversionMetrics(leads: LeadForMetrics[]): ConversionPair[] 
 }
 
 export function getTopOpportunities(leads: LeadForMetrics[], limit = 5): LeadForMetrics[] {
-  const closed = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
   return leads
-    .filter((l) => !closed.has(norm(l.pipeline ?? "")))
+    .filter((l) => isLeadActive(l.pipeline) && !isLeads87FlowCompletedMetric(l))
     .sort((a, b) => {
+      const progA = a.leads87Flow?.progress ?? 0;
+      const progB = b.leads87Flow?.progress ?? 0;
+      if (progB !== progA) return progB - progA;
       const ratingA = Number(a.rating ?? 0);
       const ratingB = Number(b.rating ?? 0);
       if (ratingB !== ratingA) return ratingB - ratingA;
@@ -200,25 +252,8 @@ export function isHotOpportunity(lead: LeadForMetrics): boolean {
   return r >= 4 && Number.isFinite(r);
 }
 
-const CLOSED = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
-
 function isActiveLead(lead: LeadForMetrics): boolean {
-  return !CLOSED.has(norm(lead.pipeline ?? ""));
-}
-
-function hasNextAction(lead: LeadForMetrics): boolean {
-  const t = (lead.next_activity_type ?? "").toString().trim().toLowerCase();
-  return Boolean(t && t !== "none");
-}
-
-function isOverdue(nextActivityAt: string | null | undefined): boolean {
-  if (!nextActivityAt) return false;
-  const d = new Date(nextActivityAt);
-  if (!Number.isFinite(d.getTime())) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime() < today.getTime();
+  return isLeadActive(lead.pipeline);
 }
 
 export type CommercialAlertType =
@@ -258,26 +293,33 @@ export function getCommercialAlerts(
   const out: CommercialAlert[] = [];
 
   for (const lead of active) {
+    if (isLeads87FlowCompletedMetric(lead)) continue;
+
     const pipelineLabel = (lead.pipeline ?? "").trim() || "Sin etapa";
     const pipelineNorm = norm(lead.pipeline ?? "");
     const days = daysInStage(lead.updated_at, lead.created_at) ?? 0;
 
-    if (hasNextAction(lead) && isOverdue(lead.next_activity_at)) {
-      const overdueDays = lead.next_activity_at
-        ? Math.max(0, Math.floor((Date.now() - new Date(lead.next_activity_at).getTime()) / (24 * 60 * 60 * 1000)))
-        : 0;
+    if (isLeadNextCommercialOverdue(lead)) {
+      const na = getLeadNextActionResult(leadNextActionInput(lead));
+      const overdueDays = overdueWholeDaysFrom(leadNextActionInput(lead));
+      const detail = formatLeadUnifiedNextAction(lead);
+      const description =
+        na.source === "agenda"
+          ? overdueDays > 0
+            ? `Seguimiento pendiente en agenda vencido hace ${overdueDays} día${overdueDays === 1 ? "" : "s"} (${detail}).`
+            : `Seguimiento pendiente en agenda con fecha u hora ya pasada (${detail}).`
+          : overdueDays > 0
+            ? `La próxima acción está vencida desde hace ${overdueDays} día${overdueDays === 1 ? "" : "s"}.`
+            : "La próxima acción está vencida.";
       out.push({
         type: "overdue_action",
         severity: "high",
         title: "Acción vencida",
-        description:
-          overdueDays > 0
-            ? `La próxima acción está vencida desde hace ${overdueDays} día${overdueDays === 1 ? "" : "s"}.`
-            : "La próxima acción está vencida.",
+        description,
         leadId: lead.id,
         leadName: lead.nombre ?? "—",
         pipeline: pipelineLabel,
-        nextActionText: formatNextAction(lead.next_activity_type, lead.next_activity_at),
+        nextActionText: detail,
         daysInStage: days,
       });
     }
@@ -295,12 +337,12 @@ export function getCommercialAlerts(
       });
     }
 
-    if (isHotOpportunity(lead) && (!hasNextAction(lead) || days > getStalledThreshold(lead.pipeline))) {
+    if (isHotOpportunity(lead) && (!hasLeadNextAction(lead) || days > getStalledThreshold(lead.pipeline))) {
       out.push({
         type: "hot_stalled",
         severity: "high",
         title: "Oportunidad caliente trabada",
-        description: hasNextAction(lead)
+        description: hasLeadNextAction(lead)
           ? `Alto potencial (rating ${lead.rating}) pero lleva ${days} días en etapa sin avance.`
           : "Alto potencial pero sin próxima acción definida.",
         leadId: lead.id,
@@ -310,12 +352,12 @@ export function getCommercialAlerts(
       });
     }
 
-    if (!hasNextAction(lead)) {
+    if (!hasLeadNextAction(lead)) {
       out.push({
         type: "no_next_action",
         severity: "medium",
         title: "Lead sin próxima acción",
-        description: "No tiene próxima acción definida.",
+        description: "No tiene próxima acción en el lead ni en agenda (socio_acciones).",
         leadId: lead.id,
         leadName: lead.nombre ?? "—",
         pipeline: pipelineLabel,
@@ -386,4 +428,11 @@ export function formatNextAction(
     // ignore
   }
   return label;
+}
+
+/** Texto de próxima acción unificado (lead + agenda), para dashboard y listados. */
+export function formatLeadUnifiedNextAction(lead: LeadForMetrics): string {
+  const r = getLeadNextActionResult(leadNextActionInput(lead));
+  if (r.status === "no_action") return "Sin próxima acción";
+  return formatNextAction(r.effectiveType, r.effectiveAtIso);
 }

@@ -6,6 +6,10 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { getAllowedLeadProfilesByRole, getRoleNameByRoleId } from "@/lib/rbac/leadProfiles";
 import { parseLeadCustomPrompt, getModuleCustomPrompt } from "@/lib/leads/customPrompt";
 import { normalizeIAPromptsConfig } from "@/lib/ai/promptBlocks";
+import {
+  isMissingLeadsLinkedinPersonalColumn,
+  leadsSelectWithLinkedinVariant,
+} from "@/lib/leads/linkedinLeadFields";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,7 +47,9 @@ type LeadRow = {
   tamano?: string | null;
   oferta?: string | null;
   linkedin_empresa?: string | null;
+  /** Solo lectura legacy (fila sin columna linkedin_personal). */
   linkedin_director?: string | null;
+  linkedin_personal?: string | null;
   meet_url?: string | null;
 
   ai_context?: string | null;
@@ -51,6 +57,8 @@ type LeadRow = {
   ai_report_updated_at?: string | null;
   ai_custom_prompt?: string | null;
   empresa_id?: string | null;
+  initiative_kind?: string | null;
+  project_description?: string | null;
 };
 
 type ResolvedContext = {
@@ -92,6 +100,10 @@ type ResolvedContext = {
   // Fuentes (para debug)
   websiteSource: "Lead" | "Entidad" | "Cliente" | "N/A";
   instagramSource: "Lead" | "Entidad" | "Cliente" | "N/A";
+
+  initiativeKind: string;
+  projectDescription: string;
+  isStartupLead: boolean;
 };
 
 function safeId(v: unknown) {
@@ -231,7 +243,9 @@ function resolveLeadContext(
   const linkedinEmpresaFromCliente = ""; // Cliente no tiene linkedin
   const resolvedLinkedinEmpresa = linkedinEmpresaFromLead || linkedinEmpresaFromEmpresa || linkedinEmpresaFromCliente || "";
   
-  const linkedinDirectorFromLead = (lead.linkedin_director ?? "").trim();
+  const linkedinDirectorFromLead = (
+    (lead.linkedin_personal ?? lead.linkedin_director ?? "") as string
+  ).trim();
   const linkedinDirectorFromEmpresa = ""; // Entidad no tiene linkedin
   const linkedinDirectorFromCliente = ""; // Cliente no tiene linkedin
   const resolvedLinkedinDirector = linkedinDirectorFromLead || linkedinDirectorFromEmpresa || linkedinDirectorFromCliente || "";
@@ -264,6 +278,10 @@ function resolveLeadContext(
     if (cliente.proxima_accion) clienteHistorialParts.push(`Próxima acción: ${cliente.proxima_accion}`);
   }
   const clienteHistorial = clienteHistorialParts.join("; ") || "";
+
+  const initiativeKind = String(lead.initiative_kind ?? "").trim().toLowerCase();
+  const projectDescription = String(lead.project_description ?? "").trim();
+  const isStartupLead = initiativeKind === "startup";
   
   return {
     nombre: lead.nombre ?? "Lead",
@@ -298,6 +316,10 @@ function resolveLeadContext(
     
     websiteSource,
     instagramSource,
+
+    initiativeKind: initiativeKind || "standard",
+    projectDescription,
+    isStartupLead,
   };
 }
 
@@ -1463,6 +1485,8 @@ ${!empresa ? "- No hay entidad vinculada" : ""}
 - LinkedIn Director: ${resolvedCtx.linkedinDirector || "—"}
 - Meet URL: ${resolvedCtx.meetUrl || "—"}
 - Notas: ${resolvedCtx.notas || "Sin notas"}
+- initiative_kind (lead): ${resolvedCtx.initiativeKind || "standard"}
+- project_description (lead): ${resolvedCtx.projectDescription ? resolvedCtx.projectDescription.slice(0, 8000) : "—"}
 
 ${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map(
   (
@@ -1483,12 +1507,24 @@ ${contacts.length > 0 ? `## CONTACTOS DEL LEAD\n${contacts.map(
 ${resolvedCtx.clienteHistorial ? `## CLIENTE (historial)\n${resolvedCtx.clienteHistorial}` : ""}
 
 Fecha: ${fecha}`);
+
+  if (resolvedCtx.isStartupLead) {
+    userPromptParts.push(`## CONTEXTO STARTUP / PROYECTO TEMPRANO
+
+INSTRUCCIÓN OBLIGATORIA: Este lead está marcado como **startup** (proyecto incipiente, MVP o validación de idea).  
+- Basá el análisis principalmente en **project_description** y en los datos de contacto/rubro.  
+- **No penalices** la ausencia de website ni de redes sociales maduras; no las trates como debilidad del negocio por sí solas.  
+- Enfocá el informe en hipótesis de valor, mercado, riesgos de etapa temprana y próximos pasos de descubrimiento, no en auditoría de presencia digital consolidada.
+
+Descripción del proyecto (prioritaria):
+${resolvedCtx.projectDescription || "(No cargada — pedir al comercial que complete el campo en la ficha.)"}`);
+  }
   
   // PRIORIDAD 3: Agregar instrucción para generar sección de datos faltantes (solo campos críticos)
   const missingFields: Array<{ field: string; impact: string; question: string; where: string }> = [];
   
-  // Solo preguntar website si está vacío en Lead, Entidad y Cliente
-  if (!resolvedCtx.website || !resolvedCtx.website.trim()) {
+  // Solo preguntar website si está vacío en Lead, Entidad y Cliente (no exigir en startup)
+  if (!resolvedCtx.isStartupLead && (!resolvedCtx.website || !resolvedCtx.website.trim())) {
     missingFields.push({
       field: "Website",
       impact: "Crítico para validar rubro, propuesta de valor y análisis de presencia digital",
@@ -1497,8 +1533,8 @@ Fecha: ${fecha}`);
     });
   }
   
-  // Solo preguntar instagram si está vacío en Entidad
-  if (!resolvedCtx.instagram || !resolvedCtx.instagram.trim()) {
+  // Solo preguntar instagram si está vacío en Entidad (no exigir en startup)
+  if (!resolvedCtx.isStartupLead && (!resolvedCtx.instagram || !resolvedCtx.instagram.trim())) {
     missingFields.push({
       field: "Instagram",
       impact: "Útil para análisis de redes sociales y presencia digital",
@@ -2017,12 +2053,17 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     // Log para debugging (antes de leer el lead)
     console.log("[AI] only_module:", only_module, "force:", shouldRegenerate);
 
-    const leadSelect = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,empresa_id,linkedin_empresa,linkedin_director,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(nombre))";
-    const { data: lead, error: leadErr } = await sb
-      .from("leads")
-      .select(leadSelect)
-      .eq("id", id)
-      .maybeSingle();
+    const leadSelect =
+      "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,empresa_id,linkedin_empresa,linkedin_personal,meet_url,initiative_kind,project_description,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(nombre))";
+    let leadQuery = await sb.from("leads").select(leadSelect).eq("id", id).maybeSingle();
+    if (leadQuery.error && isMissingLeadsLinkedinPersonalColumn(leadQuery.error.message)) {
+      leadQuery = await sb
+        .from("leads")
+        .select(leadsSelectWithLinkedinVariant(leadSelect, "director"))
+        .eq("id", id)
+        .maybeSingle();
+    }
+    const { data: lead, error: leadErr } = leadQuery;
 
     if (leadErr) throw leadErr;
     if (!lead) {
@@ -2107,7 +2148,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           website: !!ctx.website,
           instagram: !!ctx.instagram,
           facebook: !!ctx.facebook,
-          linkedin: !!(leadRow.linkedin_empresa || leadRow.linkedin_director),
+          linkedin: !!(
+            leadRow.linkedin_empresa ||
+            leadRow.linkedin_director ||
+            leadRow.linkedin_personal
+          ),
         },
       });
     }
@@ -2443,7 +2488,8 @@ ENTREGABLES:
           leadEmpresa?.facebook ||
           leadEmpresa?.linkedin ||
           leadRow?.linkedin_empresa ||
-          leadRow?.linkedin_director
+          leadRow?.linkedin_director ||
+          leadRow?.linkedin_personal
       );
       const adHint = `${leadRow?.ai_context ?? ""} ${leadRow?.notas ?? ""} ${leadRow?.objetivos ?? ""}`.toLowerCase();
       const hasPauta = Boolean(

@@ -26,7 +26,19 @@ export function StalledLeads({ leads }: Props) {
               >
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-slate-900 truncate">{l.nombre ?? "—"}</div>
-                  <div className="text-xs text-slate-500">{l.pipeline ?? "Sin etapa"}</div>
+                  <div className="text-xs text-slate-500">
+                    {l.leads87StageLabel ? (
+                      <>
+                        <span className="font-medium text-slate-600">{l.leads87StageLabel}</span>
+                        {l.leads87Progress != null ? (
+                          <span className="text-slate-400"> · {l.leads87Progress}%</span>
+                        ) : null}
+                        <span className="block truncate text-slate-400">CRM: {l.pipeline ?? "—"}</span>
+                      </>
+                    ) : (
+                      (l.pipeline ?? "Sin etapa")
+                    )}
+                  </div>
                 </div>
                 <div className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                   {l.daysInStage} días

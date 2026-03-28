@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  isMissingLeadsLinkedinPersonalColumn,
+  leadsSelectWithLinkedinVariant,
+  shapeLeadRowLinkedinForApi,
+} from "@/lib/leads/linkedinLeadFields";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +60,7 @@ type LeadRow = {
   tamano?: string | null;
   oferta?: string | null;
   linkedin_empresa?: string | null;
-  linkedin_director?: string | null;
+  linkedin_personal?: string | null;
   ai_custom_prompt?: string | null;
   ai_report?: string | null;
   ai_report_updated_at?: string | null;
@@ -133,9 +138,9 @@ function isMissingColumnError(message: string | undefined, table: string, column
 }
 
 const SELECT_WITH_SNAPSHOT =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,instagram,direccion,linkedin_empresa,linkedin_director,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,tamano,website,instagram,direccion,linkedin_empresa,linkedin_personal,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,initiative_kind,project_description,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 const SELECT_LEGACY =
-  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,website,linkedin_empresa,linkedin_director,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+  "id,created_at,updated_at,nombre,contacto,telefono,email,origen,estado,pipeline,notas,objetivos,audiencia,tamano,website,linkedin_empresa,linkedin_personal,ai_report,rating,next_activity_type,next_activity_at,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,initiative_kind,project_description,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
 type LeadCreateInput = Partial<{
   nombre: string | null;
@@ -153,7 +158,9 @@ type LeadCreateInput = Partial<{
   audiencia: string | null;
   tamano: string | null;
   linkedin_empresa: string | null;
-  linkedin_director: string | null;
+  linkedin_personal: string | null;
+  /** Body legacy al crear lead (se mapea a linkedin_personal). */
+  linkedin_director?: string | null;
   meet_url: string | null;
 
   rating: number | string | null;
@@ -213,6 +220,28 @@ export async function GET(req: Request) {
     let { data, error } = await q
       .order("created_at", { ascending: false })
       .limit(limit);
+
+    if (error && isMissingLeadsLinkedinPersonalColumn(error.message)) {
+      let qLi = supabase
+        .from("leads")
+        .select(leadsSelectWithLinkedinVariant(SELECT_WITH_SNAPSHOT, "director"));
+      if (pipelineParam && pipelineParam.trim()) {
+        qLi = qLi.eq("pipeline", pipelineParam.trim());
+      }
+      if (comercialIdParam) {
+        qLi = qLi.eq("comercial_id", comercialIdParam);
+      }
+      if (socioIdParam) {
+        qLi = qLi.eq("socio_id", socioIdParam);
+      }
+      if (empresaIdParam) {
+        qLi = qLi.eq("empresa_id", empresaIdParam);
+      }
+      const liRes = await qLi.order("created_at", { ascending: false }).limit(limit);
+      data = liRes.data as typeof data;
+      error = liRes.error;
+    }
+
     if (
       error &&
       (isMissingColumnError(error.message, "leads", "instagram") ||
@@ -231,7 +260,26 @@ export async function GET(req: Request) {
       if (empresaIdParam) {
         qLegacy = qLegacy.eq("empresa_id", empresaIdParam);
       }
-      const legacyRes = await qLegacy.order("created_at", { ascending: false }).limit(limit);
+      // Tipado laxo: el segundo intento usa otro .select() y Postgrest infiere tipos distintos.
+      let legacyRes: any = await qLegacy.order("created_at", { ascending: false }).limit(limit);
+      if (legacyRes.error && isMissingLeadsLinkedinPersonalColumn(legacyRes.error.message)) {
+        let qLegLi = supabase
+          .from("leads")
+          .select(leadsSelectWithLinkedinVariant(SELECT_LEGACY, "director"));
+        if (pipelineParam && pipelineParam.trim()) {
+          qLegLi = qLegLi.eq("pipeline", pipelineParam.trim());
+        }
+        if (comercialIdParam) {
+          qLegLi = qLegLi.eq("comercial_id", comercialIdParam);
+        }
+        if (socioIdParam) {
+          qLegLi = qLegLi.eq("socio_id", socioIdParam);
+        }
+        if (empresaIdParam) {
+          qLegLi = qLegLi.eq("empresa_id", empresaIdParam);
+        }
+        legacyRes = await qLegLi.order("created_at", { ascending: false }).limit(limit);
+      }
       data = (legacyRes.data ?? []).map((row: any) => ({
         ...row,
         instagram: row?.instagram ?? null,
@@ -262,6 +310,56 @@ export async function GET(req: Request) {
       servicesCountByLeadId = counts;
     }
 
+    /** Próxima fila pendiente en socio_acciones por lead (misma fuente que Agenda). */
+    const pendingAgendaByLeadId: Record<string, { tipo: string; fecha_limite: string; hora: string | null }> =
+      {};
+    if (leadIds.length > 0) {
+      const { data: pendRows, error: pendErr } = await supabase
+        .from("socio_acciones")
+        .select("lead_id,tipo,fecha_limite,hora,created_at")
+        .in("lead_id", leadIds)
+        .is("realizada_at", null)
+        .not("fecha_limite", "is", null)
+        .not("lead_id", "is", null);
+
+      if (!pendErr && pendRows?.length) {
+        type PendRow = {
+          lead_id?: string | null;
+          tipo?: string | null;
+          fecha_limite?: string | null;
+          hora?: string | null;
+          created_at?: string | null;
+        };
+        const byLead = new Map<string, PendRow[]>();
+        for (const raw of pendRows as PendRow[]) {
+          const lid = raw.lead_id ? String(raw.lead_id) : "";
+          if (!lid) continue;
+          const arr = byLead.get(lid) ?? [];
+          arr.push(raw);
+          byLead.set(lid, arr);
+        }
+        for (const [lid, rows] of byLead) {
+          const sorted = [...rows].sort((a, b) => {
+            const fa = String(a.fecha_limite ?? "");
+            const fb = String(b.fecha_limite ?? "");
+            if (fa !== fb) return fa.localeCompare(fb);
+            const ha = String(a.hora ?? "00:00");
+            const hb = String(b.hora ?? "00:00");
+            if (ha !== hb) return ha.localeCompare(hb);
+            return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+          });
+          const first = sorted[0];
+          const fl = String(first.fecha_limite ?? "").trim();
+          if (!fl) continue;
+          pendingAgendaByLeadId[lid] = {
+            tipo: String(first.tipo ?? ""),
+            fecha_limite: fl,
+            hora: first.hora != null && String(first.hora).trim() ? String(first.hora).trim() : null,
+          };
+        }
+      }
+    }
+
     type FlowDocSlot = { diagnostic?: string; strategy?: string; proposal?: string; presentation?: string };
     const flowDocsByLeadId: Record<string, FlowDocSlot> = {};
     if (leadIds.length > 0) {
@@ -288,18 +386,22 @@ export async function GET(req: Request) {
       }
     }
 
-    const normalizedData = (data ?? []).map((lead: any) => ({
-      ...lead,
-      comercial: Array.isArray(lead.comerciales)
-        ? lead.comerciales[0] ?? null
-        : lead.comerciales ?? null,
-      comerciales: undefined,
-      services_count: servicesCountByLeadId[lead.id] ?? 0,
-      flow_documents: flowDocsByLeadId[lead.id] ?? {},
-    }));
+    const normalizedData = (data ?? []).map((lead: any) => {
+      const shaped = shapeLeadRowLinkedinForApi(lead as Record<string, unknown>);
+      return {
+        ...shaped,
+        comercial: Array.isArray(lead.comerciales)
+          ? lead.comerciales[0] ?? null
+          : lead.comerciales ?? null,
+        comerciales: undefined,
+        services_count: servicesCountByLeadId[lead.id] ?? 0,
+        flow_documents: flowDocsByLeadId[lead.id] ?? {},
+        pending_agenda_accion: pendingAgendaByLeadId[lead.id] ?? null,
+      };
+    });
 
     return NextResponse.json(
-      { data: normalizedData as LeadRow[], error: null } satisfies LeadsApiResponse,
+      { data: normalizedData as unknown as LeadRow[], error: null } satisfies LeadsApiResponse,
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (e: any) {
@@ -439,7 +541,7 @@ export async function POST(req: Request) {
       audiencia: cleanStr(body.audiencia),
       tamano: cleanStr(body.tamano),
       linkedin_empresa: cleanStr(body.linkedin_empresa),
-      linkedin_director: cleanStr(body.linkedin_director),
+      linkedin_personal: cleanStr(body.linkedin_personal) ?? cleanStr(body.linkedin_director),
       meet_url: meetUrlRaw,
 
       rating: ratingParsed ?? 0,

@@ -6,17 +6,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { List, LayoutGrid, FileText, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
 import type { LeadForLeadsOkMacro, LeadsOkDocuments } from "@/lib/crm/leadsOkMacroFlow";
-import {
-  getLeadProgress,
-  getLeadStage,
-  getLeadStageShortLabel,
-  type DerivedLeadStage,
-} from "@/lib/crm/getLeadDerivedFlow";
+import { getLeadMacroFlowDisplay, getLeadStage, type DerivedLeadStage } from "@/lib/crm/getLeadDerivedFlow";
 import {
   countLeads87CommercialSummary,
   commercialSummaryBucketForDerivedStage,
   type Leads87CommercialSummaryBucket,
 } from "@/lib/crm/leads87CommercialSummary";
+import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
 
 type LeadOption = {
   id: string;
@@ -38,11 +34,17 @@ type LeadOption = {
   presentation_doc_url?: string | null;
   proposal_reviewed?: boolean | null;
   commercial_stage?: string | null;
+  commercial_strategy_json?: unknown;
+  strategy_approved_at?: string | null;
   /** Documentos comerciales por tipo (GET /api/admin/leads agrupa lead_documents). */
   flow_documents?: LeadsOkDocuments;
   score?: number | null;
   score_categoria?: string | null;
   comercial_id?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  initiative_kind?: string | null;
+  project_description?: string | null;
 };
 
 function toMacroLead(l: LeadOption): LeadForLeadsOkMacro {
@@ -63,8 +65,14 @@ function toMacroLead(l: LeadOption): LeadForLeadsOkMacro {
     presentation_doc_url: l.presentation_doc_url,
     proposal_reviewed: l.proposal_reviewed,
     commercial_stage: l.commercial_stage,
+    commercial_strategy_json: l.commercial_strategy_json,
+    strategy_approved_at: l.strategy_approved_at,
     ai_report: l.ai_report,
     empresas: l.empresas,
+    instagram: l.instagram ?? null,
+    facebook: l.facebook ?? null,
+    initiative_kind: l.initiative_kind ?? null,
+    project_description: l.project_description ?? null,
   };
 }
 
@@ -72,15 +80,9 @@ function getLeadFlowSnapshot(l: LeadOption): {
   stage: DerivedLeadStage;
   progress: number;
   label: string;
+  isFlowCompleted: boolean;
 } {
-  const lead = toMacroLead(l);
-  const docs = l.flow_documents ?? null;
-  const stage = getLeadStage(lead, docs);
-  return {
-    stage,
-    progress: getLeadProgress(stage),
-    label: getLeadStageShortLabel(stage),
-  };
+  return getLeadMacroFlowDisplay(toMacroLead(l), l.flow_documents ?? null);
 }
 
 function commercialSummaryInputFromLead(l: LeadOption): {
@@ -89,8 +91,6 @@ function commercialSummaryInputFromLead(l: LeadOption): {
 } {
   return { lead: toMacroLead(l), documents: l.flow_documents ?? null };
 }
-
-const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
 
 function normPipeline(s: string | null | undefined): string {
   if (!s || typeof s !== "string") return "";
@@ -597,7 +597,7 @@ export default function Leads87Page() {
       .then((json) => {
         if (cancelled) return;
         const data = Array.isArray(json?.data) ? json.data : [];
-        const active = data.filter((l) => l?.id && !CLOSED_PIPELINES.has(normPipeline(l.pipeline)));
+        const active = data.filter((l) => l?.id && isLeadActive(l.pipeline));
         setLeads(active);
         setLeadsLoadError(null);
       })
@@ -1195,7 +1195,7 @@ export default function Leads87Page() {
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Buscar empresa, contacto o email"
+            placeholder="Buscar lead, organización, contacto o email"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400"
           />
         </div>
@@ -1288,7 +1288,7 @@ export default function Leads87Page() {
                 <table className="min-w-full divide-y divide-slate-200">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-600">
-                      <th scope="col" className="px-4 py-3">Empresa / Lead</th>
+                      <th scope="col" className="px-4 py-3">Organización / Lead</th>
                       <th scope="col" className="px-4 py-3 whitespace-nowrap">Salud</th>
                       <th scope="col" className="px-4 py-3 whitespace-nowrap">% avance</th>
                       <th scope="col" className="px-4 py-3 whitespace-nowrap">Etapa actual</th>

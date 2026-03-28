@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  MIN_STARTUP_PROJECT_DESCRIPTION_LENGTH,
+  isStartupInitiativeKind,
+  normalizeInitiativeKind,
+} from "@/lib/crm/initiativeKind";
 
 function supabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -87,7 +92,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
     if (!data) {
       return NextResponse.json(
-        { data: null, error: "Empresa no encontrada" },
+        { data: null, error: "Iniciativa no encontrada" },
         { status: 404, headers: { "Cache-Control": "no-store" } }
       );
     }
@@ -117,6 +122,15 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 }
 
+const ESTADO_REVISION_ALLOWED = new Set([
+  "nueva",
+  "importada",
+  "en_revision",
+  "validada",
+  "descartada",
+  "convertida_a_lead",
+]);
+
 type EmpresaPatchInput = {
   nombre?: string;
   tipo?: "empresa" | "profesional" | "institucion" | null;
@@ -138,6 +152,13 @@ type EmpresaPatchInput = {
   descripcion?: string | null;
   aprobada?: boolean | null;
   estado?: string | null;
+  estado_revision?: string | null;
+  fuente_remota?: string | null;
+  score_preliminar?: number | null;
+  linkedin_empresa?: string | null;
+  linkedin_personal?: string | null;
+  initiative_kind?: string | null;
+  project_description?: string | null;
 };
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -204,6 +225,72 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (estado !== undefined) update.estado = estado;
     if (body.aprobada !== undefined) update.aprobada = body.aprobada;
 
+    if (body.estado_revision !== undefined) {
+      const er = cleanStr(body.estado_revision);
+      if (er && !ESTADO_REVISION_ALLOWED.has(er)) {
+        return NextResponse.json(
+          { data: null, error: "estado_revision no válido" },
+          { status: 400, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+      update.estado_revision = er;
+    }
+    if (body.fuente_remota !== undefined) {
+      update.fuente_remota = cleanStr(body.fuente_remota);
+    }
+    if (body.score_preliminar !== undefined) {
+      if (body.score_preliminar === null) {
+        update.score_preliminar = null;
+      } else if (typeof body.score_preliminar === "number") {
+        const s = Math.round(body.score_preliminar);
+        if (s < 0 || s > 10) {
+          return NextResponse.json(
+            { data: null, error: "score_preliminar debe estar entre 0 y 10" },
+            { status: 400, headers: { "Cache-Control": "no-store" } }
+          );
+        }
+        update.score_preliminar = s;
+      }
+    }
+    if (body.linkedin_empresa !== undefined) {
+      update.linkedin_empresa = cleanStr(body.linkedin_empresa);
+    }
+    if (body.linkedin_personal !== undefined) {
+      update.linkedin_personal = cleanStr(body.linkedin_personal);
+    }
+    if (body.initiative_kind !== undefined) {
+      update.initiative_kind = normalizeInitiativeKind(body.initiative_kind);
+    }
+    if (body.project_description !== undefined) {
+      update.project_description = cleanStr(body.project_description);
+    }
+
+    if (body.initiative_kind !== undefined || body.project_description !== undefined) {
+      const { data: cur } = await supabase
+        .from("empresas")
+        .select("initiative_kind, project_description")
+        .eq("id", id)
+        .maybeSingle();
+      const kindEff =
+        update.initiative_kind !== undefined
+          ? String(update.initiative_kind)
+          : String(cur?.initiative_kind ?? "standard");
+      const projEff =
+        update.project_description !== undefined
+          ? update.project_description
+          : cur?.project_description ?? null;
+      const projLen = typeof projEff === "string" ? projEff.trim().length : 0;
+      if (isStartupInitiativeKind(kindEff) && projLen < MIN_STARTUP_PROJECT_DESCRIPTION_LENGTH) {
+        return NextResponse.json(
+          {
+            data: null,
+            error: `Modo startup requiere «Describa su proyecto» con al menos ${MIN_STARTUP_PROJECT_DESCRIPTION_LENGTH} caracteres.`,
+          },
+          { status: 400, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+    }
+
     // rubro_id -> además guardamos "rubro" (nombre)
     if (rubro_id !== undefined) {
       if (rubro_id === null) {
@@ -245,7 +332,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     if (!data) {
       return NextResponse.json(
-        { data: null, error: "Empresa no encontrada" },
+        { data: null, error: "Iniciativa no encontrada" },
         { status: 404, headers: { "Cache-Control": "no-store" } }
       );
     }

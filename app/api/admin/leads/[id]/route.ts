@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 import { serializeLeadCustomPrompt } from "@/lib/leads/customPrompt";
+import { isLeadClosed, isLeadWon } from "@/lib/leads/leadStatusPolicy";
+import {
+  isMissingLeadsLinkedinPersonalColumn,
+  leadsSelectWithLinkedinVariant,
+  shapeLeadRowLinkedinForApi,
+} from "@/lib/leads/linkedinLeadFields";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,15 +50,20 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
 
     // Intento principal: tabla "leads" con join a empresas
     const selectLeadWithSnapshot =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_personal,instagram,direccion,is_member,member_since,empresa_id,iniciativa_id,comercial_id,score,score_categoria,meet_url,initiative_kind,project_description,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
     const selectLeadLegacy =
-      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
+      "id,created_at,updated_at,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,commercial_strategy_json,strategy_approved_at,linkedin_empresa,linkedin_personal,is_member,member_since,empresa_id,iniciativa_id,comercial_id,score,score_categoria,meet_url,initiative_kind,project_description,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre)),comerciales:comercial_id(id,nombre)";
 
-    let q1 = await sb
-      .from("leads")
-      .select(selectLeadWithSnapshot)
-      .eq("id", id)
-      .maybeSingle();
+    const stripIniciativaId = (sel: string) => sel.replace(",iniciativa_id", "");
+
+    let q1 = await sb.from("leads").select(selectLeadWithSnapshot).eq("id", id).maybeSingle();
+    if (q1.error && isMissingColumnError(q1.error.message, "leads", "iniciativa_id")) {
+      q1 = await sb
+        .from("leads")
+        .select(stripIniciativaId(selectLeadWithSnapshot))
+        .eq("id", id)
+        .maybeSingle();
+    }
     if (
       q1.error &&
       (isMissingColumnError(q1.error.message, "leads", "direccion") ||
@@ -60,23 +71,50 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
     ) {
       q1 = await sb
         .from("leads")
-        .select(selectLeadLegacy)
+        .select(stripIniciativaId(selectLeadLegacy))
         .eq("id", id)
         .maybeSingle();
     }
 
+    if (q1.error && isMissingLeadsLinkedinPersonalColumn(q1.error.message)) {
+      q1 = await sb
+        .from("leads")
+        .select(leadsSelectWithLinkedinVariant(selectLeadWithSnapshot, "director"))
+        .eq("id", id)
+        .maybeSingle();
+      if (q1.error && isMissingColumnError(q1.error.message, "leads", "iniciativa_id")) {
+        q1 = await sb
+          .from("leads")
+          .select(stripIniciativaId(leadsSelectWithLinkedinVariant(selectLeadWithSnapshot, "director")))
+          .eq("id", id)
+          .maybeSingle();
+      }
+      if (
+        q1.error &&
+        (isMissingColumnError(q1.error.message, "leads", "direccion") ||
+          isMissingColumnError(q1.error.message, "leads", "instagram"))
+      ) {
+        q1 = await sb
+          .from("leads")
+          .select(stripIniciativaId(leadsSelectWithLinkedinVariant(selectLeadLegacy, "director")))
+          .eq("id", id)
+          .maybeSingle();
+      }
+    }
+
     if (!q1.error && q1.data) {
-      const row = q1.data as any;
-      const comercial = Array.isArray(row.comerciales) ? row.comerciales[0] ?? null : row.comerciales ?? null;
+      const row = q1.data as Record<string, unknown>;
+      const comercial = Array.isArray(row.comerciales)
+        ? (row.comerciales as unknown[])[0] ?? null
+        : (row.comerciales ?? null);
       const commercialStage = row.commercial_stage ?? null;
+      const shaped = shapeLeadRowLinkedinForApi(row);
       return NextResponse.json(
         {
           data: {
-            ...row,
+            ...shaped,
             comerciales: undefined,
             comercial,
-            linkedin_empresa: row.linkedin_empresa ?? null,
-            linkedin_director: row.linkedin_director ?? null,
             meet_url: row.meet_url ?? null,
             commercial_stage: commercialStage,
             stage: commercialStage,
@@ -203,19 +241,36 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       );
     }
 
-    // Obtener lead actual para preservar linkedin_empresa y linkedin_director si vienen vacíos
-    const currentLead = await sb
+    // Lead actual: pipeline + LinkedIn (lectura legacy incluye director si personal aún no existe en BD)
+    let currentLead = await sb
       .from("leads")
-      .select("linkedin_empresa,linkedin_director,pipeline")
+      .select("linkedin_empresa,linkedin_personal,linkedin_director,pipeline")
       .eq("id", id)
       .maybeSingle();
+    if (currentLead.error && isMissingLeadsLinkedinPersonalColumn(currentLead.error.message)) {
+      currentLead = await sb
+        .from("leads")
+        .select("linkedin_empresa,linkedin_director,pipeline")
+        .eq("id", id)
+        .maybeSingle();
+    }
 
     const currentLinkedinEmpresa = currentLead.data?.linkedin_empresa ?? null;
-    const currentLinkedinDirector = currentLead.data?.linkedin_director ?? null;
+    const rawPersonal = currentLead.data?.linkedin_personal;
+    const rawDirector = (currentLead.data as { linkedin_director?: string | null })?.linkedin_director;
+    const currentLinkedinPersonal =
+      (typeof rawPersonal === "string" && rawPersonal.trim()) ||
+      (typeof rawDirector === "string" && rawDirector.trim()) ||
+      null;
 
-    // Normalizar valores entrantes de linkedin
+    // Normalizar valores entrantes (cuerpo canónico: linkedin_personal; se acepta linkedin_director por compat)
     const incomingEmpresa = typeof body.linkedin_empresa === "string" ? body.linkedin_empresa.trim() : null;
-    const incomingDirector = typeof body.linkedin_director === "string" ? body.linkedin_director.trim() : null;
+    let incomingPersonal: string | null | undefined = undefined;
+    if (body.linkedin_personal !== undefined) {
+      incomingPersonal = typeof body.linkedin_personal === "string" ? body.linkedin_personal.trim() : null;
+    } else if (body.linkedin_director !== undefined) {
+      incomingPersonal = typeof body.linkedin_director === "string" ? body.linkedin_director.trim() : null;
+    }
     const allowClear = body.allow_clear_linkedin === true;
 
     // Construir updateData: solo incluir campos presentes en body (evitar sobrescribir con null al hacer PATCH parcial)
@@ -312,20 +367,16 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       }
     }
 
-    // LinkedIn Director: solo incluir si cambió explícitamente o si se permite borrar
-    if (body.linkedin_director !== undefined) {
-      if (incomingDirector && incomingDirector.length > 0) {
-        // Valor nuevo no vacío → incluir en update
-        updateData.linkedin_director = incomingDirector;
+    // LinkedIn contacto (canónico: linkedin_personal; no escribir linkedin_director)
+    if (incomingPersonal !== undefined) {
+      if (incomingPersonal && incomingPersonal.length > 0) {
+        updateData.linkedin_personal = incomingPersonal;
       } else if (allowClear) {
-        // Valor vacío/null pero se permite borrar explícitamente
-        updateData.linkedin_director = null;
-      } else if (currentLinkedinDirector) {
-        // Valor vacío/null pero lead actual tiene valor → NO incluir (preservar)
-        // No hacer nada, no incluir en updateData
+        updateData.linkedin_personal = null;
+      } else if (currentLinkedinPersonal) {
+        // preservar
       } else {
-        // Valor vacío/null y lead actual también está vacío → no incluir (no cambió)
-        // No hacer nada
+        // sin cambio
       }
     }
 
@@ -346,7 +397,9 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         key !== "presentation_doc_url" &&
         key !== "commercial_stage" &&
         key !== "stage" &&
-        key !== "allow_clear_linkedin"
+        key !== "allow_clear_linkedin" &&
+        key !== "linkedin_personal" &&
+        key !== "linkedin_director"
       ) {
         updateData[key] = value;
       }
@@ -370,8 +423,8 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     // Si is_member cambia de false a true y member_since no viene, setear member_since=now()
     if (body.is_member === true) {
       // Primero obtenemos el lead actual para verificar si ya era miembro
-      const currentLead = await sb.from("leads").select("is_member").eq("id", id).maybeSingle();
-      const wasMember = currentLead.data?.is_member === true;
+      const memberRow = await sb.from("leads").select("is_member").eq("id", id).maybeSingle();
+      const wasMember = memberRow.data?.is_member === true;
       
       if (!wasMember && body.member_since === undefined) {
         updateData.member_since = new Date().toISOString();
@@ -383,17 +436,17 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       updateData.member_since = null;
     }
 
-    // Validar que no se pueda cambiar la etapa si el lead está cerrado (Ganado/Perdido)
-    // Usar el currentLead que ya obtuvimos arriba (incluye pipeline)
+    // Validar que no se pueda cambiar la etapa si el lead está en pipeline de cierre (leadStatusPolicy)
     if (body.pipeline !== undefined) {
-      if (currentLead.data?.pipeline) {
+      if (currentLead.data?.pipeline != null) {
         const currentPipeline = safeStr(currentLead.data.pipeline);
-        const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
-        
-        // Si el lead está en Ganado o Perdido, rechazar cualquier cambio
-        if (normalizedCurrent === "ganado" || normalizedCurrent === "perdido") {
+        if (currentPipeline && isLeadClosed(currentPipeline)) {
           return NextResponse.json(
-            { data: null, error: "Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido." } satisfies ApiResp<null>,
+            {
+              data: null,
+              error:
+                "Lead cerrado: no se puede cambiar la etapa desde un pipeline de cierre (ver política en lib/leads/leadStatusPolicy).",
+            } satisfies ApiResp<null>,
             { status: 409 }
           );
         }
@@ -404,9 +457,8 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     let socioCreationError: string | null = null;
     if (body.pipeline !== undefined) {
       const newPipeline = safeStr(body.pipeline);
-      const normalizedNewPipeline = newPipeline ? newPipeline.trim().toLowerCase() : null;
-      
-      if (normalizedNewPipeline === "ganado") {
+
+      if (newPipeline && isLeadWon(newPipeline)) {
         // Obtener lead completo para verificar pipeline anterior y si ya es miembro
         const currentLead = await sb
           .from("leads")
@@ -416,8 +468,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
         if (currentLead.data) {
           const currentPipeline = safeStr(currentLead.data.pipeline);
-          const normalizedCurrentPipeline = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
-          const wasGanado = normalizedCurrentPipeline === "ganado";
+          const wasGanado = currentPipeline ? isLeadWon(currentPipeline) : false;
           const isAlreadyMember = currentLead.data.is_member === true;
 
           // Si no era "Ganado" antes o no es miembro todavía, crear/actualizar socio
@@ -579,34 +630,40 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     
     if (!updateResult.error && updateResult.data) {
       // Re-hidratar el lead completo con el mismo select que el GET (incluyendo empresas)
-      const selectQueryWithSnapshot = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
-      const selectQueryLegacy = "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_director,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
-      
-      // Intento principal: tabla "leads"
-      let refreshed = await sb
-        .from("leads")
-        .select(selectQueryWithSnapshot)
-        .eq("id", id)
-        .maybeSingle();
+      const selectQueryWithSnapshot =
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_personal,instagram,direccion,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+      const selectQueryLegacy =
+        "id,nombre,contacto,telefono,email,origen,pipeline,notas,website,objetivos,audiencia,tamano,oferta,ai_context,ai_report,ai_report_updated_at,ai_custom_prompt,proposal_draft_json,proposal_confirmed_at,proposal_sent_at,proposal_doc_url,presentation_doc_url,proposal_reviewed,commercial_stage,linkedin_empresa,linkedin_personal,is_member,member_since,empresa_id,comercial_id,score,score_categoria,meet_url,empresas:empresa_id(id,nombre,email,telefono,celular,rut,direccion,ciudad,pais,web,instagram,facebook,contacto_nombre,contacto_celular,contacto_email,etiquetas,rubro_id,rubros:rubro_id(id,nombre))";
+
+      let refreshed = await sb.from("leads").select(selectQueryWithSnapshot).eq("id", id).maybeSingle();
+      if (refreshed.error && isMissingLeadsLinkedinPersonalColumn(refreshed.error.message)) {
+        refreshed = await sb
+          .from("leads")
+          .select(leadsSelectWithLinkedinVariant(selectQueryWithSnapshot, "director"))
+          .eq("id", id)
+          .maybeSingle();
+      }
       if (
         refreshed.error &&
         (isMissingColumnError(refreshed.error.message, "leads", "direccion") ||
           isMissingColumnError(refreshed.error.message, "leads", "instagram"))
       ) {
+        refreshed = await sb.from("leads").select(selectQueryLegacy).eq("id", id).maybeSingle();
+      }
+      if (refreshed.error && isMissingLeadsLinkedinPersonalColumn(refreshed.error.message)) {
         refreshed = await sb
           .from("leads")
-          .select(selectQueryLegacy)
+          .select(leadsSelectWithLinkedinVariant(selectQueryLegacy, "director"))
           .eq("id", id)
           .maybeSingle();
       }
-      
+
       if (!refreshed.error && refreshed.data) {
-        const row = refreshed.data;
+        const row = refreshed.data as Record<string, unknown>;
         const cs = row.commercial_stage ?? null;
+        const shaped = shapeLeadRowLinkedinForApi(row);
         const fullLead = {
-          ...row,
-          linkedin_empresa: row.linkedin_empresa ?? null,
-          linkedin_director: row.linkedin_director ?? null,
+          ...shaped,
           meet_url: row.meet_url ?? null,
           commercial_stage: cs,
           stage: cs,

@@ -75,6 +75,50 @@ export function mergeDocumentsForFlow(
 }
 
 /**
+ * Snapshot único para listado y widgets: misma macro que el detalle LEADS87, sin recalcular heurísticas aparte.
+ * Si todas las etapas macro están `completed` → 100% y etapa `completo` (post-cierre no baja el %).
+ */
+export function getLeadMacroFlowDisplay(
+  lead: LeadForLeadsOkMacro | null,
+  documents?: LeadsOkDocuments | null
+): {
+  stage: DerivedLeadStage;
+  progress: number;
+  label: string;
+  isFlowCompleted: boolean;
+} {
+  if (!lead) {
+    return {
+      stage: "lead",
+      progress: DERIVED_LEAD_STAGE_PROGRESS.lead,
+      label: DERIVED_LEAD_STAGE_LABEL_ES.lead,
+      isFlowCompleted: false,
+    };
+  }
+  const merged = mergeDocumentsForFlow(lead, documents ?? null);
+  const macro = getLeadsOkMacroFlow(lead, merged);
+  const isFlowCompleted = macro.length > 0 && macro.every((s) => s.status === "completed");
+
+  let stage: DerivedLeadStage;
+  if (isFlowCompleted) {
+    stage = "completo";
+  } else {
+    const activeIdx = macro.findIndex((s) => s.status === "active");
+    if (activeIdx < 0) {
+      stage = "lead";
+    } else {
+      const id = macro[activeIdx]?.id ?? 1;
+      stage = MACRO_ID_TO_STAGE[id] ?? "lead";
+    }
+  }
+
+  const progress = isFlowCompleted ? 100 : getLeadProgress(stage);
+  const label = isFlowCompleted ? DERIVED_LEAD_STAGE_LABEL_ES.completo : getLeadStageShortLabel(stage);
+
+  return { stage, progress, label, isFlowCompleted };
+}
+
+/**
  * Etapa comercial derivada (primera macro “active” según getLeadsOkMacroFlow).
  * `commercial_stage === 'closing'` (o alias `stage`) ya se interpreta vía la macro (etapa 7–8).
  */
@@ -82,15 +126,7 @@ export function getLeadStage(
   lead: LeadForLeadsOkMacro | null,
   documents?: LeadsOkDocuments | null
 ): DerivedLeadStage {
-  if (!lead) return "lead";
-  const merged = mergeDocumentsForFlow(lead, documents ?? null);
-  const macro = getLeadsOkMacroFlow(lead, merged);
-  const activeIdx = macro.findIndex((s) => s.status === "active");
-  if (activeIdx < 0) {
-    return macro.length > 0 && macro.every((s) => s.status === "completed") ? "completo" : "lead";
-  }
-  const id = macro[activeIdx]?.id ?? 1;
-  return MACRO_ID_TO_STAGE[id] ?? "lead";
+  return getLeadMacroFlowDisplay(lead, documents).stage;
 }
 
 export function getLeadProgress(stage: DerivedLeadStage): number {

@@ -17,6 +17,7 @@ type LeadMinimal = {
   email?: string | null;
   website?: string | null;
   linkedin_empresa?: string | null;
+  linkedin_personal?: string | null;
   linkedin_director?: string | null;
   pipeline?: string | null;
   empresas?: {
@@ -107,7 +108,7 @@ function getMissingRecommendedFields(lead: LeadMinimal | null): string[] {
   const missing: string[] = [];
   if (!hasValue(lead.empresas?.rubros?.nombre)) missing.push("Rubro");
   if (!hasValue(lead.website)) missing.push("Web");
-  const linkedin = lead.linkedin_empresa ?? lead.linkedin_director;
+  const linkedin = lead.linkedin_empresa ?? lead.linkedin_personal ?? lead.linkedin_director;
   if (!hasValue(linkedin)) missing.push("LinkedIn");
   return missing;
 }
@@ -129,9 +130,9 @@ export default function OportunidadDetailPage() {
     telefono: string;
     website: string;
     linkedin_empresa: string;
-    linkedin_director: string;
+    linkedin_personal: string;
     rubro_id: string | null;
-  }>({ nombre: "", contacto: "", email: "", telefono: "", website: "", linkedin_empresa: "", linkedin_director: "", rubro_id: null });
+  }>({ nombre: "", contacto: "", email: "", telefono: "", website: "", linkedin_empresa: "", linkedin_personal: "", rubro_id: null });
   const focusContextoRef = useRef<(() => void) | null>(null);
   const focusInvestigacionRef = useRef<(() => void) | null>(null);
   const focusWorkspaceStageRef = useRef<((stageIndex: number) => void) | null>(null);
@@ -177,7 +178,7 @@ export default function OportunidadDetailPage() {
       telefono: (lead.telefono ?? "").trim(),
       website: (lead.website ?? "").trim(),
       linkedin_empresa: (lead.linkedin_empresa ?? "").trim(),
-      linkedin_director: (lead.linkedin_director ?? "").trim(),
+      linkedin_personal: (lead.linkedin_personal ?? lead.linkedin_director ?? "").trim(),
       rubro_id: lead.empresas?.rubro_id ?? lead.empresas?.rubros?.id ?? null,
     });
     setEditingLead(true);
@@ -194,9 +195,9 @@ export default function OportunidadDetailPage() {
         telefono: editForm.telefono || null,
         website: editForm.website || null,
         linkedin_empresa: editForm.linkedin_empresa || null,
-        linkedin_director: editForm.linkedin_director || null,
+        linkedin_personal: editForm.linkedin_personal || null,
       };
-      if (!editForm.linkedin_empresa && !editForm.linkedin_director) body.allow_clear_linkedin = true;
+      if (!editForm.linkedin_empresa && !editForm.linkedin_personal) body.allow_clear_linkedin = true;
       const res = await fetch(`/api/admin/leads/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
@@ -391,8 +392,8 @@ export default function OportunidadDetailPage() {
                   <label className="block text-xs text-slate-500">LinkedIn</label>
                   <input
                     type="text"
-                    value={editForm.linkedin_empresa || editForm.linkedin_director}
-                    onChange={(e) => setEditForm((f) => ({ ...f, linkedin_empresa: e.target.value, linkedin_director: e.target.value }))}
+                    value={editForm.linkedin_empresa || editForm.linkedin_personal}
+                    onChange={(e) => setEditForm((f) => ({ ...f, linkedin_empresa: e.target.value, linkedin_personal: e.target.value }))}
                     className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-slate-700 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
                     placeholder="URL LinkedIn empresa o perfil"
                   />
@@ -406,7 +407,7 @@ export default function OportunidadDetailPage() {
                 <div><p className="text-xs text-slate-500">Teléfono</p><p className="text-sm font-medium text-slate-800">{format(lead.telefono)}</p></div>
                 <div><p className="text-xs text-slate-500">Rubro</p><p className="text-sm font-medium text-slate-800">{format(lead.empresas?.rubros?.nombre)}</p></div>
                 <div><p className="text-xs text-slate-500">Web</p><p className="text-sm font-medium text-slate-800">{format(lead.website)}</p></div>
-                <div><p className="text-xs text-slate-500">LinkedIn</p><p className="text-sm font-medium text-slate-800">{format(lead.linkedin_empresa ?? lead.linkedin_director)}</p></div>
+                <div><p className="text-xs text-slate-500">LinkedIn</p><p className="text-sm font-medium text-slate-800">{format(lead.linkedin_empresa ?? lead.linkedin_personal ?? lead.linkedin_director)}</p></div>
               </div>
             )}
           </div>

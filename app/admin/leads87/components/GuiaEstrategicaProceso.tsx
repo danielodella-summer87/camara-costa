@@ -39,7 +39,7 @@ export function GuiaEstrategicaProceso({ currentStageIndex }: { currentStageInde
                 <li>✔ Lead registrado</li>
                 <li>✔ Responsable asignado</li>
                 <li>☐ Web analizada</li>
-                <li>☐ LinkedIn empresa revisado</li>
+                <li>☐ LinkedIn de la organización revisado</li>
                 <li>☐ Competencia identificada</li>
               </ul>
             </div>

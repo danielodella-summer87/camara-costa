@@ -16,7 +16,10 @@ export function PipelineSummary({ pipelineCounts, totalActive }: Props) {
     <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <h2 className="text-lg font-semibold text-slate-900">Pipeline total</h2>
       <p className="mt-1 text-sm text-slate-500">
-        Total leads activos: <span className="font-semibold text-slate-700">{totalActive}</span>
+        Distribución por <span className="font-medium text-slate-600">columna CRM</span> (referencia). El
+        avance real LEADS87 está en las tarjetas de flujo arriba.
+        <br />
+        Total leads activos (CRM): <span className="font-semibold text-slate-700">{totalActive}</span>
       </p>
       <div className="mt-4 space-y-3">
         {pipelineCounts.length === 0 ? (

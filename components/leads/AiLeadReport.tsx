@@ -1414,7 +1414,9 @@ export function AiLeadReport({
     const emp = (lead as any)?.empresas;
     const hasWeb = Boolean(
       lead?.website || emp?.web || emp?.website || emp?.instagram || emp?.facebook ||
-      (lead as any)?.linkedin_empresa || (lead as any)?.linkedin_director
+      (lead as any)?.linkedin_empresa ||
+      (lead as any)?.linkedin_personal ||
+      (lead as any)?.linkedin_director
     );
     const adHint = `${lead?.objetivos ?? ""} ${lead?.notas ?? ""} ${(lead as any)?.ai_context ?? ""}`.toLowerCase();
     const hasPauta = adHint.includes("ads") || adHint.includes("pauta") || adHint.includes("pixel") || adHint.includes("capi");

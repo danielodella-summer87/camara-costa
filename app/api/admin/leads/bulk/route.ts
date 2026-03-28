@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
+import { isLeadWon } from "@/lib/leads/leadStatusPolicy";
 
 export const dynamic = "force-dynamic";
 
@@ -54,10 +55,8 @@ export async function PATCH(req: Request) {
     }
 
     const supabase = supabaseAdmin();
-    const normalizedPipeline = pipeline.trim().toLowerCase();
-
-    // Si el pipeline es "Ganado", procesar cada lead individualmente para crear socios
-    if (normalizedPipeline === "ganado") {
+    // Si el pipeline objetivo es “ganado”, procesar cada lead individualmente para crear socios
+    if (isLeadWon(pipeline)) {
       const results: any[] = [];
       const warnings: string[] = [];
 
@@ -77,8 +76,7 @@ export async function PATCH(req: Request) {
 
           const lead = currentLead.data;
           const currentPipeline = cleanStr(lead.pipeline);
-          const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : null;
-          const wasGanado = normalizedCurrent === "ganado";
+          const wasGanado = currentPipeline ? isLeadWon(currentPipeline) : false;
           const isAlreadyMember = lead.is_member === true;
 
           // Resolver empresa_id: si no existe, buscar o crear empresa

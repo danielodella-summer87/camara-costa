@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import RubroSelect from "./RubroSelect";
+import {
+  ESTADOS_REVISION_INICIATIVA,
+  badgeClassEstadoRevision,
+  labelEstadoRevisionIniciativa,
+} from "@/lib/crm/iniciativaEstadoRevision";
 
 type Empresa = {
   id: string;
@@ -19,6 +24,10 @@ type Empresa = {
   descripcion?: string | null;
   created_at?: string;
   updated_at?: string;
+  estado_revision?: string | null;
+  fuente_remota?: string | null;
+  score_preliminar?: number | null;
+  converted_lead_id?: string | null;
 };
 
 type EmpresasApiResponse = {
@@ -43,6 +52,8 @@ export default function EmpresasTable() {
 
   // filtros UI
   const [q, setQ] = useState("");
+  /** "" = todos los estados de revisión */
+  const [filtroEstadoRevision, setFiltroEstadoRevision] = useState<string>("");
 
   // edición inline rubro
   const [editingRubroForId, setEditingRubroForId] = useState<string | null>(null);
@@ -94,7 +105,7 @@ export default function EmpresasTable() {
       });
 
       const json = (await res.json()) as EmpresasApiResponse;
-      if (!res.ok) throw new Error(json?.error ?? "Error cargando empresas");
+      if (!res.ok) throw new Error(json?.error ?? "Error cargando iniciativas");
 
       const list = Array.isArray(json?.data) ? json.data : [];
       setRows(
@@ -104,7 +115,7 @@ export default function EmpresasTable() {
         }))
       );
     } catch (e: any) {
-      setError(e?.message ?? "Error cargando empresas");
+      setError(e?.message ?? "Error cargando iniciativas");
       setRows([]);
     } finally {
       setLoading(false);
@@ -131,10 +142,10 @@ export default function EmpresasTable() {
       });
 
       const json = (await res.json()) as EmpresaApiResponse;
-      if (!res.ok) throw new Error(json?.error ?? "Error actualizando empresa");
+      if (!res.ok) throw new Error(json?.error ?? "Error actualizando iniciativa");
 
       const updated = json?.data ?? null;
-      if (!updated) throw new Error("No se recibió la empresa actualizada");
+      if (!updated) throw new Error("No se recibió la iniciativa actualizada");
 
       setRows((prev) =>
         prev.map((r) =>
@@ -146,7 +157,7 @@ export default function EmpresasTable() {
 
       return updated;
     } catch (e: any) {
-      setError(e?.message ?? "Error actualizando empresa");
+      setError(e?.message ?? "Error actualizando iniciativa");
       throw e;
     } finally {
       setMutatingId(null);
@@ -157,33 +168,27 @@ export default function EmpresasTable() {
     fetchEmpresas();
   }, []);
 
-  function aprobacionLabel(e: Empresa) {
-    if (e.aprobada) return "Aprobada";
-    if ((e.estado ?? "").toLowerCase() === "rechazada") return "Rechazada";
-    return "Pendiente";
-  }
-
-  function badgeClassEstado(v: string) {
-    const s = v.toLowerCase();
-    if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
-    return "border-slate-200 bg-slate-50 text-slate-700";
-  }
-
-  function badgeClassAprobacion(v: string) {
-    const s = v.toLowerCase();
-    if (s === "aprobada") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    if (s === "rechazada") return "border-rose-200 bg-rose-50 text-rose-700";
-    return "border-amber-200 bg-amber-50 text-amber-800";
-  }
-
   const empresasFiltradas = useMemo(() => {
     const term = q.trim().toLowerCase();
     let list = [...rows];
 
+    if (filtroEstadoRevision) {
+      list = list.filter(
+        (e) => (e.estado_revision ?? "").trim().toLowerCase() === filtroEstadoRevision.toLowerCase()
+      );
+    }
+
     if (term.length) {
       list = list.filter((e) => {
-        const haystack = [e.nombre ?? "", e.rubro ?? "", e.telefono ?? ""]
+        const estadoLabel = labelEstadoRevisionIniciativa(e.estado_revision).toLowerCase();
+        const haystack = [
+          e.nombre ?? "",
+          e.rubro ?? "",
+          e.telefono ?? "",
+          e.email ?? "",
+          e.fuente_remota ?? "",
+          estadoLabel,
+        ]
           .join(" ")
           .toLowerCase();
         return haystack.includes(term);
@@ -192,7 +197,7 @@ export default function EmpresasTable() {
 
     list.sort((a, b) => (a.nombre ?? "").localeCompare(b.nombre ?? ""));
     return list;
-  }, [rows, q]);
+  }, [rows, q, filtroEstadoRevision]);
 
   async function startEditRubro(e: Empresa) {
     setError(null);
@@ -262,7 +267,8 @@ export default function EmpresasTable() {
         <div>
           <h2 className="text-base font-semibold text-slate-900">Listado</h2>
           <p className="text-sm text-slate-600">
-            Directorio de entidades. Podés ver, aprobar o rechazar.
+            Fuente y score preliminar aparecen bajo el nombre cuando existen. Filtrá por estado de revisión para priorizar
+            la bandeja diaria.
           </p>
         </div>
 
@@ -271,7 +277,7 @@ export default function EmpresasTable() {
             href="/admin/empresas/nueva"
             className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
           >
-            Nueva entidad
+            Nueva iniciativa
           </Link>
 
           <button
@@ -298,20 +304,50 @@ export default function EmpresasTable() {
       )}
 
       {/* filtros */}
-      <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por nombre, rubro o teléfono..."
-          className="w-full rounded-xl border px-4 py-2 text-sm md:max-w-xl"
-        />
+      <div className="mt-5 flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end lg:justify-between">
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 lg:min-w-0 lg:flex-1">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Buscar por nombre, rubro, teléfono, email, fuente o estado…"
+            className="w-full min-w-0 rounded-xl border px-4 py-2 text-sm sm:max-w-md lg:max-w-xl"
+          />
+          <div className="flex shrink-0 items-center gap-2">
+            <label htmlFor="filtro-estado-revision" className="text-xs font-medium text-slate-600 whitespace-nowrap">
+              Estado revisión
+            </label>
+            <select
+              id="filtro-estado-revision"
+              value={filtroEstadoRevision}
+              onChange={(e) => setFiltroEstadoRevision(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+            >
+              <option value="">Todos</option>
+              {ESTADOS_REVISION_INICIATIVA.map((k) => (
+                <option key={k} value={k}>
+                  {labelEstadoRevisionIniciativa(k)}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {rows.length > 0 ? (
+          <p className="text-xs text-slate-500 lg:text-right">
+            Mostrando{" "}
+            <span className="font-semibold text-slate-700">{empresasFiltradas.length}</span> de{" "}
+            <span className="font-semibold text-slate-700">{rows.length}</span>
+            {filtroEstadoRevision || q.trim() ? " (con filtros activos)" : ""}
+          </p>
+        ) : null}
       </div>
 
       {/* tabla */}
       <div className="mt-5 overflow-hidden rounded-2xl border">
-        <div className="grid grid-cols-[1.2fr_1.1fr_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+        <div className="grid grid-cols-[1.1fr_1fr_minmax(128px,1fr)_minmax(100px,0.9fr)_200px] bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
           <div>Iniciativa</div>
           <div>Rubro</div>
+          <div>Estado de revisión</div>
+          <div>Lead</div>
           <div className="text-right">Acción</div>
         </div>
 
@@ -319,7 +355,9 @@ export default function EmpresasTable() {
           <div className="px-4 py-6 text-sm text-slate-500">Cargando…</div>
         ) : empresasFiltradas.length === 0 ? (
           <div className="px-4 py-6 text-sm text-slate-500">
-            No hay entidades para mostrar con esos filtros.
+            {rows.length === 0
+              ? "No hay iniciativas cargadas. Creá una nueva o importá desde Excel."
+              : "Ninguna iniciativa coincide con la búsqueda o el filtro de estado. Probá limpiar filtros."}
           </div>
         ) : (
           <div className="divide-y">
@@ -330,12 +368,22 @@ export default function EmpresasTable() {
               return (
                 <div
                   key={e.id}
-                  className="grid grid-cols-[1.2fr_1.1fr_200px] items-center px-4 py-3 text-sm"
+                  className="grid grid-cols-[1.1fr_1fr_minmax(128px,1fr)_minmax(100px,0.9fr)_200px] items-center gap-x-1 px-4 py-3 text-sm"
                 >
-                  {/* Empresa */}
-                  <div className="font-medium text-slate-900">{e.nombre}</div>
+                  <div className="min-w-0">
+                    <div className="font-medium text-slate-900 truncate">{e.nombre}</div>
+                    {e.fuente_remota?.trim() || typeof e.score_preliminar === "number" ? (
+                      <div className="mt-0.5 truncate text-xs text-slate-500" title={e.fuente_remota?.trim() || undefined}>
+                        {[
+                          e.fuente_remota?.trim(),
+                          typeof e.score_preliminar === "number" ? `Score ${e.score_preliminar}/10` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    ) : null}
+                  </div>
 
-                  {/* Rubro */}
                   <div className="text-slate-700">
                     {!isEditingRubro ? (
                       <div className="flex items-center gap-2">
@@ -389,7 +437,28 @@ export default function EmpresasTable() {
                     )}
                   </div>
 
-                  {/* Acciones */}
+                  <div className="text-slate-700 min-w-0">
+                    <span
+                      className={`inline-flex max-w-full truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badgeClassEstadoRevision(e.estado_revision)}`}
+                      title={labelEstadoRevisionIniciativa(e.estado_revision)}
+                    >
+                      {labelEstadoRevisionIniciativa(e.estado_revision)}
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 text-slate-700">
+                    {e.converted_lead_id?.trim() ? (
+                      <Link
+                        href={`/admin/leads87/${e.converted_lead_id.trim()}`}
+                        className="text-xs font-medium text-emerald-800 hover:text-emerald-900 hover:underline"
+                      >
+                        Abrir lead
+                      </Link>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </div>
+
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     <Link
                       href={`/admin/empresas/${e.id}`}
@@ -406,8 +475,7 @@ export default function EmpresasTable() {
       </div>
 
       <div className="mt-4 text-xs text-slate-500">
-        Tip: se guarda <span className="font-semibold">rubro_id</span> y el backend completa{" "}
-        <span className="font-semibold">rubro</span> (nombre) para mostrar.
+        Al cambiar rubro se guarda el identificador interno; el nombre del rubro se muestra automáticamente.
       </div>
     </div>
   );

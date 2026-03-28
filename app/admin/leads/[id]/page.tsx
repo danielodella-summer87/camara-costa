@@ -2,8 +2,8 @@
 
 /*
   SMOKE TESTS (checklist):
-  - [ ] Editar Facebook en Datos de Entidad → Guardar → Refresh → Facebook persiste.
-  - [ ] Editar 3 campos distintos de entidad → Guardar → Refresh → persisten.
+  - [ ] Editar Facebook en Datos de iniciativa → Guardar → Refresh → Facebook persiste.
+  - [ ] Editar 3 campos distintos de iniciativa → Guardar → Refresh → persisten.
   - [ ] Informe IA con "¿Ya es cliente de la Agencia?" = Sí/cliente → NO critica destructivamente; sugiere optimizaciones.
   - [ ] Informe IA con "¿Ya es cliente de la Agencia?" = No/vacío → puede marcar oportunidades/gaps.
   - [ ] Informe IA menciona redes cargadas (FB/IG/LinkedIn/Web) y usa contactos si existen.
@@ -82,6 +82,7 @@ type Lead = {
   tamano?: string | null; // single
   oferta?: string | null; // texto
   linkedin_empresa?: string | null;
+  linkedin_personal?: string | null;
   linkedin_director?: string | null;
   meet_url?: string | null;
   ai_custom_prompt?: string | null; // Personalización IA
@@ -127,7 +128,7 @@ type PatchPayload = Partial<
     | "tamano"
     | "oferta"
     | "linkedin_empresa"
-    | "linkedin_director"
+    | "linkedin_personal"
     | "meet_url"
     | "empresa_id"
     | "comercial_id"
@@ -592,6 +593,7 @@ function getNextStepDisplay(
 import { getLeadFlowSteps, getCurrentFlowStep, getLeadFlowSignals, LEAD_FLOW_STEP_IDS, type LeadFlowStep } from "@/lib/leads/leadFlow";
 import { buildProposalExportPayload } from "@/lib/leads/proposalExportPayload";
 import { getLeadHealth } from "@/lib/crm/leadHealth";
+import { isLeadClosed, normalizePipelineForPolicy } from "@/lib/leads/leadStatusPolicy";
 
 function getVisibleLeadTabs(role: string | null): ReadonlyArray<(typeof LEAD_TABS)[number]> {
   const r = role?.trim().toLowerCase() ?? null;
@@ -1554,7 +1556,11 @@ export default function LeadDetailPage() {
       hasWebsite: !!(webLead || webEmp),
       hasInstagram: !!instaEmp,
       hasFacebook: !!fbEmp,
-      hasLinkedin: !!(lead?.linkedin_empresa?.trim() || lead?.linkedin_director?.trim()),
+      hasLinkedin: !!(
+        lead?.linkedin_empresa?.trim() ||
+        lead?.linkedin_personal?.trim() ||
+        lead?.linkedin_director?.trim()
+      ),
       hasAiReport: !!(typeof aiReportRaw === "string" && aiReportRaw.trim()),
       hasObjetivo: !!(lead?.objetivos?.trim()),
       hasAudiencia: !!(lead?.audiencia?.trim()),
@@ -2059,7 +2065,7 @@ export default function LeadDetailPage() {
       // Log temporal para confirmar si se está enviando linkedin
       console.log("[patchLead] Payload linkedin:", {
         linkedin_empresa: payload.linkedin_empresa !== undefined ? (payload.linkedin_empresa || "null") : "undefined (no se incluye)",
-        linkedin_director: payload.linkedin_director !== undefined ? (payload.linkedin_director || "null") : "undefined (no se incluye)",
+        linkedin_personal: payload.linkedin_personal !== undefined ? (payload.linkedin_personal || "null") : "undefined (no se incluye)",
       });
 
       const res = await fetch(`/api/admin/leads/${id}`, {
@@ -2114,7 +2120,7 @@ export default function LeadDetailPage() {
       return; // No hay cambios, no hace nada
     }
 
-    // Construir payload base (sin linkedin_empresa/linkedin_director, se agregan condicionalmente)
+    // Construir payload base (sin linkedin_empresa/linkedin_personal, se agregan condicionalmente)
     const normalized: PatchPayload = {
       nombre: norm(draft.nombre),
       contacto: norm(draft.contacto),
@@ -2134,11 +2140,13 @@ export default function LeadDetailPage() {
       comercial_id: draft.comercial_id ?? null,
     };
 
-    // Preservar linkedin_empresa y linkedin_director si el draft está vacío pero el lead tiene valores
+    // Preservar linkedin_empresa y linkedin_personal si el draft está vacío pero el lead tiene valores
     const currentLinkedinEmpresa = (lead?.linkedin_empresa ?? "").trim();
-    const currentLinkedinDirector = (lead?.linkedin_director ?? "").trim();
+    const currentLinkedinPersonal = (
+      (lead?.linkedin_personal ?? lead?.linkedin_director ?? "") as string
+    ).trim();
     const newLinkedinEmpresa = (draft.linkedin_empresa ?? "").trim();
-    const newLinkedinDirector = (draft.linkedin_director ?? "").trim();
+    const newLinkedinPersonal = (draft.linkedin_personal ?? "").trim();
 
     // LinkedIn Empresa: solo incluir si cambió explícitamente
     if (draft.linkedin_empresa !== undefined) {
@@ -2152,16 +2160,13 @@ export default function LeadDetailPage() {
       // Si son iguales, no incluir (no cambió)
     }
 
-    // LinkedIn Director: solo incluir si cambió explícitamente
-    if (draft.linkedin_director !== undefined) {
-      if (newLinkedinDirector === "" && currentLinkedinDirector) {
+    // LinkedIn contacto: solo incluir si cambió explícitamente
+    if (draft.linkedin_personal !== undefined) {
+      if (newLinkedinPersonal === "" && currentLinkedinPersonal) {
         // Draft vacío pero lead tiene valor → NO incluir (preservar valor existente)
-        // No hacer nada, no incluir en normalized
-      } else if (newLinkedinDirector !== currentLinkedinDirector) {
-        // Valor nuevo diferente al actual → incluir (puede ser cambio o borrado explícito)
-        normalized.linkedin_director = newLinkedinDirector || null;
+      } else if (newLinkedinPersonal !== currentLinkedinPersonal) {
+        normalized.linkedin_personal = newLinkedinPersonal || null;
       }
-      // Si son iguales, no incluir (no cambió)
     }
 
     // REGLA: Solo incluir empresa_id en el payload si realmente cambió
@@ -2685,7 +2690,7 @@ export default function LeadDetailPage() {
       tamano: lead.tamano ?? "",
       oferta: lead.oferta ?? "",
       linkedin_empresa: lead.linkedin_empresa ?? "",
-      linkedin_director: lead.linkedin_director ?? "",
+      linkedin_personal: (lead.linkedin_personal ?? lead.linkedin_director ?? "") as string,
       meet_url: lead.meet_url ?? "",
     });
   }
@@ -2719,15 +2724,11 @@ export default function LeadDetailPage() {
   async function saveEdit() {
     // Validar que no se intente cambiar la etapa si el lead está cerrado
     if (draft.pipeline !== undefined && lead?.pipeline) {
-      const currentPipeline = norm(lead.pipeline);
-      const normalizedCurrent = currentPipeline ? currentPipeline.trim().toLowerCase() : "";
-      const isClosed = normalizedCurrent === "ganado" || normalizedCurrent === "perdido";
-
-      if (isClosed) {
-        const newPipeline = norm(draft.pipeline as string);
-        const normalizedNew = newPipeline ? newPipeline.trim().toLowerCase() : "";
-        if (normalizedNew !== normalizedCurrent) {
-          setError("Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido.");
+      if (isLeadClosed(lead.pipeline)) {
+        const newNorm = normalizePipelineForPolicy(draft.pipeline as string);
+        const currentNorm = normalizePipelineForPolicy(lead.pipeline);
+        if (newNorm !== currentNorm) {
+          setError("Lead cerrado: no se puede cambiar la etapa desde un pipeline de cierre.");
           return;
         }
       }
@@ -2760,10 +2761,10 @@ export default function LeadDetailPage() {
         });
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
-          throw new Error((j as { error?: string }).error ?? "Error actualizando entidad");
+          throw new Error((j as { error?: string }).error ?? "Error actualizando iniciativa");
         }
       } catch (e: any) {
-        setError(e?.message ?? "Error guardando datos de entidad");
+        setError(e?.message ?? "Error guardando datos de iniciativa");
         return;
       }
     }
@@ -2806,10 +2807,10 @@ export default function LeadDetailPage() {
     };
   }, [lead]);
 
-  // Variables efectivas para website e instagram (con fallback desde entidad)
+  // Website e Instagram: lead primero, fallback desde iniciativa vinculada (empresa)
   const websiteEffective = (lead?.website ?? "").trim() || (lead?.empresas?.web ?? "").trim() || "";
   const instagramEffective = (lead?.empresas?.instagram ?? "").trim() || "";
-  const hasEntidad = Boolean(lead?.empresa_id || lead?.empresas?.id);
+  const hasIniciativaVinculada = Boolean(lead?.empresa_id || lead?.empresas?.id);
 
   /** Lead Health Score (semáforo comercial) centralizado. */
   const leadHealth = useMemo(() => getLeadHealth(lead ?? null), [lead]);
@@ -2898,97 +2899,99 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {/* FILA 2 — Botonera completa */}
-          <div className="flex flex-wrap items-center gap-3 lg:gap-4">
-              {/* Grupo 1 — Acciones operativas frecuentes */}
+          {/* FILA 2 — Jerarquía: (1) navegación tipo tabs · (2) acciones secundarias · (3) CTA comercial único */}
+          <div className="space-y-4">
+            <nav
+              className="flex flex-wrap items-center gap-1 border-b border-slate-100 pb-3"
+              aria-label="Secciones del lead"
+            >
+              <button
+                type="button"
+                onClick={() => id && setDocsOpen(true)}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition disabled:opacity-50 border ${
+                  docsOpen
+                    ? "border-blue-200 bg-blue-50 text-blue-900"
+                    : "border-transparent bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                }`}
+                disabled={disabled || !id}
+                title="Documentación PDF del lead"
+              >
+                Documentación
+              </button>
+              <button
+                type="button"
+                disabled
+                className="rounded-lg border border-transparent bg-transparent px-3 py-2 text-sm font-medium text-slate-400 cursor-not-allowed"
+                title="Meet Asistido (en pausa)"
+              >
+                Meet asistido
+              </button>
+              <button
+                type="button"
+                onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition disabled:opacity-50 border ${
+                  activeTab === "consultor" &&
+                  (sectionFromUrl === "services-proposal" || sectionFromUrl === "proposal-export")
+                    ? "border-blue-200 bg-blue-50 text-blue-900"
+                    : "border-transparent bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                }`}
+                disabled={disabled || !id}
+                title={
+                  leadServices?.length || (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json
+                    ? "Abrir propuesta comercial del lead"
+                    : "Abre el constructor de propuesta comercial del lead"
+                }
+              >
+                Propuesta comercial
+              </button>
+              {visibleTabIds.includes("contactos") && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("contactos")}
+                  className={`rounded-lg px-3 py-2 text-sm font-medium transition disabled:opacity-50 border ${
+                    activeTab === "contactos"
+                      ? "border-blue-200 bg-blue-50 text-blue-900"
+                      : "border-transparent bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                  disabled={disabled || !lead}
+                  title="Ver y gestionar contactos del lead"
+                >
+                  Contactos
+                </button>
+              )}
+              {visibleTabIds.includes("acciones") && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("acciones")}
+                  className={`rounded-lg px-3 py-2 text-sm font-medium transition disabled:opacity-50 border ${
+                    activeTab === "acciones"
+                      ? "border-blue-200 bg-blue-50 text-blue-900"
+                      : "border-transparent bg-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                  disabled={disabled || !lead}
+                  title="Ver acciones y seguimiento del lead"
+                >
+                  Acciones
+                </button>
+              )}
+            </nav>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={fetchLead}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:bg-slate-50 disabled:opacity-50 transition"
                   disabled={disabled}
                 >
                   Refrescar
                 </button>
-                <button
-                  type="button"
-                  onClick={() => id && setDocsOpen(true)}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
-                  disabled={disabled || !id}
-                  title="Documentación PDF del lead"
-                >
-                  Documentación
-                </button>
-                <button
-                  type="button"
-                  disabled
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-400 cursor-not-allowed"
-                  title="Meet Asistido (en pausa)"
-                >
-                  Meet Asistido
-                </button>
-                <button
-                  type="button"
-                  onClick={() => id && router.push(`/admin/leads/${id}?tab=consultor&section=services-proposal`)}
-                  className="rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition"
-                  disabled={disabled || !id}
-                  title={leadServices?.length || (lead as { proposal_draft_json?: string | null } | undefined)?.proposal_draft_json ? "Abrir propuesta comercial del lead" : "Abre el constructor de propuesta comercial del lead"}
-                >
-                  Propuesta comercial
-                </button>
-              </div>
-
-              {/* Divider sutil entre grupos */}
-              <div className="hidden sm:block w-px self-stretch min-h-[32px] bg-slate-200" aria-hidden />
-
-              {/* Grupo 2 — Accesos transversales */}
-              <div className="flex flex-wrap items-center gap-2">
-                {visibleTabIds.includes("contactos") && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("contactos")}
-                    className={`rounded-xl border px-4 py-2 text-sm font-medium transition disabled:opacity-50 ${activeTab === "contactos" ? "border-slate-300 bg-slate-100 text-slate-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
-                    disabled={disabled || !lead}
-                    title="Ver y gestionar contactos del lead"
-                  >
-                    Contactos
-                  </button>
-                )}
-                {visibleTabIds.includes("acciones") && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("acciones")}
-                    className={`rounded-xl border px-4 py-2 text-sm font-medium transition disabled:opacity-50 ${activeTab === "acciones" ? "border-slate-300 bg-slate-100 text-slate-900" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
-                    disabled={disabled || !lead}
-                    title="Ver acciones y seguimiento del lead"
-                  >
-                    Acciones
-                  </button>
-                )}
-              </div>
-
-              {/* Divider sutil */}
-              <div className="hidden sm:block w-px self-stretch min-h-[32px] bg-slate-200" aria-hidden />
-
-              {/* Grupo 3 — Gestión del lead */}
-              <div className="flex flex-wrap items-center gap-2">
-                {!lead?.is_member && (
-                  <button
-                    type="button"
-                    onClick={convertToMember}
-                    className="rounded-xl border-2 border-emerald-500 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 hover:border-emerald-600 disabled:opacity-50 transition"
-                    disabled={disabled || !lead}
-                    title={`Convertir este lead en ${labels.memberSingular.toLowerCase()}`}
-                  >
-                    Convertir en {labels.memberSingular.toLowerCase()}
-                  </button>
-                )}
                 {!editing ? (
                   canEditLead && (
                     <button
                       type="button"
                       onClick={startEdit}
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:bg-slate-50 disabled:opacity-50 transition"
                       disabled={disabled || !lead}
                     >
                       Editar
@@ -2999,7 +3002,7 @@ export default function LeadDetailPage() {
                     <button
                       type="button"
                       onClick={cancelEdit}
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition"
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-none hover:bg-slate-50 disabled:opacity-50 transition"
                       disabled={disabled}
                     >
                       Cancelar
@@ -3008,7 +3011,7 @@ export default function LeadDetailPage() {
                       <button
                         type="button"
                         onClick={saveEdit}
-                        className="rounded-xl border border-slate-300 bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 transition"
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-none hover:bg-slate-50 disabled:opacity-50 transition"
                         disabled={disabled}
                       >
                         Guardar
@@ -3020,7 +3023,7 @@ export default function LeadDetailPage() {
                   <button
                     type="button"
                     onClick={deleteLead}
-                    className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 transition"
+                    className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-none hover:bg-red-50 disabled:opacity-50 transition"
                     disabled={disabled || !lead}
                     title="Eliminar lead"
                   >
@@ -3028,7 +3031,22 @@ export default function LeadDetailPage() {
                   </button>
                 )}
               </div>
+
+              {!lead?.is_member ? (
+                <div className="flex shrink-0 items-center border-t border-slate-100 pt-3 sm:border-t-0 sm:border-l sm:border-slate-200 sm:pt-0 sm:pl-4">
+                  <button
+                    type="button"
+                    onClick={convertToMember}
+                    className="w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 transition sm:w-auto"
+                    disabled={disabled || !lead}
+                    title={`Convertir este lead en ${labels.memberSingular.toLowerCase()}`}
+                  >
+                    Convertir en {labels.memberSingular.toLowerCase()}
+                  </button>
+                </div>
+              ) : null}
             </div>
+          </div>
 
           {/* FILA 3 — Selector de vista: Lista / Kanban / Ficha */}
           <div className="mt-6 pt-4 border-t border-slate-100">
@@ -3320,7 +3338,7 @@ export default function LeadDetailPage() {
           )}
 
           {/* Warning si no está vinculado a empresa */}
-          {!hasEntidad && activeTab === "datos" && (
+          {!hasIniciativaVinculada && activeTab === "datos" && (
             <div className="mt-4 rounded-xl border border-yellow-200 bg-yellow-50 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -3581,16 +3599,17 @@ export default function LeadDetailPage() {
 
                       {(() => {
                         const currentPipeline = (editing ? (draft.pipeline as any) : lead?.pipeline) ?? "Nuevo";
-                        const normalizedCurrent = typeof currentPipeline === "string" ? currentPipeline.trim().toLowerCase() : "";
-                        const isClosed = normalizedCurrent === "ganado" || normalizedCurrent === "perdido";
-                        
+                        const isClosed = isLeadClosed(
+                          typeof currentPipeline === "string" ? currentPipeline : String(currentPipeline ?? "")
+                        );
+
                         return editing ? (
                           <>
                             <select
                               value={currentPipeline as string}
                               onChange={(e) => {
                                 if (isClosed) {
-                                  setError("Lead cerrado: no se puede cambiar la etapa desde Ganado/Perdido.");
+                                  setError("Lead cerrado: no se puede cambiar la etapa desde un pipeline de cierre.");
                                   return;
                                 }
                                 setDraft((p) => ({ ...p, pipeline: e.target.value }));
@@ -3609,7 +3628,7 @@ export default function LeadDetailPage() {
                             </select>
                             {isClosed && (
                               <div className="mt-1 text-xs text-amber-600">
-                                Este lead está cerrado (Ganado/Perdido). No se puede cambiar la etapa.
+                                Este lead está en un pipeline de cierre. No se puede cambiar la etapa.
                               </div>
                             )}
                           </>
@@ -3749,10 +3768,14 @@ export default function LeadDetailPage() {
                     placeholder="https://linkedin.com/..."
                   />
                   <Field
-                    label="LinkedIn Director"
+                    label="LinkedIn contacto"
                     editing={editing}
-                    value={(editing ? (draft.linkedin_director as any) : lead?.linkedin_director) ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_director: v }))}
+                    value={
+                      (editing
+                        ? (draft.linkedin_personal as any)
+                        : (lead?.linkedin_personal ?? lead?.linkedin_director)) ?? ""
+                    }
+                    onChange={(v) => setDraft((p) => ({ ...p, linkedin_personal: v }))}
                     placeholder="https://linkedin.com/..."
                   />
 
@@ -5374,7 +5397,15 @@ export default function LeadDetailPage() {
           )}
 
           {activeTab === "acciones" && id && (
-            <Acciones leadId={id} />
+            <Acciones
+              leadId={id}
+              meetAssistantSessionId={activeSession?.id ?? null}
+              onStartMeetAssistant={() => void startMeetSession()}
+              onFirstCommercialActionSaved={() => {
+                flash("Acción registrada");
+                void fetchActiveSession();
+              }}
+            />
           )}
           {activeTab === "contactos" && (
             <div className="mt-5">

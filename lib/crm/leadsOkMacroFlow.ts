@@ -8,6 +8,7 @@ import {
   isOfficialPresentationDocumentUrl,
 } from "@/lib/leads/gammaDocumentPolicy";
 import { isCommercialStrategyApproved } from "./commercialStrategyFlow";
+import { MIN_STARTUP_PROJECT_DESCRIPTION_LENGTH, isStartupInitiativeKind } from "./initiativeKind";
 
 export type MacroStageStatus = "completed" | "active" | "pending";
 
@@ -62,6 +63,10 @@ export type LeadForLeadsOkMacro = {
   // Redes opcionales (no obligatorias, pero suman para "Web / redes").
   instagram?: string | null;
   facebook?: string | null;
+  /** standard | startup — copiado desde iniciativa al convertir. */
+  initiative_kind?: string | null;
+  /** En startup sustituye la necesidad de web/redes para desbloquear etapa 1. */
+  project_description?: string | null;
 };
 
 function hasStr(v: unknown): boolean {
@@ -85,6 +90,13 @@ function hasWebOred(lead: LeadForLeadsOkMacro): boolean {
     hasStr(lead.facebook) ||
     false
   );
+}
+
+/** Startup con descripción de proyecto suficiente: no exigir web/redes para datos base. */
+function hasStartupProjectBrief(lead: LeadForLeadsOkMacro): boolean {
+  if (!isStartupInitiativeKind(lead.initiative_kind)) return false;
+  const d = typeof lead.project_description === "string" ? lead.project_description.trim() : "";
+  return d.length >= MIN_STARTUP_PROJECT_DESCRIPTION_LENGTH;
 }
 
 function hasRubro(lead: LeadForLeadsOkMacro): boolean {
@@ -154,7 +166,7 @@ export function getLeadsOkMacroFlow(
   // Etapa 1 debe ser desbloqueable con mínimos razonables.
   // Regla: NO bloquear por `objetivos/audiencia/tamaño` (son opcionales para investigar).
   const hasContacto = hasContactoUtil(lead);
-  const hasWebOredValue = hasWebOred(lead);
+  const hasWebOredValue = hasWebOred(lead) || hasStartupProjectBrief(lead);
   const rubroOk = hasRubro(lead);
   const datosSuficientes = hasNombreOrEmpresa && hasContacto && hasWebOredValue && rubroOk;
 

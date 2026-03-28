@@ -61,7 +61,7 @@ export async function GET() {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="plantilla_entidades.xlsx"',
+      "Content-Disposition": 'attachment; filename="plantilla_iniciativas.xlsx"',
     },
   });
 }

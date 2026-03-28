@@ -11,9 +11,15 @@ import {
   isProposalStage,
   isEarlyStage,
   isHotOpportunity,
-  formatNextAction,
+  isLeads87FlowCompletedMetric,
+  hasLeadNextAction,
+  isLeadNextCommercialOverdue,
+  formatLeadUnifiedNextAction,
+  leadNextActionInput,
   type LeadForMetrics,
 } from "./metrics";
+import { getLeadNextActionResult, overdueWholeDaysFrom } from "./leadNextAction";
+import { isLeadClosed } from "@/lib/leads/leadStatusPolicy";
 
 export type CommercialPriorityLevel = "high" | "medium" | "low";
 
@@ -31,23 +37,6 @@ export type CommercialPriorityItem = {
 
 function norm(s: string | null | undefined): string {
   return (s ?? "").trim().toLowerCase();
-}
-
-const CLOSED = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
-
-function hasNextAction(lead: LeadForMetrics): boolean {
-  const t = (lead.next_activity_type ?? "").toString().trim().toLowerCase();
-  return Boolean(t && t !== "none");
-}
-
-function isOverdue(nextActivityAt: string | null | undefined): boolean {
-  if (!nextActivityAt) return false;
-  const d = new Date(nextActivityAt);
-  if (!Number.isFinite(d.getTime())) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime() < today.getTime();
 }
 
 function isAdvancedStage(pipeline: string | null | undefined): boolean {
@@ -91,15 +80,15 @@ const SIGNALS = {
  * Calcula el score de prioridad comercial de un lead (0+).
  */
 export function getPriorityScore(lead: LeadForMetrics): number {
-  const pipelineNorm = norm(lead.pipeline ?? "");
-  if (CLOSED.has(pipelineNorm)) return 0;
+  if (isLeadClosed(lead.pipeline)) return 0;
+  if (isLeads87FlowCompletedMetric(lead)) return 0;
 
   let score = 0;
   const days = daysInStage(lead.updated_at, lead.created_at) ?? 0;
   const threshold = getStalledThreshold(lead.pipeline);
   const stalled = days > threshold;
-  const hasNext = hasNextAction(lead);
-  const overdue = hasNext && isOverdue(lead.next_activity_at);
+  const hasNext = hasLeadNextAction(lead);
+  const overdue = isLeadNextCommercialOverdue(lead);
   const health = getLeadHealth(lead);
   const rating = Number(lead.rating ?? 0);
   const highRating = Number.isFinite(rating) && rating >= 4;
@@ -142,8 +131,8 @@ function getPriorityLevel(score: number): CommercialPriorityLevel {
  * Headline corto para la prioridad (una frase).
  */
 export function getPriorityHeadline(lead: LeadForMetrics, _context?: { score: number }): string {
-  const hasNext = hasNextAction(lead);
-  const overdue = hasNext && isOverdue(lead.next_activity_at);
+  const hasNext = hasLeadNextAction(lead);
+  const overdue = isLeadNextCommercialOverdue(lead);
   const days = daysInStage(lead.updated_at, lead.created_at) ?? 0;
   const threshold = getStalledThreshold(lead.pipeline);
   const stalled = days > threshold;
@@ -169,8 +158,8 @@ export function getPriorityHeadline(lead: LeadForMetrics, _context?: { score: nu
  */
 export function getPriorityReasons(lead: LeadForMetrics): string[] {
   const reasons: string[] = [];
-  const hasNext = hasNextAction(lead);
-  const overdue = hasNext && isOverdue(lead.next_activity_at);
+  const hasNext = hasLeadNextAction(lead);
+  const overdue = isLeadNextCommercialOverdue(lead);
   const days = daysInStage(lead.updated_at, lead.created_at) ?? 0;
   const threshold = getStalledThreshold(lead.pipeline);
   const stalled = days > threshold;
@@ -182,12 +171,19 @@ export function getPriorityReasons(lead: LeadForMetrics): string[] {
 
   if (proposalSentNoResponse) reasons.push(`Propuesta enviada hace ${daysSinceSent} días sin respuesta`);
   if (overdue) {
-    const d = lead.next_activity_at
-      ? Math.max(0, Math.floor((Date.now() - new Date(lead.next_activity_at).getTime()) / (24 * 60 * 60 * 1000)))
-      : 0;
-    reasons.push(d > 0 ? `La próxima acción venció hace ${d} día${d === 1 ? "" : "s"}` : "La próxima acción está vencida");
+    const na = getLeadNextActionResult(leadNextActionInput(lead));
+    const d = overdueWholeDaysFrom(leadNextActionInput(lead));
+    if (na.source === "agenda") {
+      reasons.push(
+        d > 0
+          ? `Seguimiento en agenda vencido hace ${d} día${d === 1 ? "" : "s"}`
+          : "Seguimiento en agenda con fecha u hora ya pasada"
+      );
+    } else {
+      reasons.push(d > 0 ? `La próxima acción venció hace ${d} día${d === 1 ? "" : "s"}` : "La próxima acción está vencida");
+    }
   }
-  if (!hasNext) reasons.push("No tiene próxima acción");
+  if (!hasNext) reasons.push("No tiene próxima acción en lead ni en agenda");
   if (stalled && days > 0) reasons.push(`Lleva ${days} días en etapa`);
   if (isProposalStage(lead.pipeline) && days > 7) reasons.push("Propuesta sin respuesta");
   if (isHotOpportunity(lead)) reasons.push("Rating alto");
@@ -203,23 +199,23 @@ export function getCommercialPriorities(
   leads: LeadForMetrics[],
   limit = 5
 ): CommercialPriorityItem[] {
-  const active = leads.filter((l) => !CLOSED.has(norm(l.pipeline ?? "")));
+  const active = leads.filter((l) => !isLeadClosed(l.pipeline) && !isLeads87FlowCompletedMetric(l));
   const pipelineLabel = (p: string | null) => (p ?? "").trim() || "Sin etapa";
 
   const items: CommercialPriorityItem[] = active.map((lead) => {
     const score = getPriorityScore(lead);
     const health = getLeadHealth(lead);
+    const crm = pipelineLabel(lead.pipeline);
+    const flow = (lead.leads87Flow?.stageLabel ?? "").trim();
     return {
       leadId: lead.id,
       leadName: lead.nombre ?? "—",
-      pipeline: pipelineLabel(lead.pipeline),
+      pipeline: flow ? `${flow} · ${crm}` : crm,
       priorityLevel: getPriorityLevel(score),
       priorityScore: score,
       headline: getPriorityHeadline(lead, { score }),
       reasons: getPriorityReasons(lead),
-      nextActionText: hasNextAction(lead)
-        ? formatNextAction(lead.next_activity_type, lead.next_activity_at)
-        : undefined,
+      nextActionText: hasLeadNextAction(lead) ? formatLeadUnifiedNextAction(lead) : undefined,
       leadHealthLabel: health?.label,
     };
   });

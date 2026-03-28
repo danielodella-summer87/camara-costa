@@ -6,6 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
 import { getLeadFlowSteps, getCurrentFlowStep, getLeadFlowProgressPercent, getLeadNextAction, LEAD_FLOW_LABELS } from "@/lib/leads/leadFlow";
+import {
+  badgeClassEstadoRevision,
+  labelEstadoRevisionIniciativa,
+} from "@/lib/crm/iniciativaEstadoRevision";
 
 type Lead = {
   id: string;
@@ -92,18 +96,16 @@ function getProgressBadgeClasses(percent: number): string {
 }
 
 // Componente para botón "Nuevo lead" con opciones
-function normalizeWebsiteForLead(url?: string | null) {
-  if (!url?.trim()) return null;
-  const u = url.trim();
-  if (u.startsWith("http://") || u.startsWith("https://")) return u;
-  return `https://${u}`;
-}
-
 function NewLeadButton() {
   const router = useRouter();
   const { hasPermission } = usePermissions();
   const [showMenu, setShowMenu] = useState(false);
   const [showEmpresaSelector, setShowEmpresaSelector] = useState(false);
+  /** 409 convert-to-lead: ya convertida o lead activo duplicado */
+  const [duplicateConflict, setDuplicateConflict] = useState<{
+    leadId: string;
+    kind: "already_converted" | "active_exists";
+  } | null>(null);
 
   // Si no tiene permiso de crear, no mostrar el botón
   if (!hasPermission("leads.create")) {
@@ -137,77 +139,98 @@ function NewLeadButton() {
                 }}
                 className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 rounded-t-xl"
               >
-                Desde entidad
+                Desde iniciativa
               </button>
               <Link
                 href="/admin/leads/nuevo"
                 onClick={() => setShowMenu(false)}
                 className="block w-full text-left px-4 py-2 text-sm hover:bg-slate-50 rounded-b-xl"
               >
-                Manual
+                Crear lead manual
               </Link>
             </div>
           </>
         )}
       </div>
 
+      {duplicateConflict ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="duplicate-lead-title"
+          onClick={() => setDuplicateConflict(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 shadow-xl"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <h2 id="duplicate-lead-title" className="text-lg font-semibold text-slate-900">
+              {duplicateConflict.kind === "active_exists"
+                ? "Ya hay un lead activo"
+                : "Iniciativa ya convertida"}
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              {duplicateConflict.kind === "active_exists"
+                ? "Con la configuración actual no se creó otro lead: existe uno activo para esta iniciativa. Abrí el lead existente o cerrá el pipeline del anterior (pipeline de cierre)."
+                : "Esta iniciativa ya fue convertida a lead. No se creó un duplicado."}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Link
+                href={`/admin/leads87/${duplicateConflict.leadId}`}
+                onClick={() => setDuplicateConflict(null)}
+                className="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-900 hover:bg-emerald-100"
+              >
+                Abrir en LEADS87
+              </Link>
+              <Link
+                href={`/admin/leads/${duplicateConflict.leadId}`}
+                onClick={() => setDuplicateConflict(null)}
+                className="inline-flex rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+              >
+                Ficha clásica
+              </Link>
+              <button
+                type="button"
+                onClick={() => setDuplicateConflict(null)}
+                className="rounded-xl border px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {showEmpresaSelector && (
-        <EmpresaSelectorModal
+        <IniciativaSelectorModal
           onClose={() => setShowEmpresaSelector(false)}
           onSelect={async (empresaId: string) => {
             setShowEmpresaSelector(false);
-            // Crear lead desde empresa
             try {
-              const res = await fetch("/api/admin/empresas", {
-                method: "GET",
+              const convRes = await fetch(`/api/admin/empresas/${encodeURIComponent(empresaId)}/convert-to-lead`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
                 cache: "no-store",
-                headers: { "Cache-Control": "no-store" },
+                body: JSON.stringify({}),
               });
-              const empresasJson = await res.json();
-              const empresa = empresasJson?.data?.find((e: any) => e.id === empresaId);
-              
-              if (!empresa) {
-                alert("Iniciativa no encontrada");
+              const convJson = await convRes.json().catch(() => ({}));
+              const leadId = typeof convJson?.data?.lead_id === "string" ? convJson.data.lead_id.trim() : "";
+              if (convRes.ok && leadId) {
+                router.push(`/admin/leads87/${leadId}`);
                 return;
               }
-
-              const email = [empresa.email, empresa.contacto_email].find((x) => typeof x === "string" && x.trim()) ?? null;
-              const telefono =
-                [empresa.telefono, empresa.celular, empresa.contacto_celular].find((x) => typeof x === "string" && x.trim()) ??
-                null;
-
-              const leadRes = await fetch("/api/admin/leads", {
-                method: "POST",
-                cache: "no-store",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Cache-Control": "no-store",
-                },
-                body: JSON.stringify({
-                  nombre: empresa.nombre ?? "",
-                  contacto: typeof empresa.contacto_nombre === "string" ? empresa.contacto_nombre : null,
-                  email,
-                  telefono,
-                  website: normalizeWebsiteForLead(empresa.web),
-                  instagram: typeof empresa.instagram === "string" ? empresa.instagram : null,
-                  direccion: typeof empresa.direccion === "string" ? empresa.direccion : null,
-                  empresa_id: empresa.id,
-                  origen: "Desde entidad",
-                  pipeline: "Nuevo",
-                }),
-              });
-
-              const leadJson = await leadRes.json();
-              if (!leadRes.ok) {
-                throw new Error(leadJson?.error ?? "Error creando lead");
+              if (convRes.status === 409 && leadId) {
+                const kind =
+                  convJson?.data?.code === "ACTIVE_LEAD_EXISTS" ? "active_exists" : "already_converted";
+                setDuplicateConflict({ leadId, kind });
+                return;
               }
-
-              // Redirigir al flujo LEADS87 con el lead recién creado
-              if (leadJson?.data?.id) {
-                router.push(`/admin/leads87/${leadJson.data.id}`);
-              }
+              throw new Error(
+                typeof convJson?.error === "string" ? convJson.error : "No se pudo convertir la iniciativa a lead."
+              );
             } catch (e: any) {
-              alert(e?.message ?? "Error creando lead desde entidad");
+              alert(e?.message ?? "Error al crear el lead desde la iniciativa");
             }
           }}
         />
@@ -216,21 +239,20 @@ function NewLeadButton() {
   );
 }
 
-// Modal selector de empresas
-function EmpresaSelectorModal({
+function IniciativaSelectorModal({
   onClose,
   onSelect,
 }: {
   onClose: () => void;
-  onSelect: (empresaId: string) => void;
+  onSelect: (iniciativaId: string) => void;
 }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [iniciativas, setIniciativas] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchEmpresas() {
+    async function fetchIniciativas() {
       setLoading(true);
       setError(null);
       try {
@@ -240,22 +262,22 @@ function EmpresaSelectorModal({
           headers: { "Cache-Control": "no-store" },
         });
         const json = await res.json();
-        if (!res.ok) throw new Error(json?.error ?? "Error cargando empresas");
-        setEmpresas(Array.isArray(json?.data) ? json.data : []);
+        if (!res.ok) throw new Error(json?.error ?? "Error cargando iniciativas");
+        setIniciativas(Array.isArray(json?.data) ? json.data : []);
       } catch (e: any) {
-        setError(e?.message ?? "Error cargando empresas");
-        setEmpresas([]);
+        setError(e?.message ?? "Error cargando iniciativas");
+        setIniciativas([]);
       } finally {
         setLoading(false);
       }
     }
-    fetchEmpresas();
+    fetchIniciativas();
   }, []);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return empresas;
-    return empresas.filter((e) => {
+    if (!term) return iniciativas;
+    return iniciativas.filter((e) => {
       const haystack = [
         e.nombre ?? "",
         e.email ?? "",
@@ -265,13 +287,13 @@ function EmpresaSelectorModal({
         .toLowerCase();
       return haystack.includes(term);
     });
-  }, [empresas, search]);
+  }, [iniciativas, search]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between p-6 border-b">
-          <h2 className="text-lg font-semibold text-slate-900">Seleccionar entidad</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Elegir iniciativa</h2>
           <button
             type="button"
             onClick={onClose}
@@ -286,7 +308,7 @@ function EmpresaSelectorModal({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por nombre, email o teléfono..."
+            placeholder="Buscar iniciativa por nombre, email o teléfono…"
             className="w-full rounded-xl border px-4 py-2 text-sm"
             autoFocus
           />
@@ -294,12 +316,12 @@ function EmpresaSelectorModal({
 
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
-            <div className="text-sm text-slate-500">Cargando entidades...</div>
+            <div className="text-sm text-slate-500">Cargando iniciativas...</div>
           ) : error ? (
             <div className="text-sm text-red-600">{error}</div>
           ) : filtered.length === 0 ? (
             <div className="text-sm text-slate-500">
-              {search ? "No se encontraron entidades con ese criterio." : "No hay entidades disponibles."}
+              {search ? "No se encontraron iniciativas con ese criterio." : "No hay iniciativas disponibles."}
             </div>
           ) : (
             <div className="space-y-2">
@@ -310,12 +332,22 @@ function EmpresaSelectorModal({
                   onClick={() => onSelect(e.id)}
                   className="w-full text-left rounded-xl border p-4 hover:bg-slate-50 transition-colors"
                 >
-                  <div className="font-semibold text-slate-900">{e.nombre ?? "—"}</div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-semibold text-slate-900">{e.nombre ?? "—"}</div>
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badgeClassEstadoRevision(e.estado_revision)}`}
+                    >
+                      {labelEstadoRevisionIniciativa(e.estado_revision)}
+                    </span>
+                  </div>
                   <div className="mt-1 text-sm text-slate-600">
                     {e.email && <span>{e.email}</span>}
                     {e.email && e.telefono && <span> · </span>}
                     {e.telefono && <span>{e.telefono}</span>}
                   </div>
+                  {e.converted_lead_id ? (
+                    <p className="mt-2 text-xs text-amber-800">Ya convertida: al elegirla se abrirá el lead existente.</p>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -694,7 +726,7 @@ export default function LeadsPage() {
             </p>
             {empresaIdFromUrl && (
               <p className="mt-1 text-sm text-slate-600">
-                Filtrando por entidad{" "}
+                Filtrando por iniciativa{" "}
                 <Link href="/admin/leads" className="text-blue-600 hover:underline">
                   (ver todos)
                 </Link>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 type Accion = {
   id: string;
@@ -23,9 +24,21 @@ type AccionesApiResponse = {
 type AccionesProps = {
   socioId?: string;
   leadId?: string;
+  /** Solo leads: tras la primera acción comercial histórica, refrescar sesión Meet en el padre. */
+  onFirstCommercialActionSaved?: () => void;
+  /** ID de sesión Meet activa → enlace directo al asistente (`/admin/leads/[id]/meet-sessions/[sessionId]`). */
+  meetAssistantSessionId?: string | null;
+  /** Sin sesión activa: flujo existente de la ficha (prompt Meet + redirect al asistente). */
+  onStartMeetAssistant?: () => void | Promise<void>;
 };
 
-export default function Acciones({ socioId, leadId }: AccionesProps) {
+export default function Acciones({
+  socioId,
+  leadId,
+  onFirstCommercialActionSaved,
+  meetAssistantSessionId = null,
+  onStartMeetAssistant,
+}: AccionesProps) {
   const [isPending, startTransition] = useTransition();
 
   const [error, setError] = useState<string | null>(null);
@@ -36,11 +49,19 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
   const [showDone, setShowDone] = useState(false);
   const [acciones, setAcciones] = useState<Accion[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  /** Contrae el bloque tras la primera acción (solo lead). */
+  const [commercialBlockCollapsed, setCommercialBlockCollapsed] = useState(false);
+  /** Muestra CTA hacia asistente de cierre de reunión tras la primera acción. */
+  const [showMeetAssistantCue, setShowMeetAssistantCue] = useState(false);
+  /** Feedback breve al guardar cuando ya había acciones. */
+  const [ephemeralSuccess, setEphemeralSuccess] = useState(false);
+  const meetAssistantElRef = useRef<HTMLDivElement | null>(null);
 
   // Determinar el endpoint según el tipo de entidad
   const entityId = socioId || leadId;
   const entityType = socioId ? "socios" : "leads";
   const apiBasePath = `/api/admin/${entityType}/${entityId}/acciones`;
+  const isLeadEntity = Boolean(leadId && !socioId);
 
   if (!entityId) {
     return (
@@ -86,6 +107,17 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
     refreshAcciones(showDone);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityId, entityType, showDone]);
+
+  useEffect(() => {
+    if (!showMeetAssistantCue || !commercialBlockCollapsed) return;
+    const id = window.setTimeout(() => {
+      const el = meetAssistantElRef.current ?? document.getElementById("lead-meet-closure-assistant");
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const focusable = el?.querySelector<HTMLElement>("a[href], button:not([disabled])");
+      focusable?.focus({ preventScroll: true });
+    }, 150);
+    return () => window.clearTimeout(id);
+  }, [showMeetAssistantCue, commercialBlockCollapsed]);
 
   // Filtrar y ordenar por fecha_limite asc (más urgente arriba) y luego created_at desc como fallback
   const accionesOrdenadas = useMemo(() => {
@@ -172,6 +204,23 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
       return;
     }
 
+    let totalActionsBefore = -1;
+    if (isLeadEntity) {
+      try {
+        const countUrl = new URL(apiBasePath, window.location.origin);
+        countUrl.searchParams.set("includeDone", "1");
+        const countRes = await fetch(countUrl.toString(), {
+          method: "GET",
+          cache: "no-store",
+          headers: { "Cache-Control": "no-store" },
+        });
+        const countJson = (await countRes.json()) as AccionesApiResponse;
+        totalActionsBefore = Array.isArray(countJson?.data) ? countJson.data.length : 0;
+      } catch {
+        totalActionsBefore = -1;
+      }
+    }
+
     startTransition(async () => {
       try {
         const res = await fetch(apiBasePath, {
@@ -201,6 +250,16 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
         setLugar("");
         setHora("00:00");
         await refreshAcciones(showDone);
+
+        const isFirstLeadAction = isLeadEntity && totalActionsBefore === 0;
+        if (isFirstLeadAction) {
+          setCommercialBlockCollapsed(true);
+          setShowMeetAssistantCue(true);
+          onFirstCommercialActionSaved?.();
+        } else if (isLeadEntity && (totalActionsBefore > 0 || totalActionsBefore < 0)) {
+          setEphemeralSuccess(true);
+          window.setTimeout(() => setEphemeralSuccess(false), 3200);
+        }
       } catch (e: any) {
         setError(e?.message ?? "Error creando acción");
       }
@@ -233,10 +292,30 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
 
   return (
     <div className="mt-6 rounded-2xl border bg-white p-6">
-      <div>
-        <h3 className="text-base font-semibold text-slate-900">Acciones comerciales</h3>
-        <p className="text-sm text-slate-600">Acciones planificadas con fecha límite</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-semibold text-slate-900">Acciones comerciales</h3>
+          <p className="text-sm text-slate-600">Acciones planificadas con fecha límite</p>
+        </div>
+        {commercialBlockCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setCommercialBlockCollapsed(false)}
+            className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Expandir
+          </button>
+        ) : null}
       </div>
+
+      {ephemeralSuccess && !commercialBlockCollapsed ? (
+        <div
+          className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900"
+          role="status"
+        >
+          Acción registrada
+        </div>
+      ) : null}
 
       {error && (
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -244,6 +323,8 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
         </div>
       )}
 
+      {!commercialBlockCollapsed ? (
+        <>
       {/* Campos compartidos: Fecha límite, Lugar, Hora y Nota */}
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         <div>
@@ -422,6 +503,48 @@ export default function Acciones({ socioId, leadId }: AccionesProps) {
           </div>
         </div>
       </div>
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-slate-600">
+          Bloque contraído. Usá <span className="font-medium">Expandir</span> para cargar más acciones comerciales.
+        </p>
+      )}
+
+      {showMeetAssistantCue && isLeadEntity && leadId ? (
+        <div
+          ref={meetAssistantElRef}
+          id="lead-meet-closure-assistant"
+          tabIndex={-1}
+          className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/90 p-4 outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-emerald-500"
+        >
+          <p className="text-sm font-semibold text-emerald-950">Acción registrada</p>
+          <p className="mt-1 text-sm text-emerald-900/95">
+            Ahora podés continuar con el asistente para cierre de reunión con el lead.
+          </p>
+          <div className="mt-3">
+            {meetAssistantSessionId ? (
+              <Link
+                href={`/admin/leads/${leadId}/meet-sessions/${meetAssistantSessionId}`}
+                className="inline-flex rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
+              >
+                Abrir asistente de cierre de reunión
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void onStartMeetAssistant?.()}
+                disabled={!onStartMeetAssistant}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Iniciar asistente de cierre de reunión
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-emerald-800/90">
+            Se abre la sesión de Meet asistido ya existente en el sistema (misma herramienta que en la ficha del lead).
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

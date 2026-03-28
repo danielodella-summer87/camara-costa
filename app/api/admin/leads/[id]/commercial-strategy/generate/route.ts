@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const { data: lead, error: leadErr } = await sb
       .from("leads")
       .select(
-        "id,nombre,ai_report,commercial_strategy_json,empresas:empresa_id(nombre),website,objetivos,audiencia"
+        "id,nombre,ai_report,commercial_strategy_json,empresas:empresa_id(nombre),website,objetivos,audiencia,initiative_kind,project_description"
       )
       .eq("id", id)
       .maybeSingle();
@@ -88,6 +88,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         website: lead.website,
         objetivos: lead.objetivos,
         audiencia: lead.audiencia,
+        initiative_kind: (lead as { initiative_kind?: string | null }).initiative_kind ?? null,
+        project_description: (lead as { project_description?: string | null }).project_description ?? null,
       },
       investigationExcerpt,
       diagnosticExcerpt,

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageContainer } from "@/components/layout/PageContainer";
+import { isLeadActive } from "@/lib/leads/leadStatusPolicy";
 
 type LeadOption = {
   id: string;
@@ -13,12 +14,6 @@ type LeadOption = {
   pipeline: string | null;
   empresas?: { nombre?: string | null } | null;
 };
-
-const CLOSED_PIPELINES = new Set(["ganado", "perdido", "cerrado", "no interesado"]);
-
-function norm(s: string | null | undefined): string {
-  return (s ?? "").trim().toLowerCase();
-}
 
 /** Normaliza pipeline para agrupar (minúsculas, sin acentos). */
 function normPipeline(s: string | null | undefined): string {
@@ -112,7 +107,7 @@ export default function OportunidadesPage() {
       .then((json) => {
         if (cancelled) return;
         const data = Array.isArray(json?.data) ? json.data : [];
-        const active = data.filter((l) => l?.id && !CLOSED_PIPELINES.has(norm(l.pipeline)));
+        const active = data.filter((l) => l?.id && isLeadActive(l.pipeline));
         setLeads(active);
       })
       .catch(() => {
