@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { CategoryRow, PromptRow } from "./types";
 import {
   buildPromptContentFromFields,
+  getMissingRequiredPromptSectionsFromRow,
+  hasRequiredPromptSectionsFromRow,
   hasRequiredStructuredFields,
   parseStructuredPromptContent,
   type PromptStructuredFields,
@@ -40,15 +42,13 @@ type PromptSuggestionRow = {
 export function PromptForm({
   current,
   categories,
-  onSaveDraft,
-  onValidate,
+  onSave,
   onSuggestionsChanged,
   saving,
 }: {
   current: PromptRow | null;
   categories: CategoryRow[];
-  onSaveDraft: (payload: PromptDraft) => Promise<void>;
-  onValidate: (payload: PromptDraft) => Promise<void>;
+  onSave: (payload: PromptDraft) => Promise<void>;
   onSuggestionsChanged?: () => Promise<void> | void;
   saving: boolean;
 }) {
@@ -107,6 +107,46 @@ export function PromptForm({
   const [suggestions, setSuggestions] = useState<PromptSuggestionRow[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [suggestionBusyId, setSuggestionBusyId] = useState<string | null>(null);
+  const [structureError, setStructureError] = useState<string | null>(null);
+
+  async function handleSavePrompt() {
+    const prompt_content = composedPromptPreview;
+    const payload: PromptDraft = { ...form, prompt_content, status: "validated" };
+
+    if (!form.name.trim() || !form.category_id.trim()) {
+      setStructureError("Nombre y categoría son obligatorios.");
+      return;
+    }
+
+    if (!hasRequiredPromptSectionsFromRow(payload)) {
+      const missing = getMissingRequiredPromptSectionsFromRow(payload);
+      setStructureError(
+        missing.length > 0
+          ? `El prompt no cumple la estructura requerida. Faltan o están incompletos: ${missing.join(", ")}.`
+          : "El prompt no cumple con la estructura requerida."
+      );
+      return;
+    }
+
+    setStructureError(null);
+    await onSave(payload);
+  }
+
+  useEffect(() => {
+    setStructureError(null);
+  }, [
+    form.name,
+    form.category_id,
+    form.description,
+    form.role_persona,
+    form.context_environment,
+    form.objective,
+    form.specific_task,
+    form.constraints,
+    form.output_format,
+    form.target_audience,
+    composedPromptPreview,
+  ]);
 
   useEffect(() => {
     setForm({
@@ -333,22 +373,18 @@ export function PromptForm({
         </pre>
       </div>
 
+      {structureError ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{structureError}</div>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button
           type="button"
-          onClick={() => void onSaveDraft({ ...form, prompt_content: composedPromptPreview, status: "draft" })}
+          onClick={() => void handleSavePrompt()}
           disabled={saving}
-          className="rounded-lg border px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          Guardar
-        </button>
-        <button
-          type="button"
-          onClick={() => void onValidate({ ...form, prompt_content: composedPromptPreview, status: "validated" })}
-          disabled={saving || !canValidate}
           className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
         >
-          Validar
+          {saving ? "Guardando…" : "Guardar prompt"}
         </button>
       </div>
 

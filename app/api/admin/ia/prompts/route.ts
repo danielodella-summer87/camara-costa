@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { getMissingRequiredPromptSections } from "@/lib/ai/promptStructure";
-import { generatePromptSuggestions } from "@/lib/ai/promptSuggestions";
 import {
   buildPromptContentFromFields,
+  getMissingRequiredPromptSectionsFromRow,
   hasRequiredStructuredFields,
-  parseStructuredPromptContent,
+  type PromptRowLike,
   type PromptStructuredFields,
 } from "@/lib/ai/promptStructure";
+import { generatePromptSuggestions } from "@/lib/ai/promptSuggestions";
 
 export const dynamic = "force-dynamic";
 
@@ -41,14 +41,14 @@ export async function GET(req: NextRequest) {
     .eq("status", "pending");
   if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 });
   const pendingCountByPrompt: Record<string, number> = {};
-  (pending ?? []).forEach((row: any) => {
+  (pending ?? []).forEach((row: { prompt_id?: string }) => {
     const id = String(row.prompt_id || "");
     if (!id) return;
     pendingCountByPrompt[id] = (pendingCountByPrompt[id] ?? 0) + 1;
   });
 
-  const enriched = (data ?? []).map((row: any) => {
-    const mapped = {
+  const enriched = (data ?? []).map((row: PromptRowLike & { id: string }) => {
+    const derived = {
       role_persona: String(row.role_persona ?? "").trim(),
       context_environment: String(row.context_environment ?? "").trim(),
       objective: String(row.objective ?? "").trim(),
@@ -57,10 +57,7 @@ export async function GET(req: NextRequest) {
       output_format: String(row.output_format ?? "").trim(),
       target_audience: String(row.target_audience ?? "").trim(),
     };
-    const derived = hasRequiredStructuredFields(mapped)
-      ? mapped
-      : parseStructuredPromptContent(String(row.prompt_content || ""));
-    const missing = getMissingRequiredPromptSections(buildPromptContentFromFields(derived));
+    const missing = getMissingRequiredPromptSectionsFromRow({ ...row, ...derived });
     const pendingCount = pendingCountByPrompt[String(row.id)] ?? 0;
     const prompt_health: "ok" | "mejorable" | "error" = missing.length > 0 ? "error" : pendingCount > 0 ? "mejorable" : "ok";
     return {

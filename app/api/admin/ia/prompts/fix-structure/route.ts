@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { buildStructuredPromptTemplate, hasRequiredPromptSections } from "@/lib/ai/promptStructure";
+import { buildStructuredPromptTemplate, hasRequiredPromptSectionsFromRow } from "@/lib/ai/promptStructure";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +40,7 @@ function extractSection(content: string, label: string): string {
 function normalizePromptContent(name: string, content: string): string {
   const text = String(content || "").trim();
   if (!text) return buildStructuredPromptTemplate({ objective: `Definir un análisis claro y accionable para ${name || "el negocio"}.` });
-  if (hasRequiredPromptSections(text)) return text;
+  if (hasRequiredPromptSectionsFromRow({ prompt_content: text })) return text;
 
   const role = extractSection(text, "Rol (Persona)");
   const context = extractSection(text, "Contexto/Entorno");
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     .order("updated_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const candidates = (data ?? []).filter((p: any) => String(p?.status || "").trim().toLowerCase() !== "validated");
+  const candidates = (data ?? []).filter((p: { status?: string | null }) => String(p?.status || "").trim().toLowerCase() !== "validated");
   if (candidates.length === 0) {
     return NextResponse.json({ data: { scanned: 0, updated: 0, updated_prompt_ids: [] } }, { status: 200 });
   }

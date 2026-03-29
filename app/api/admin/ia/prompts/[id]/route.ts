@@ -4,8 +4,10 @@ import { requirePermission } from "@/lib/rbac/requirePermission";
 import { generatePromptSuggestions } from "@/lib/ai/promptSuggestions";
 import {
   buildPromptContentFromFields,
+  canonicalPromptFromRow,
   hasRequiredStructuredFields,
-  parseStructuredPromptContent,
+  resolveStructuredFieldsFromRow,
+  type PromptRowLike,
   type PromptStructuredFields,
 } from "@/lib/ai/promptStructure";
 
@@ -59,16 +61,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .select("role_persona,context_environment,objective,specific_task,constraints,output_format,target_audience,prompt_content")
       .eq("id", id)
       .maybeSingle();
-    const fromCols: PromptStructuredFields = {
-      role_persona: String(existing?.role_persona ?? "").trim(),
-      context_environment: String(existing?.context_environment ?? "").trim(),
-      objective: String(existing?.objective ?? "").trim(),
-      specific_task: String(existing?.specific_task ?? "").trim(),
-      constraints: String(existing?.constraints ?? "").trim(),
-      output_format: String(existing?.output_format ?? "").trim(),
-      target_audience: String(existing?.target_audience ?? "").trim(),
-    };
-    currentFields = hasRequiredStructuredFields(fromCols) ? fromCols : parseStructuredPromptContent(String(existing?.prompt_content || ""));
+    currentFields = resolveStructuredFieldsFromRow((existing ?? {}) as PromptRowLike);
   }
 
   if (hasStructuredInput) {
@@ -119,7 +112,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const suggestions = generatePromptSuggestions(String(data.name || ""), String(data.prompt_content || ""));
+  const suggestions = generatePromptSuggestions(String(data.name || ""), canonicalPromptFromRow(data as PromptRowLike));
   if (suggestions.length > 0 && data?.id) {
     const rows = suggestions.map((s) => ({
       prompt_id: data.id,

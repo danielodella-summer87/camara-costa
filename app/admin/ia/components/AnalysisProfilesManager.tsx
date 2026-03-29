@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { AnalysisProfilePromptRow, AnalysisProfileRow, PromptRow } from "./types";
+import { categoryPastelSurfaceClass, getCategoryPastelClasses } from "./categoryPastel";
 
 export function AnalysisProfilesManager({
   profiles,
@@ -149,9 +150,14 @@ export function AnalysisProfilesManager({
           <div className="mt-2 grid gap-2">
             {prompts.map((p) => {
               const s = localLinks[p.id] ?? { enabled: false, order: 100 };
+              const pastel = getCategoryPastelClasses(p.ai_categories?.name);
+              const surface = categoryPastelSurfaceClass(p.ai_categories?.name);
               return (
-                <div key={p.id} className="grid grid-cols-12 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <div className="col-span-7 text-sm text-slate-800">{p.name}</div>
+                <div
+                  key={p.id}
+                  className={`grid grid-cols-12 items-center gap-2 rounded-lg border px-3 py-2 ${surface}`}
+                >
+                  <div className={`col-span-7 text-sm font-medium ${pastel.text}`}>{p.name}</div>
                   <label className="col-span-3 inline-flex items-center gap-2 text-xs text-slate-700">
                     <input
                       type="checkbox"

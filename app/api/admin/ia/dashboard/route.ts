@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { hasRequiredPromptSections } from "@/lib/ai/promptStructure";
+import { hasRequiredPromptSectionsFromRow } from "@/lib/ai/promptStructure";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +29,11 @@ function pct(part: number, total: number): number {
   return Math.round((part / total) * 100);
 }
 
+/** Alineado con PUT profiles/.../prompts y save-full: solo `false` deshabilita. */
+function isLinkEnabled(l: { enabled_by_default?: boolean | null }): boolean {
+  return l.enabled_by_default !== false;
+}
+
 export async function GET(req: NextRequest) {
   const user = await allowDevOrRequire(req, "config.read");
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 403 });
@@ -42,7 +47,9 @@ export async function GET(req: NextRequest) {
         .order("name", { ascending: true }),
       sb
         .from("ai_prompts")
-        .select("id,name,status,prompt_content,updated_at"),
+        .select(
+          "id,name,status,prompt_content,updated_at,role_persona,context_environment,objective,specific_task,constraints,output_format,target_audience"
+        ),
       sb
         .from("leads")
         .select("id,nombre,ai_report,ai_report_updated_at")
@@ -69,15 +76,41 @@ export async function GET(req: NextRequest) {
     if (activeProfile?.id) {
       const linksRes = await sb
         .from("ai_profile_prompts")
-        .select("prompt_id,execution_order,enabled_by_default,ai_prompts(id,name)")
+        .select("prompt_id,execution_order,enabled_by_default,ai_prompts(id,name,category_id,ai_categories(name))")
         .eq("profile_id", activeProfile.id)
         .order("execution_order", { ascending: true });
       if (!linksRes.error) activeProfileLinks = linksRes.data ?? [];
     }
 
+    type ProfileLinkRow = (typeof activeProfileLinks)[number];
+    function promptFromLink(l: ProfileLinkRow) {
+      const raw = l.ai_prompts;
+      const p = Array.isArray(raw) ? raw[0] : raw;
+      return p as
+        | { id?: string; name?: string; category_id?: string | null; ai_categories?: { name?: string | null } | null }
+        | null
+        | undefined;
+    }
+
+    const enabledProfileLinks = activeProfileLinks.filter((l) => isLinkEnabled(l));
+    const categoryCountMap = new Map<string, number>();
+    for (const l of enabledProfileLinks) {
+      const p = promptFromLink(l);
+      const joinedName = p?.ai_categories?.name?.trim();
+      const label = joinedName && joinedName.length > 0 ? joinedName : "Sin categoría";
+      categoryCountMap.set(label, (categoryCountMap.get(label) ?? 0) + 1);
+    }
+    const prompts_by_category = Array.from(categoryCountMap.entries())
+      .map(([category_name, count]) => ({ category_name, count }))
+      .sort((a, b) => {
+        if (a.category_name === "Sin categoría") return 1;
+        if (b.category_name === "Sin categoría") return -1;
+        return a.category_name.localeCompare(b.category_name, "es", { sensitivity: "base" });
+      });
+
     const validatedPrompts = prompts.filter((p) => p.status === "validated");
-    const promptsWithoutStructure = validatedPrompts.filter((p) => !hasRequiredPromptSections(String(p.prompt_content || "")));
-    const promptsWithErrors = prompts.filter((p) => !String(p.prompt_content || "").trim());
+    const promptsWithoutStructure = validatedPrompts.filter((p) => !hasRequiredPromptSectionsFromRow(p));
+    const promptsWithErrors = prompts.filter((p) => !hasRequiredPromptSectionsFromRow(p));
 
     const executions = leads.map((l) => {
       const report = String(l.ai_report || "");
@@ -109,15 +142,16 @@ export async function GET(req: NextRequest) {
         active_profile_id: activeProfile?.id || "",
         active_profile_name: activeProfile?.name || "—",
         profiles: profiles.map((p) => ({ id: p.id, name: p.name, is_active: p.is_active })),
-        associated_prompts_count: activeProfileLinks.filter((l) => l.enabled_by_default).length,
+        associated_prompts_count: activeProfileLinks.filter((l) => isLinkEnabled(l)).length,
         execution_order: activeProfileLinks
-          .filter((l) => l.enabled_by_default)
+          .filter((l) => isLinkEnabled(l))
           .map((l) => ({
             prompt_id: l.prompt_id,
-            prompt_name: l.ai_prompts?.[0]?.name || l.prompt_id,
+            prompt_name: promptFromLink(l)?.name || l.ai_prompts?.[0]?.name || l.prompt_id,
             execution_order: l.execution_order,
           })),
       },
+      prompts_by_category,
       recent_executions: executions,
       insights: {
         posicionamiento_issues_pct: pct(withPosicionamiento, insightBase.length),

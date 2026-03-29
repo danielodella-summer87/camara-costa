@@ -1,15 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { CategoryRow } from "./types";
+import type { CategoryRow, PromptRow } from "./types";
+import { categoryPastelSurfaceClass, getCategoryPastelClasses } from "./categoryPastel";
 
 export function CategoryManager({
   categories,
+  prompts = [],
   onCreate,
   onUpdate,
   saving,
 }: {
   categories: CategoryRow[];
+  /** Para mostrar cantidad de prompts por categoría. */
+  prompts?: PromptRow[];
   onCreate: (payload: { name: string; description: string; is_active: boolean }) => Promise<void>;
   onUpdate: (id: string, payload: { name: string; description: string; is_active: boolean }) => Promise<void>;
   saving: boolean;
@@ -20,6 +24,17 @@ export function CategoryManager({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
+
+  const promptCountByCategoryId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of prompts) {
+      if (p.id === "__new__") continue;
+      const cid = (p.category_id ?? "").trim();
+      if (!cid) continue;
+      m.set(cid, (m.get(cid) ?? 0) + 1);
+    }
+    return m;
+  }, [prompts]);
 
   function openCreate() {
     setEditingId(null);
@@ -48,22 +63,44 @@ export function CategoryManager({
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-slate-900">Categorías</h3>
-        <button type="button" onClick={openCreate} className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50">
+        <button
+          type="button"
+          data-ia-categories-new
+          onClick={openCreate}
+          className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50"
+        >
           Nueva categoría
         </button>
       </div>
       <div className="mt-3 space-y-2">
-        {categories.map((c) => (
-          <div key={c.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <div>
-              <p className="text-sm font-medium text-slate-900">{c.name}</p>
-              <p className="text-xs text-slate-600">{c.description || "Sin descripción"}</p>
+        {categories.map((c) => {
+          const pastel = getCategoryPastelClasses(c.name);
+          const surface = categoryPastelSurfaceClass(c.name);
+          const n = promptCountByCategoryId.get(c.id) ?? 0;
+          return (
+            <div
+              key={c.id}
+              className={`flex items-center justify-between rounded-lg border px-3 py-2 ${surface}`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className={`text-sm font-medium ${pastel.text}`}>{c.name}</p>
+                  <span className="shrink-0 rounded-full bg-white/85 px-2 py-0.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-black/10">
+                    {n} {n === 1 ? "prompt" : "prompts"}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-slate-600">{c.description || "Sin descripción"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => openEdit(c)}
+                className="ml-2 shrink-0 rounded border border-slate-300 bg-white/90 px-2 py-1 text-xs hover:bg-white"
+              >
+                Editar
+              </button>
             </div>
-            <button type="button" onClick={() => openEdit(c)} className="rounded border bg-white px-2 py-1 text-xs hover:bg-slate-100">
-              Editar
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {modalOpen ? (

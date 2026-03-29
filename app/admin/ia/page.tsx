@@ -3,18 +3,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/layout/PageContainer";
 import { IATabs } from "./components/IATabs";
-import { PromptForm } from "./components/PromptForm";
+import { ProfilePromptsConfig } from "./components/ProfilePromptsConfig";
 import { PromptList } from "./components/PromptList";
 import { CategoryManager } from "./components/CategoryManager";
 import { AnalysisProfilesManager } from "./components/AnalysisProfilesManager";
-import { IADashboard } from "./components/IADashboard";
+import { IADashboard, type DashboardData } from "./components/IADashboard";
 import { type AnalysisProfilePromptRow, type AnalysisProfileRow, type CategoryRow, type IATabKey, type PromptRow } from "./components/types";
 import { buildPromptContentFromFields } from "@/lib/ai/promptStructure";
-import { hasRequiredPromptSections } from "@/lib/ai/promptStructure";
+import { hasRequiredPromptSectionsFromRow } from "@/lib/ai/promptStructure";
+import { useModuleReadiness } from "@/lib/modules/useModuleReadiness";
+import { ModuleReadinessPanel } from "@/components/modules/ModuleReadinessPanel";
 
 export default function IAPage() {
-  const [tab, setTab] = useState<IATabKey>("prompts_activos");
-  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [tab, setTab] = useState<IATabKey>("dashboard_ia");
+  /** Prompt cuyo editor está expandido; `null` = vista solo tarjetas. */
+  const [activePromptId, setActivePromptId] = useState<string | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [prompts, setPrompts] = useState<PromptRow[]>([]);
   const [profiles, setProfiles] = useState<AnalysisProfileRow[]>([]);
@@ -26,29 +29,39 @@ export default function IAPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [viewer, setViewer] = useState<PromptRow | null>(null);
-  const [dashboard, setDashboard] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [pendingSuggestionsByPrompt, setPendingSuggestionsByPrompt] = useState<Record<string, number>>({});
   const [pendingProfileChangeId, setPendingProfileChangeId] = useState<string | null>(null);
   const [confirmProfileModalOpen, setConfirmProfileModalOpen] = useState(false);
   const [profileSelectorCooldown, setProfileSelectorCooldown] = useState(false);
   const [canManageActiveProfile, setCanManageActiveProfile] = useState(false);
+  const [iaInitBusy, setIaInitBusy] = useState(false);
+  const { readiness: iaCategoryReadiness, loading: iaReadinessLoading, refresh: refreshIaModule } =
+    useModuleReadiness("ia_categories");
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
-      const [cRes, pRes, profilesRes] = await Promise.all([
-        fetch("/api/admin/ia/categories", { cache: "no-store" }),
+      const iaReady = await refreshIaModule();
+      const skipCategories = iaReady?.status === "missing_schema";
+
+      const [categoriesList, pRes, profilesRes] = await Promise.all([
+        skipCategories
+          ? Promise.resolve([] as CategoryRow[])
+          : fetch("/api/admin/ia/categories", { cache: "no-store" }).then(async (cRes) => {
+              const cJson = await cRes.json().catch(() => ({}));
+              if (!cRes.ok) throw new Error(cJson?.error ?? "Error cargando categorías");
+              return Array.isArray(cJson?.data) ? (cJson.data as CategoryRow[]) : [];
+            }),
         fetch("/api/admin/ia/prompts", { cache: "no-store" }),
         fetch("/api/admin/ia/profiles", { cache: "no-store" }),
       ]);
-      const cJson = await cRes.json().catch(() => ({}));
       const pJson = await pRes.json().catch(() => ({}));
       const profilesJson = await profilesRes.json().catch(() => ({}));
-      if (!cRes.ok) throw new Error(cJson?.error ?? "Error cargando categorías");
       if (!pRes.ok) throw new Error(pJson?.error ?? "Error cargando prompts");
       if (!profilesRes.ok) throw new Error(profilesJson?.error ?? "Error cargando perfiles");
-      setCategories(Array.isArray(cJson?.data) ? cJson.data : []);
+      setCategories(categoriesList);
       setPrompts(Array.isArray(pJson?.data) ? pJson.data : []);
       const pfs = Array.isArray(profilesJson?.data) ? profilesJson.data : [];
       setProfiles(pfs);
@@ -75,7 +88,7 @@ export default function IAPage() {
       const r = await fetch("/api/admin/ia/dashboard", { cache: "no-store" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error ?? "Error cargando dashboard IA");
-      setDashboard(j?.data ?? null);
+      setDashboard((j?.data ?? null) as DashboardData | null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando dashboard IA");
     } finally {
@@ -94,9 +107,52 @@ export default function IAPage() {
     }
   }
 
+  // Carga inicial única; loadAll usa refresh del hook de módulo (no incluir loadAll en deps).
   useEffect(() => {
     void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleInitializeIaModule() {
+    setIaInitBusy(true);
+    setInfo(null);
+    setError(null);
+    try {
+      const r = await fetch("/api/admin/modules/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ module: "ia_categories", seed: true }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        needsSqlInDashboard?: boolean;
+        sql?: string;
+        message?: string;
+      };
+      if (j.needsSqlInDashboard && typeof j.sql === "string") {
+        try {
+          await navigator.clipboard.writeText(j.sql);
+          setInfo(
+            "SQL copiado al portapapeles. Ejecutalo en el SQL Editor de Supabase; después pulsá «Inicializar módulo» otra vez para crear la categoría seed (eliminable)."
+          );
+        } catch {
+          setError("No se pudo copiar al portapapeles. Revisá la consola o el mensaje del servidor.");
+        }
+        return;
+      }
+      if (!j.ok && j.message) {
+        setError(j.message);
+        return;
+      }
+      if (j.message) setInfo(j.message);
+      await refreshIaModule();
+      await loadAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al inicializar");
+    } finally {
+      setIaInitBusy(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -117,11 +173,6 @@ export default function IAPage() {
     };
   }, []);
 
-  const selectedPrompt = useMemo(
-    () => prompts.find((p) => p.id === selectedPromptId) ?? prompts[0] ?? null,
-    [prompts, selectedPromptId]
-  );
-
   async function savePrompt(payload: {
     id?: string;
     name: string;
@@ -136,7 +187,7 @@ export default function IAPage() {
     target_audience: string;
     prompt_content: string;
     status: "draft" | "validated";
-  }) {
+  }): Promise<boolean> {
     setSaving(true);
     setError(null);
     try {
@@ -173,14 +224,28 @@ export default function IAPage() {
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j?.error ?? "Error creando prompt");
-        if (j?.data?.id) setSelectedPromptId(String(j.data.id));
       }
       await loadAll();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error guardando prompt");
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSavePromptAndCollapse(payload: Parameters<typeof savePrompt>[0]) {
+    const ok = await savePrompt(payload);
+    if (ok) {
+      setActivePromptId(null);
+      setInfo("Prompt guardado correctamente.");
+    }
+  }
+
+  function openPromptEditor(id: string) {
+    setInfo(null);
+    setActivePromptId(id);
   }
 
   async function duplicatePrompt(p: PromptRow) {
@@ -309,7 +374,7 @@ export default function IAPage() {
     [pendingSuggestionsByPrompt]
   );
   const promptsWithStructureErrors = useMemo(
-    () => prompts.filter((p) => !hasRequiredPromptSections(String(p.prompt_content || ""))).length,
+    () => prompts.filter((p) => !hasRequiredPromptSectionsFromRow(p)).length,
     [prompts]
   );
   const lastValidationAt = useMemo(() => {
@@ -448,6 +513,16 @@ export default function IAPage() {
 
         <IATabs active={tab} onChange={setTab} />
 
+        {!loading && iaCategoryReadiness?.status === "missing_schema" ? (
+          <ModuleReadinessPanel
+            moduleId="ia_categories"
+            readiness={iaCategoryReadiness}
+            loading={iaReadinessLoading}
+            initializing={iaInitBusy}
+            onInitialize={handleInitializeIaModule}
+          />
+        ) : null}
+
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div> : null}
         {info ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{info}</div> : null}
         {loading ? <div className="text-sm text-slate-500">Cargando…</div> : null}
@@ -465,7 +540,6 @@ export default function IAPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectedPromptId(null);
                     setPrompts((prev) => [
                       {
                         id: "__new__",
@@ -488,37 +562,33 @@ export default function IAPage() {
                       },
                       ...prev.filter((p) => p.id !== "__new__"),
                     ]);
-                    setSelectedPromptId("__new__");
+                    openPromptEditor("__new__");
                   }}
                   className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50"
                 >
                   + Nuevo prompt
                 </button>
               </div>
-              <div className="mt-3 grid gap-2">
-                {prompts.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setSelectedPromptId(p.id)}
-                    className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${
-                      selectedPrompt?.id === p.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white hover:bg-slate-50"
-                    }`}
-                  >
-                    <span className="font-medium">{p.name || "Sin nombre"}</span>
-                    <span className={`text-xs ${selectedPrompt?.id === p.id ? "text-white/80" : "text-slate-500"}`}>{p.status}</span>
-                  </button>
-                ))}
+              <div className="mt-3">
+                <ProfilePromptsConfig
+                  profileId={activeProfileId}
+                  profileName={activeProfileName}
+                  links={profilePromptLinks[activeProfileId] ?? []}
+                  prompts={prompts}
+                  categories={categories}
+                  saving={saving}
+                  activePromptId={activePromptId}
+                  onEdit={openPromptEditor}
+                  onSavePrompt={handleSavePromptAndCollapse}
+                  onSuggestionsChanged={loadAll}
+                  onOrderSaved={async () => {
+                    await loadAll();
+                    setInfo("Orden guardado");
+                  }}
+                  onOrderError={(msg) => setError(msg)}
+                />
               </div>
             </div>
-            <PromptForm
-              current={selectedPrompt}
-              categories={categories}
-              saving={saving}
-              onSaveDraft={savePrompt}
-              onValidate={savePrompt}
-              onSuggestionsChanged={loadAll}
-            />
           </div>
         ) : null}
 
@@ -533,12 +603,12 @@ export default function IAPage() {
             onChangeActiveProfile={(id) => void setActiveProfile(id)}
             loadingActiveProfile={switchingActiveProfile}
             onEdit={(p) => {
-              setSelectedPromptId(p.id);
+              openPromptEditor(p.id);
               setTab("configuracion");
             }}
             pendingSuggestionCounts={pendingSuggestionsByPrompt}
             onViewSuggestions={(p) => {
-              setSelectedPromptId(p.id);
+              openPromptEditor(p.id);
               setTab("configuracion");
             }}
             onView={(p) => setViewer(p)}
@@ -555,7 +625,28 @@ export default function IAPage() {
         ) : null}
 
         {!loading && tab === "categorias" ? (
-          <CategoryManager categories={categories} saving={saving} onCreate={createCategory} onUpdate={updateCategory} />
+          <div className="space-y-4">
+            {iaCategoryReadiness?.status === "empty" ? (
+              <ModuleReadinessPanel
+                moduleId="ia_categories"
+                readiness={iaCategoryReadiness}
+                loading={iaReadinessLoading}
+                emptyHint="No hay datos aún."
+                createFirstLabel="Nueva categoría"
+                onCreateFirst={() => {
+                  const el = document.querySelector<HTMLButtonElement>("[data-ia-categories-new]");
+                  el?.click();
+                }}
+              />
+            ) : null}
+            <CategoryManager
+              categories={categories}
+              prompts={prompts}
+              saving={saving}
+              onCreate={createCategory}
+              onUpdate={updateCategory}
+            />
+          </div>
         ) : null}
 
         {!loading && tab === "perfiles_analisis" ? (

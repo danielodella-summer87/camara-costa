@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { PromptRow } from "./types";
 import type { AnalysisProfilePromptRow, AnalysisProfileRow } from "./types";
+import { categoryPastelSurfaceClass, getCategoryPastelClasses } from "./categoryPastel";
 
 type PromptListView = "all" | "category" | "profile";
 type PromptHealthFilter = "all" | "ok" | "mejorable" | "error";
@@ -111,10 +112,13 @@ export function PromptList({
     return <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">ok</span>;
   }
 
-  const PromptCard = ({ p }: { p: PromptRow }) => (
-    <div key={p.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+  const PromptCard = ({ p }: { p: PromptRow }) => {
+    const pastel = getCategoryPastelClasses(p.ai_categories?.name);
+    const surface = categoryPastelSurfaceClass(p.ai_categories?.name);
+    return (
+    <div key={p.id} className={`rounded-lg border p-3 ${surface}`}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-slate-900">{p.name}</p>
+        <p className={`text-sm font-semibold ${pastel.text}`}>{p.name}</p>
         {healthBadge(p)}
       </div>
       {(pendingSuggestionCounts[p.id] ?? 0) > 0 ? (
@@ -127,7 +131,7 @@ export function PromptList({
           Error de estructura: {(p.missing_required_blocks ?? []).join(", ") || "faltan bloques obligatorios"}
         </p>
       ) : null}
-      <p className="mt-1 text-xs text-slate-600">Categoría: {p.ai_categories?.name ?? "—"}</p>
+      <p className="mt-1 text-xs text-slate-600">Categoría: {p.ai_categories?.name ?? "Sin categoría"}</p>
       <p className="text-xs text-slate-600">Tipo: {p.type}</p>
       <p className="text-xs text-slate-500">Última actualización: {fmtDate(p.updated_at)}</p>
       <div className="mt-2 flex gap-2">
@@ -147,12 +151,13 @@ export function PromptList({
         <button type="button" onClick={() => onViewSuggestions(p)} className="rounded border bg-white px-2 py-1 text-xs hover:bg-slate-100">
           Ver sugerencias
         </button>
-        <button type="button" disabled className="rounded border bg-slate-100 px-2 py-1 text-xs text-slate-400">
+        <button type="button" disabled className="rounded border border-slate-200 bg-white/80 px-2 py-1 text-xs text-slate-400">
           Desactivar
         </button>
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -222,17 +227,30 @@ export function PromptList({
       ) : null}
 
       {prompts.length > 0 && view === "category" ? (
-        <div className="mt-3 space-y-4">
-          {byCategory.map(([category, items]) => (
-            <section key={category} className="space-y-2 pt-2">
-              <h4 className="mb-2 mt-1 text-base font-bold text-slate-800">{category}</h4>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {items.map((p) => (
-                  <PromptCard key={p.id} p={p} />
-                ))}
-              </div>
-            </section>
-          ))}
+        <div className="mt-3 space-y-3">
+          {byCategory.map(([category, items]) => {
+            const headerPastel = getCategoryPastelClasses(category === "Sin categoría" ? null : category);
+            const headerSurface = categoryPastelSurfaceClass(category === "Sin categoría" ? null : category);
+            return (
+              <details key={category} open className={`rounded-lg border ${headerSurface}`}>
+                <summary
+                  className={`flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden ${headerPastel.text}`}
+                >
+                  <span>{category}</span>
+                  <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-black/5">
+                    {items.length}
+                  </span>
+                </summary>
+                <div className="border-t border-black/10 p-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {items.map((p) => (
+                      <PromptCard key={p.id} p={p} />
+                    ))}
+                  </div>
+                </div>
+              </details>
+            );
+          })}
         </div>
       ) : null}
 
