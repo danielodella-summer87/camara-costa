@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePermission } from "@/lib/rbac/requirePermission";
-import { buildStructuredPromptTemplate, hasRequiredPromptSections } from "@/lib/ai/promptStructure";
+import { buildStructuredPromptTemplate, hasRequiredPromptSectionsFromRow } from "@/lib/ai/promptStructure";
 
 export const dynamic = "force-dynamic";
 
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "La IA no devolvió contenido" }, { status: 500 });
     }
 
-    const finalPrompt = hasRequiredPromptSections(generated)
+    const finalPrompt = hasRequiredPromptSectionsFromRow({ prompt_content: generated })
       ? generated
       : buildStructuredPromptTemplate({
           role,
