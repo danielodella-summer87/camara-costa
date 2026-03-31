@@ -10,6 +10,14 @@
 */
 
 import { AiLeadReport } from "@/components/leads/AiLeadReport";
+import { ProposalServiceEditor } from "@/components/leads/ProposalServiceEditor";
+import {
+  draftFromProposalRow,
+  ProposalServiceLineCard,
+  type ProposalRowDraft,
+} from "@/components/leads/ProposalServiceLineCard";
+import { ProposalServicesTotalsSummary } from "@/components/leads/ProposalServicesTotalsSummary";
+import { SuggestedServiceCard } from "@/components/leads/SuggestedServiceCard";
 import { LeadDocsModal } from "@/components/leads/LeadDocsModal";
 import { ProposalClientActions } from "@/components/leads/ProposalClientActions";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -23,6 +31,8 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_LABELS, fetchLabels, type Labels } from "@/lib/labels";
 import { usePermissions } from "@/lib/rbac/usePermissions";
+import { useModuleReadiness } from "@/lib/modules/useModuleReadiness";
+import { ModuleReadinessPanel } from "@/components/modules/ModuleReadinessPanel";
 import { getCommercialNextAction } from "@/lib/crm/getCommercialNextAction";
 import { isCommercialStrategyApproved } from "@/lib/crm/commercialStrategyFlow";
 import { isStepActual, isStepDone, type CommercialStep } from "@/lib/leads/computeCommercialStep";
@@ -37,6 +47,7 @@ import {
 } from "@/lib/leads/presentationUtils";
 import { isOfficialPresentationDocumentUrl } from "@/lib/leads/commercialGammaDocuments";
 import { persistGammaCompletedStatus } from "@/lib/leads/mirrorGammaPdfClient";
+import { unitLabelEs, type AgencyLineSnapshot } from "@/lib/agencyServices/catalog";
 
 type Empresa = {
   id: string;
@@ -192,12 +203,18 @@ type EasyService = {
   precio_base: number | null;
   moneda: string | null;
   orden: number | null;
+  unit?: string | null;
+  default_quantity?: number | null;
+  internal_notes?: string | null;
+  is_active?: boolean;
+  source?: "agency" | null;
 };
 
 type LeadServiceProposal = {
   id: string;
   lead_id: string;
-  service_id: string;
+  service_id: string | null;
+  agency_service_id?: string | null;
   mes: number;
   precio: number | null;
   moneda: string | null;
@@ -208,10 +225,20 @@ type LeadServiceProposal = {
   codigo?: string | null;
   nombre?: string | null;
   billing_type?: string | null;
+  agency_snapshot?: AgencyLineSnapshot | null;
+};
+
+/** Tres líneas fijas para el vendedor: diagnóstico → por qué importa → resultado esperado. */
+type SuggestedServiceExplanation = {
+  diagnostico: string;
+  implicancia: string;
+  impacto: string;
 };
 
 type SuggestedService = {
+  /** Resumen en una línea (observaciones, logs); la UI usa `explanation`. */
   reason: string;
+  explanation: SuggestedServiceExplanation;
   priority: "alta" | "media" | "baja";
   service: EasyService;
 };
@@ -233,6 +260,7 @@ type ProposalGridRow = {
   nombre: string | null;
   billingType: string | null;
   valuesByMonth: Record<string, number | "">;
+  agencySnapshot?: AgencyLineSnapshot | null;
 };
 
 const MONTH_NAMES_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
@@ -682,16 +710,13 @@ export default function LeadDetailPage() {
   const [servicesError, setServicesError] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [selectedMes, setSelectedMes] = useState(1);
-  const [selectedPrecio, setSelectedPrecio] = useState("");
+  const [selectedUnitPrice, setSelectedUnitPrice] = useState("");
+  const [selectedQuantity, setSelectedQuantity] = useState("");
   const [selectedAlcance, setSelectedAlcance] = useState("");
   const [selectedObservaciones, setSelectedObservaciones] = useState("");
-  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
-  const [editingValues, setEditingValues] = useState<{
-    mes: number;
-    precio: string;
-    alcance_editado: string;
-    observaciones: string;
-  }>({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
+  /** Borradores por línea de propuesta (vista comercial + detalle técnico al expandir). */
+  const [proposalRowDrafts, setProposalRowDrafts] = useState<Record<string, ProposalRowDraft>>({});
+  const [proposalTechOpen, setProposalTechOpen] = useState<Record<string, boolean>>({});
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
 
   /** Número de columnas mensuales en la tabla de propuesta (mín 1). */
@@ -707,9 +732,48 @@ export default function LeadDetailPage() {
   const [estadoComercialOpen, setEstadoComercialOpen] = useState(false);
   const [datosLeadOpen, setDatosLeadOpen] = useState(false);
   const [investigacionOpen, setInvestigacionOpen] = useState(false);
+  const [linkedinInitBusy, setLinkedinInitBusy] = useState(false);
+  const linkedInModule = useModuleReadiness("leads_linkedin_personal");
 
   // ✅ Permisos RBAC
   const { hasPermission, role, loading: permissionsLoading } = usePermissions();
+
+  async function handleLinkedinModuleInit() {
+    setLinkedinInitBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/admin/modules/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ module: "leads_linkedin_personal", seed: false }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        needsSqlInDashboard?: boolean;
+        sql?: string;
+        message?: string;
+      };
+      if (j.needsSqlInDashboard && typeof j.sql === "string") {
+        try {
+          await navigator.clipboard.writeText(j.sql);
+          flash("SQL copiado. Pegalo en el SQL Editor de Supabase y recargá la página.");
+        } catch {
+          setError("No se pudo copiar el SQL al portapapeles.");
+        }
+        return;
+      }
+      if (!j.ok && j.message) {
+        setError(j.message);
+        return;
+      }
+      if (j.message) flash(j.message);
+      await linkedInModule.refresh();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al inicializar");
+    } finally {
+      setLinkedinInitBusy(false);
+    }
+  }
 
   // ✅ Tabs (por rol)
   const [activeTab, setActiveTab] = useState<LeadTabId>("datos");
@@ -1157,6 +1221,21 @@ export default function LeadDetailPage() {
     if (json?.ok && Array.isArray(json.services)) setLeadServices(json.services);
   }
 
+  useEffect(() => {
+    const m: Record<string, ProposalRowDraft> = {};
+    for (const r of leadServices) {
+      m[r.id] = draftFromProposalRow(r);
+    }
+    setProposalRowDrafts(m);
+    setProposalTechOpen((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (!leadServices.some((x) => x.id === k)) delete next[k];
+      }
+      return next;
+    });
+  }, [leadServices]);
+
   // Cargar catálogo y servicios del lead cuando se abre el tab Consultor
   useEffect(() => {
     if (activeTab !== "consultor" || !id) return;
@@ -1224,6 +1303,7 @@ export default function LeadDetailPage() {
     return leadServices.map((row) => {
       const valuesByMonth: Record<string, number | ""> = {};
       const overrides = proposalGridOverrides[row.id];
+      const sid = (row.agency_service_id ?? row.service_id ?? "").trim();
       proposalMonthColumns.forEach((col, idx) => {
         const oneBased = idx + 1;
         if (overrides && col.key in overrides) {
@@ -1236,11 +1316,12 @@ export default function LeadDetailPage() {
       });
       return {
         proposalId: row.id,
-        serviceId: row.service_id,
+        serviceId: sid,
         codigo: row.codigo ?? null,
         nombre: row.nombre ?? null,
         billingType: row.billing_type ?? null,
         valuesByMonth,
+        agencySnapshot: row.agency_snapshot ?? null,
       };
     });
   }, [leadServices, proposalMonthColumns, proposalGridOverrides]);
@@ -1257,7 +1338,12 @@ export default function LeadDetailPage() {
       proposalDraftSaveRef.current = null;
       const draft = {
         months: proposalMonthColumns.map((c) => ({ key: c.key, label: c.label })),
-        rows: proposalGridRows.map((r) => ({ proposalId: r.proposalId, serviceId: r.serviceId, valuesByMonth: { ...r.valuesByMonth } })),
+        rows: proposalGridRows.map((r) => ({
+          proposalId: r.proposalId,
+          serviceId: r.serviceId,
+          valuesByMonth: { ...r.valuesByMonth },
+          ...(r.agencySnapshot ? { agencySnapshot: r.agencySnapshot } : {}),
+        })),
       };
       fetch(`/api/admin/leads/${id}`, {
         method: "PATCH",
@@ -1280,6 +1366,15 @@ export default function LeadDetailPage() {
     if (!selectedServiceId) return;
     const svc = servicesCatalog.find((s) => s.id === selectedServiceId);
     if (svc?.alcance_base) setSelectedAlcance(svc.alcance_base);
+  }, [selectedServiceId, servicesCatalog]);
+
+  useEffect(() => {
+    if (!selectedServiceId) return;
+    const svc = servicesCatalog.find((s) => s.id === selectedServiceId);
+    if (!svc) return;
+    setSelectedUnitPrice(svc.precio_base != null ? String(svc.precio_base) : "");
+    const dq = svc.default_quantity ?? 1;
+    setSelectedQuantity(String(dq > 0 ? dq : 1));
   }, [selectedServiceId, servicesCatalog]);
 
   function formatBillingType(value: string | null | undefined): string {
@@ -1450,12 +1545,18 @@ export default function LeadDetailPage() {
     const normSource = normalizeText(sourceText);
     const candidates: SuggestedService[] = [];
 
-    const add = (sourceKeywords: string[], catalogKeywords: string[], priority: SuggestedService["priority"], reason: string) => {
+    const add = (
+      sourceKeywords: string[],
+      catalogKeywords: string[],
+      priority: SuggestedService["priority"],
+      explanation: SuggestedServiceExplanation
+    ) => {
       if (!matchesStrategicKeywords(sourceText, sourceKeywords)) return;
       for (const svc of catalog) {
         if (already.has(svc.id)) continue;
         if (!matchesService(svc, catalogKeywords)) continue;
-        candidates.push({ reason, priority, service: svc });
+        const reason = [explanation.diagnostico, explanation.implicancia].join(" ").slice(0, 280);
+        candidates.push({ reason, explanation, priority, service: svc });
       }
     };
 
@@ -1464,7 +1565,14 @@ export default function LeadDetailPage() {
       ["redes", "instagram", "contenido", "presencia digital", "comunidad", "publicaciones", "visibilidad en redes"],
       ["redes", "social", "contenido", "community", "instagram", "facebook"],
       "alta",
-      "El análisis estratégico detecta la necesidad de fortalecer la presencia y la comunicación en redes sociales."
+      {
+        diagnostico:
+          "En el informe aparecen prioridades sobre redes, contenido o presencia digital (Instagram, Facebook u otras comunidades).",
+        implicancia:
+          "Sin calendario y mensajes alineados a la marca, el alcance rara vez se traduce en consultas o ventas medibles.",
+        impacto:
+          "Este servicio ordena piezas, ritmo y foco para que lo invertido en redes se vea en conversaciones comerciales reales.",
+      }
     );
 
     // REGLA 2 — PAUTA
@@ -1472,18 +1580,34 @@ export default function LeadDetailPage() {
       ["pauta", "ads", "campañas", "captación", "tráfico", "leads", "meta ads", "google ads", "conversiones"],
       ["pauta", "ads", "trafico", "captacion", "media", "campañas", "meta", "google"],
       "alta",
-      "El diagnóstico sugiere acelerar captación y visibilidad mediante campañas pagas."
+      {
+        diagnostico:
+          "El texto del análisis menciona captación, leads, pauta o campañas en Meta/Google para acelerar resultados.",
+        implicancia:
+          "Si el embudo entra poco tráfico calificado, el equipo comercial queda sin volumen predecible de oportunidades.",
+        impacto:
+          "Permite activar demanda en el corto plazo (7–14 días) con segmentación, pruebas y optimización continua.",
+      }
     );
 
     // REGLA 3 — WEB / LANDING (evitar si el informe dice que la web está correcta)
     const webNegative = /(la\s+web\s+está\s+correcta|sitio\s+correcto|presencia\s+web\s+correcta|web\s+bien\s+resuelta)/i.test(normSource);
     const webPositive = matchesStrategicKeywords(sourceText, ["web", "landing", "sitio", "página", "conversion", "conversión web", "mejorar la web", "optimizar sitio"]);
     if (webPositive && (!webNegative || matchesStrategicKeywords(sourceText, ["crear", "rediseño", "nueva web", "nuevo sitio", "desarrollar web"]))) {
+      const webExplanation: SuggestedServiceExplanation = {
+        diagnostico:
+          "Las acciones del informe señalan mejorar sitio, landing o conversión; no asumen que la web ya está resuelta.",
+        implicancia:
+          "Sin una base digital clara y orientada a cierre, marketing y ventas no comparten un destino único para medir y convertir.",
+        impacto:
+          "Este servicio entrega una base para captar, medir y cerrar con menos fricción desde el sitio.",
+      };
       for (const svc of catalog) {
         if (already.has(svc.id)) continue;
         if (!matchesService(svc, ["web", "landing", "sitio", "pagina"])) continue;
         candidates.push({
-          reason: "Las acciones recomendadas muestran una oportunidad de mejora en la base web y en la conversión digital.",
+          reason: [webExplanation.diagnostico, webExplanation.implicancia].join(" ").slice(0, 280),
+          explanation: webExplanation,
           priority: "media",
           service: svc,
         });
@@ -1495,7 +1619,14 @@ export default function LeadDetailPage() {
       ["estrategia", "consultoría", "orden comercial", "hoja de ruta", "prioridades", "propuesta de valor", "posicionamiento"],
       ["consultoria", "estrategia", "growth", "diagnostico", "auditoria"],
       "alta",
-      "El informe plantea una necesidad de dirección estratégica y priorización comercial."
+      {
+        diagnostico:
+          "El informe plantea estrategia, consultoría, prioridades u hoja de ruta para ordenar el negocio.",
+        implicancia:
+          "Sin foco, el cliente suele dispersar presupuesto en tácticas que no encajan con su etapa ni con su capacidad.",
+        impacto:
+          "Deja criterios claros para decidir qué hacer primero, con qué objetivo y cómo medirlo antes de ejecutar.",
+      }
     );
 
     // REGLA 5 — AUTOMATIZACIÓN / CRM
@@ -1503,7 +1634,14 @@ export default function LeadDetailPage() {
       ["automatizacion", "automatización", "crm", "seguimiento", "pipeline", "nutricion", "nutrición", "embudo", "cierre comercial", "procesos comerciales"],
       ["automatizacion", "crm", "pipeline", "embudo", "proceso comercial"],
       "media",
-      "Las recomendaciones apuntan a ordenar el seguimiento comercial y mejorar la conversión del proceso."
+      {
+        diagnostico:
+          "Las recomendaciones mencionan CRM, automatización, embudo o seguimiento comercial estructurado.",
+        implicancia:
+          "Sin trazabilidad, los leads se enfrían y el equipo pierde tiempo en tareas repetitivas o en hojas sueltas.",
+        impacto:
+          "Ordena el pipeline, reduce pérdidas y hace que cada venta sea más replicable y defendible frente al cliente.",
+      }
     );
 
     // REGLA 6 — LINKEDIN (solo si el informe lo menciona en acciones/oportunidades)
@@ -1511,7 +1649,14 @@ export default function LeadDetailPage() {
       ["linkedin", "marca personal", "social selling", "autoridad profesional", "posicionamiento en linkedin"],
       ["linkedin", "marca personal", "social selling", "contenido ejecutivo"],
       "media",
-      "El análisis detecta una oportunidad concreta de posicionamiento comercial en LinkedIn."
+      {
+        diagnostico:
+          "El informe destaca LinkedIn, marca personal o social selling como canal de autoridad o apertura comercial.",
+        implicancia:
+          "En B2B gran parte de la confianza se juega en perfiles y contenido profesional, no solo en la web corporativa.",
+        impacto:
+          "Refuerza credibilidad y facilita conversaciones con decisores donde ya están las conversaciones de compra.",
+      }
     );
 
     const byId = new Map<string, SuggestedService>();
@@ -1568,7 +1713,12 @@ export default function LeadDetailPage() {
     };
   }
   function getAlreadyProposedServiceIds(items: LeadServiceProposal[]): Set<string> {
-    return new Set(items.map((r) => r.service_id));
+    const set = new Set<string>();
+    for (const r of items) {
+      if (r.service_id?.trim()) set.add(r.service_id.trim());
+      if (r.agency_service_id?.trim()) set.add(r.agency_service_id.trim());
+    }
+    return set;
   }
   function matchesService(service: EasyService, keywords: string[]): boolean {
     const raw = [
@@ -1640,6 +1790,22 @@ export default function LeadDetailPage() {
     }
     return DEFAULT_SALES_COPY;
   }
+
+  /** Si faltara `explanation` (no debería), arma 3 líneas desde el copy genérico por tipo de servicio. */
+  function getSuggestedServiceDisplayExplanation(
+    s: SuggestedService,
+    signals: ReturnType<typeof getLeadSignals>
+  ): SuggestedServiceExplanation {
+    const e = s.explanation;
+    if (e?.diagnostico?.trim() && e?.implicancia?.trim() && e?.impacto?.trim()) return e;
+    const copy = getServiceSalesCopy(s.service, signals);
+    return {
+      diagnostico: copy.why,
+      implicancia: copy.outcome,
+      impacto: copy.howToSell,
+    };
+  }
+
   const PRIORITY_ORDER = { alta: 0, media: 1, baja: 2 };
   function getSuggestedServices(
     catalog: EasyService[],
@@ -1649,31 +1815,62 @@ export default function LeadDetailPage() {
     const already = getAlreadyProposedServiceIds(proposed);
     const candidates: SuggestedService[] = [];
 
-    const add = (keywords: string[], priority: SuggestedService["priority"], reason: string) => {
+    const add = (keywords: string[], priority: SuggestedService["priority"], explanation: SuggestedServiceExplanation) => {
       for (const svc of catalog) {
         if (already.has(svc.id)) continue;
         if (!matchesService(svc, keywords)) continue;
-        candidates.push({ reason, priority, service: svc });
+        const reason = [explanation.diagnostico, explanation.implicancia].join(" ").slice(0, 280);
+        candidates.push({ reason, explanation, priority, service: svc });
       }
     };
 
     if (!signals.hasWebsite) {
-      add(["web", "landing", "sitio", "pagina"], "alta", "El lead no muestra una presencia web clara y necesita una base digital visible.");
+      add(["web", "landing", "sitio", "pagina"], "alta", {
+        diagnostico: "En la ficha no hay URL de sitio web o presencia digital clara para el negocio.",
+        implicancia:
+          "Sin un destino único, las campañas, redes y contactos comerciales no tienen dónde medir interés ni conversión.",
+        impacto: "Crea una base visible y profesional para canalizar tráfico, credibilidad y pedidos de contacto.",
+      });
     }
     if (signals.hasWebsite && !signals.hasAiReport) {
-      add(["auditoria", "diagnostico", "consultoria"], "alta", "Conviene comenzar con una instancia de diagnóstico para ordenar prioridades y detectar oportunidades.");
+      add(["auditoria", "diagnostico", "consultoria"], "alta", {
+        diagnostico: "Hay web cargada pero aún no hay informe IA completo que priorice gaps y próximos pasos.",
+        implicancia:
+          "Proponer tácticas sin diagnóstico suele generar propuestas genéricas y difíciles de defender con el cliente.",
+        impacto: "Una auditoría o consultoría inicial ordena prioridades y evita invertir primero en lo que menos mueve la aguja.",
+      });
     }
     if ((signals.hasInstagram || signals.hasFacebook) && !signals.hasObjetivo) {
-      add(["consultoria", "estrategia", "growth"], "media", "El lead tiene presencia digital, pero falta una dirección estratégica clara para convertirla en resultados.");
+      add(["consultoria", "estrategia", "growth"], "media", {
+        diagnostico: "El lead muestra redes activas pero sin objetivos claros alineados en la ficha.",
+        implicancia:
+          "Sin norte medible, el contenido y la inversión no se pueden ajustar ni explicar al cliente.",
+        impacto: "Define foco, métricas y mensajes para que cada publicación cumpla un rol en el embudo.",
+      });
     }
     if (signals.hasWebsite && (signals.hasInstagram || signals.hasFacebook) && !signals.hasExistingProposal) {
-      add(["pauta", "ads", "trafico", "captacion"], "media", "Ya existe una base digital mínima; el siguiente paso puede ser acelerar captación y visibilidad.");
+      add(["pauta", "ads", "trafico", "captacion"], "media", {
+        diagnostico: "Ya existe web y redes; la propuesta aún no incluye servicios para acelerar captación.",
+        implicancia:
+          "Con solo tráfico orgánico el crecimiento depende del ritmo editorial y del algoritmo, sin control de volumen.",
+        impacto: "La pauta permite escalar alcance y leads con segmentación, pruebas y control de costo.",
+      });
     }
     if (signals.hasLinkedin) {
-      add(["linkedin", "contenido", "marca personal", "social selling"], "media", "La presencia en LinkedIn abre oportunidades comerciales y de posicionamiento.");
+      add(["linkedin", "contenido", "marca personal", "social selling"], "media", {
+        diagnostico: "Hay perfil o actividad en LinkedIn registrada en la ficha del lead.",
+        implicancia:
+          "LinkedIn sin plan de contenido y autoridad suele aportar poco pipeline frente al tiempo invertido.",
+        impacto: "Refuerza credibilidad del equipo o de la marca y facilita conversaciones con decisores B2B.",
+      });
     }
     if (signals.hasAiReport && !signals.hasExistingProposal) {
-      add(["consultoria", "implementacion", "automatizacion"], "alta", "El lead ya cuenta con diagnóstico IA y está en condiciones de transformarlo en plan de acción.");
+      add(["consultoria", "implementacion", "automatizacion"], "alta", {
+        diagnostico: "El lead ya tiene informe IA y la propuesta aún no tiene líneas de servicio cargadas.",
+        implicancia:
+          "El diagnóstico solo cobra valor cuando se traduce en alcance, entregables y priorización con presupuesto.",
+        impacto: "Permite pasar de lectura a ejecución con plan, priorización y alcance acordado con el cliente.",
+      });
     }
 
     const byId = new Map<string, SuggestedService>();
@@ -1695,17 +1892,40 @@ export default function LeadDetailPage() {
       setServicesError("Seleccioná un servicio antes de agregarlo.");
       return;
     }
-    const precioNum = selectedPrecio === "" ? null : Number(selectedPrecio);
-    const basePrice = precioNum ?? selectedService?.precio_base ?? 0;
+    const mesAdd = Number(selectedMes);
+    if (!Number.isInteger(mesAdd) || mesAdd < 1 || mesAdd > 24) {
+      setServicesError("El mes debe estar entre 1 y 24.");
+      return;
+    }
+    const up =
+      selectedUnitPrice === ""
+        ? Number(selectedService?.precio_base ?? 0)
+        : Number(selectedUnitPrice);
+    const qtyRaw =
+      selectedQuantity === "" ? Number(selectedService?.default_quantity ?? 1) : Number(selectedQuantity);
+    const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+    const unitPrice = Number.isFinite(up) ? up : 0;
+    const totalLine = unitPrice * qty;
+    if (qty <= 0 || !Number.isFinite(qty)) {
+      setServicesError("La cantidad debe ser un número mayor que 0.");
+      return;
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setServicesError("El precio unitario debe ser un número válido (≥ 0).");
+      return;
+    }
+    const basePrice = totalLine;
     setServicesSaving(true);
     try {
       const res = await fetch(`/api/admin/leads/${id}/services`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          service_id: selectedServiceId,
-          mes: 1,
-          precio: precioNum ?? selectedService?.precio_base ?? null,
+          agency_service_id: selectedServiceId,
+          mes: mesAdd,
+          unit_price: unitPrice,
+          quantity: qty,
+          precio: totalLine,
           alcance_editado: selectedAlcance.trim() || null,
           observaciones: selectedObservaciones.trim() || null,
         }),
@@ -1717,7 +1937,8 @@ export default function LeadDetailPage() {
       }
       setSelectedServiceId("");
       setSelectedMes(1);
-      setSelectedPrecio("");
+      setSelectedUnitPrice("");
+      setSelectedQuantity("");
       setSelectedAlcance("");
       setSelectedObservaciones("");
       await loadLeadServices();
@@ -1725,7 +1946,9 @@ export default function LeadDetailPage() {
       if (newProposal?.id && Number.isFinite(basePrice)) {
         const cols = getProposalMonthColumns(Math.max(1, proposalMonthCount));
         const next: Record<string, number | ""> = {};
-        cols.forEach((c) => { next[c.key] = basePrice; });
+        cols.forEach((c, idx) => {
+          next[c.key] = idx + 1 === mesAdd ? basePrice : "";
+        });
         setProposalGridOverrides((prev) => ({ ...prev, [newProposal.id]: next }));
       }
     } catch (e) {
@@ -1735,33 +1958,63 @@ export default function LeadDetailPage() {
     }
   }
 
-  async function handleSaveProposalEdit() {
-    if (!id || !editingServiceId) return;
+  async function saveProposalRow(rowId: string) {
+    if (!id) return;
     setServicesError("");
-    const mes = Number(editingValues.mes);
+    const row = leadServices.find((r) => r.id === rowId);
+    const d = proposalRowDrafts[rowId];
+    if (!row || !d) return;
+    const mes = Number(d.mes);
     if (!Number.isInteger(mes) || mes < 1 || mes > 24) {
       setServicesError("El mes debe estar entre 1 y 24.");
       return;
     }
+    const upAg = Number(d.unit_price);
+    const qtyAg = Number(d.quantity);
+    if (row.agency_service_id && row.agency_snapshot) {
+      if (!Number.isFinite(upAg) || upAg < 0) {
+        setServicesError("Precio unitario inválido.");
+        return;
+      }
+      if (!Number.isFinite(qtyAg) || qtyAg <= 0) {
+        setServicesError("La cantidad debe ser mayor que 0.");
+        return;
+      }
+    } else {
+      if (!Number.isFinite(upAg) || upAg < 0) {
+        setServicesError("Precio inválido.");
+        return;
+      }
+    }
     setServicesSaving(true);
     try {
-      const res = await fetch(`/api/admin/leads/${id}/services/${editingServiceId}`, {
+      const patchBody: Record<string, unknown> = {
+        mes,
+        alcance_editado: d.alcance_editado.trim() || null,
+        observaciones: d.observaciones.trim() || null,
+      };
+      if (row.agency_service_id && row.agency_snapshot) {
+        patchBody.precio = upAg * qtyAg;
+        patchBody.agency_snapshot = {
+          ...row.agency_snapshot,
+          unit_price: upAg,
+          quantity: qtyAg,
+          total_price: upAg * qtyAg,
+          notes: d.notes_agency.trim(),
+        };
+      } else {
+        patchBody.precio = upAg;
+      }
+      const res = await fetch(`/api/admin/leads/${id}/services/${rowId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mes,
-          precio: editingValues.precio === "" ? null : Number(editingValues.precio),
-          alcance_editado: editingValues.alcance_editado.trim() || null,
-          observaciones: editingValues.observaciones.trim() || null,
-        }),
+        body: JSON.stringify(patchBody),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         setServicesError(json?.error ?? "No se pudo guardar el servicio propuesto.");
         return;
       }
-      setEditingServiceId(null);
-      setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
       await loadLeadServices();
     } catch (e) {
       setServicesError(e instanceof Error ? e.message : "No se pudo guardar el servicio propuesto.");
@@ -1781,10 +2034,6 @@ export default function LeadDetailPage() {
       if (!res.ok) {
         setServicesError(json?.error ?? "No se pudo eliminar el servicio propuesto.");
         return;
-      }
-      if (editingServiceId === proposalId) {
-        setEditingServiceId(null);
-        setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
       }
       setProposalGridOverrides((prev) => {
         const next = { ...prev };
@@ -1806,7 +2055,12 @@ export default function LeadDetailPage() {
     try {
       const draft = {
         months: proposalMonthColumns.map((c) => ({ key: c.key, label: c.label })),
-        rows: proposalGridRows.map((r) => ({ proposalId: r.proposalId, serviceId: r.serviceId, valuesByMonth: { ...r.valuesByMonth } })),
+        rows: proposalGridRows.map((r) => ({
+          proposalId: r.proposalId,
+          serviceId: r.serviceId,
+          valuesByMonth: { ...r.valuesByMonth },
+          ...(r.agencySnapshot ? { agencySnapshot: r.agencySnapshot } : {}),
+        })),
       };
       const res = await fetch(`/api/admin/leads/${id}/proposal/confirm`, {
         method: "POST",
@@ -1865,16 +2119,21 @@ export default function LeadDetailPage() {
   async function handleAddSuggestedService(suggestion: SuggestedService) {
     if (!id) return;
     setServicesError("");
-    const basePrice = suggestion.service.precio_base ?? 0;
+    const dq = suggestion.service.default_quantity ?? 1;
+    const qty = dq > 0 ? dq : 1;
+    const up = Number(suggestion.service.precio_base ?? 0);
+    const basePrice = up * qty;
     setServicesSaving(true);
     try {
       const res = await fetch(`/api/admin/leads/${id}/services`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          service_id: suggestion.service.id,
+          agency_service_id: suggestion.service.id,
           mes: 1,
-          precio: suggestion.service.precio_base ?? null,
+          unit_price: up,
+          quantity: qty,
+          precio: basePrice,
           alcance_editado: suggestion.service.alcance_base?.trim() || null,
           observaciones: `Sugerido automáticamente para el lead (${suggestion.priority}).`,
         }),
@@ -1888,10 +2147,16 @@ export default function LeadDetailPage() {
       const newProposal = (json as { proposal?: { id: string } })?.proposal;
       if (newProposal?.id && Number.isFinite(basePrice)) {
         const cols = getProposalMonthColumns(Math.max(1, proposalMonthCount));
+        const mesAdd = 1;
         const next: Record<string, number | ""> = {};
-        cols.forEach((c) => { next[c.key] = basePrice; });
+        cols.forEach((c, idx) => {
+          next[c.key] = idx + 1 === mesAdd ? basePrice : "";
+        });
         setProposalGridOverrides((prev) => ({ ...prev, [newProposal.id]: next }));
       }
+      requestAnimationFrame(() => {
+        document.getElementById("services-proposal")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } catch (e) {
       setServicesError(e instanceof Error ? e.message : "Error al agregar el servicio");
     } finally {
@@ -3760,6 +4025,35 @@ export default function LeadDetailPage() {
                     </div>
                   </div>
 
+                  {lead && linkedInModule.readiness?.status === "missing_schema" ? (
+                    <ModuleReadinessPanel
+                      moduleId="leads_linkedin_personal"
+                      readiness={linkedInModule.readiness}
+                      loading={linkedInModule.loading}
+                      initializing={linkedinInitBusy}
+                      onInitialize={handleLinkedinModuleInit}
+                    />
+                  ) : null}
+
+                  {lead &&
+                  linkedInModule.readiness?.status === "ok" &&
+                  linkedInModule.readiness.details?.linkedinPersonalAvailable === false ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                      <p className="font-medium">LinkedIn contacto (modo compatibilidad)</p>
+                      <p className="mt-1 text-amber-900/90">
+                        Falta la columna <span className="font-mono">linkedin_personal</span> en <span className="font-mono">leads</span>.
+                        {linkedInModule.readiness.details?.fallbackLinkedinColumn ? (
+                          <>
+                            {" "}
+                            Se usa <span className="font-mono">linkedin_director</span> para mostrar y guardar hasta migrar.
+                          </>
+                        ) : (
+                          <> Ejecutá el SQL de inicialización del módulo para añadirla.</>
+                        )}
+                      </p>
+                    </div>
+                  ) : null}
+
                   <Field
                     label="LinkedIn Empresa"
                     editing={editing}
@@ -4743,51 +5037,24 @@ export default function LeadDetailPage() {
                     return <p className="mt-3 text-sm text-slate-500">No se detectaron sugerencias automáticas adicionales para este lead por ahora.</p>;
                   }
                   return (
-                    <div className="mt-4 space-y-3">
-                      {suggested.map((s) => (
-                        <div key={s.service.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-medium text-slate-900">{s.service.nombre}</span>
-                                <span className="text-sm text-slate-500">{s.service.codigo}</span>
-                                {s.service.categoria && (
-                                  <span className="text-xs text-slate-500">{s.service.categoria}</span>
-                                )}
-                                <span className={getPriorityBadgeClasses(s.priority)}>{s.priority}</span>
-                              </div>
-                              <p className="mt-1 text-sm text-slate-600">{s.reason}</p>
-                              <div className="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3">
-                                <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Enfoque comercial sugerido</p>
-                                <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
-                                  <li><strong>Por qué recomendarlo:</strong> {getServiceSalesCopy(s.service, signals).why}</li>
-                                  <li><strong>Qué resultado busca:</strong> {getServiceSalesCopy(s.service, signals).outcome}</li>
-                                  <li><strong>Cómo venderlo:</strong> {getServiceSalesCopy(s.service, signals).howToSell}</li>
-                                </ul>
-                                <p className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
-                                  {getSuggestedPriorityText(s.priority)} · {getServicePhaseLabel(s.service.billing_type)}
-                                </p>
-                              </div>
-                              <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
-                                {s.service.precio_base != null && (
-                                  <span>{formatMoney(s.service.moneda, s.service.precio_base)}</span>
-                                )}
-                                <span>
-                                  {s.service.billing_type === "monthly" ? "Mensual" : s.service.billing_type === "one_time" ? "Única vez" : "—"}
-                                </span>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => handleAddSuggestedService(s)}
-                              disabled={servicesSaving}
-                              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              Agregar sugerencia
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="mt-4 space-y-4">
+                      {suggested.map((s) => {
+                        const exp = getSuggestedServiceDisplayExplanation(s, signals);
+                        return (
+                          <SuggestedServiceCard
+                            key={s.service.id}
+                            titulo={s.service.nombre ?? s.service.codigo ?? "Servicio"}
+                            categoria={s.service.categoria}
+                            prioridadBadgeClass={getPriorityBadgeClasses(s.priority)}
+                            prioridadCorta={s.priority}
+                            diagnostico={exp.diagnostico}
+                            implicancia={exp.implicancia}
+                            impacto={exp.impacto}
+                            onAgregar={() => void handleAddSuggestedService(s)}
+                            disabled={servicesSaving}
+                          />
+                        );
+                      })}
                     </div>
                   );
                 })()}
@@ -4814,7 +5081,7 @@ export default function LeadDetailPage() {
                   )}
                 <h2 className="text-lg font-semibold text-slate-900">Propuesta Comercial Inteligente</h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  Selecciona servicios EASY, organízalos por mes y prepara una propuesta comercial editable para este lead.
+                  Seleccioná servicios del catálogo de la agencia, definí precio unitario y cantidad, organizá por mes y prepará la propuesta para este lead.
                 </p>
 
                 {servicesLoading && (
@@ -4826,81 +5093,42 @@ export default function LeadDetailPage() {
                   </div>
                 )}
 
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-3">Agregar servicio a la propuesta</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Servicio</label>
-                      <select
-                        value={selectedServiceId}
-                        onChange={(e) => setSelectedServiceId(e.target.value)}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                      >
-                        <option value="">— Seleccionar —</option>
-                        {servicesCatalog.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.codigo} — {s.nombre}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Mes</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={24}
-                        value={selectedMes}
-                        onChange={(e) => setSelectedMes(Number(e.target.value) || 1)}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Precio</label>
-                      <input
-                        type="number"
-                        step={0.01}
-                        value={selectedPrecio}
-                        onChange={(e) => setSelectedPrecio(e.target.value)}
-                        placeholder={selectedService?.precio_base != null ? String(selectedService.precio_base) : undefined}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-1 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Alcance editable</label>
-                      <textarea
-                        value={selectedAlcance}
-                        onChange={(e) => setSelectedAlcance(e.target.value)}
-                        rows={2}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Observaciones</label>
-                      <textarea
-                        value={selectedObservaciones}
-                        onChange={(e) => setSelectedObservaciones(e.target.value)}
-                        rows={2}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={handleAddProposalService}
-                      disabled={servicesSaving || servicesLoading}
-                      className="rounded-xl px-4 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {servicesSaving ? "Agregando…" : "Agregar a propuesta"}
-                    </button>
-                    <p className="mt-2 text-xs text-slate-500">
-                      Luego podrás usar esta base para exportar la propuesta comercial a PDF y Gamma.
-                    </p>
-                  </div>
-                </div>
+                <ProposalServiceEditor
+                  servicesCatalog={servicesCatalog}
+                  selectedServiceId={selectedServiceId}
+                  onServiceIdChange={setSelectedServiceId}
+                  selectedMes={selectedMes}
+                  onMesChange={setSelectedMes}
+                  selectedUnitPrice={selectedUnitPrice}
+                  onUnitPriceChange={setSelectedUnitPrice}
+                  selectedQuantity={selectedQuantity}
+                  onQuantityChange={setSelectedQuantity}
+                  selectedAlcance={selectedAlcance}
+                  onAlcanceChange={setSelectedAlcance}
+                  selectedObservaciones={selectedObservaciones}
+                  onObservacionesChange={setSelectedObservaciones}
+                  selectedService={selectedService}
+                  servicesSaving={servicesSaving}
+                  servicesLoading={servicesLoading}
+                  onAdd={() => void handleAddProposalService()}
+                  lineTotalLabel={(() => {
+                    const up =
+                      selectedUnitPrice === ""
+                        ? Number(selectedService?.precio_base ?? 0)
+                        : Number(selectedUnitPrice);
+                    const q =
+                      selectedQuantity === ""
+                        ? Number(selectedService?.default_quantity ?? 1)
+                        : Number(selectedQuantity);
+                    const qty = Number.isFinite(q) && q > 0 ? q : 1;
+                    const unitP = Number.isFinite(up) ? up : 0;
+                    const t = unitP * qty;
+                    const cur = selectedService?.moneda?.trim() || "";
+                    return Number.isFinite(t)
+                      ? `${cur ? `${cur} ` : ""}${t.toLocaleString("es-UY", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+                      : "—";
+                  })()}
+                />
 
                 {/* Tabla mensual de propuesta: matriz servicios x meses */}
                 <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
@@ -5045,152 +5273,47 @@ export default function LeadDetailPage() {
                 </div>
 
                 <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4">
-                  <h3 className="text-sm font-semibold text-slate-800 mb-3">Servicios propuestos para este lead</h3>
+                  <h3 className="mb-1 text-sm font-semibold text-slate-800">Servicios propuestos para este lead</h3>
+                  <p className="mb-4 text-xs text-slate-500">
+                    Vista comercial: precio, cantidad y nota al cliente. El detalle técnico (horas, costos, márgenes) está un nivel abajo.
+                  </p>
                   {leadServices.length === 0 ? (
                     <p className="text-sm text-slate-500">Aún no hay servicios cargados en la propuesta.</p>
                   ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[640px] text-sm text-left">
-                        <thead>
-                          <tr className="border-b border-slate-200 text-slate-600 font-medium">
-                            <th className="py-2 pr-3">Mes</th>
-                            <th className="py-2 pr-3">Servicio</th>
-                            <th className="py-2 pr-3">Tipo</th>
-                            <th className="py-2 pr-3">Precio</th>
-                            <th className="py-2 pr-3">Alcance</th>
-                            <th className="py-2 pr-3">Observaciones</th>
-                            <th className="py-2">Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {leadServices.map((row) => {
-                            const isEditing = editingServiceId === row.id;
-                            return (
-                              <tr key={row.id} className="border-b border-slate-100">
-                                <td className="py-2 pr-3 text-slate-900 align-top">
-                                  {isEditing ? (
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      max={24}
-                                      value={editingValues.mes}
-                                      onChange={(e) => setEditingValues((v) => ({ ...v, mes: Number(e.target.value) || 1 }))}
-                                      className="w-16 rounded border border-slate-300 px-2 py-1 text-sm"
-                                    />
-                                  ) : (
-                                    row.mes
-                                  )}
-                                </td>
-                                <td className="py-2 pr-3 text-slate-900 align-top">
-                                  {[row.codigo, row.nombre].filter(Boolean).join(" — ") || "—"}
-                                </td>
-                                <td className="py-2 pr-3 text-slate-700 align-top">{formatBillingType(row.billing_type)}</td>
-                                <td className="py-2 pr-3 text-slate-700 align-top">
-                                  {isEditing ? (
-                                    <input
-                                      type="number"
-                                      step={0.01}
-                                      value={editingValues.precio}
-                                      onChange={(e) => setEditingValues((v) => ({ ...v, precio: e.target.value }))}
-                                      className="w-24 rounded border border-slate-300 px-2 py-1 text-sm"
-                                    />
-                                  ) : (
-                                    formatMoney(row.moneda, row.precio)
-                                  )}
-                                </td>
-                                <td className="py-2 pr-3 text-slate-700 align-top max-w-[200px]">
-                                  {isEditing ? (
-                                    <textarea
-                                      value={editingValues.alcance_editado}
-                                      onChange={(e) => setEditingValues((v) => ({ ...v, alcance_editado: e.target.value }))}
-                                      rows={2}
-                                      className="w-full rounded border border-slate-300 px-2 py-1 text-sm min-w-[140px]"
-                                    />
-                                  ) : (
-                                    <span className="truncate block" title={row.alcance_editado ?? undefined}>
-                                      {row.alcance_editado?.trim() || "—"}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="py-2 pr-3 text-slate-700 align-top max-w-[180px]">
-                                  {isEditing ? (
-                                    <textarea
-                                      value={editingValues.observaciones}
-                                      onChange={(e) => setEditingValues((v) => ({ ...v, observaciones: e.target.value }))}
-                                      rows={2}
-                                      className="w-full rounded border border-slate-300 px-2 py-1 text-sm min-w-[120px]"
-                                    />
-                                  ) : (
-                                    <span className="truncate block" title={row.observaciones ?? undefined}>
-                                      {row.observaciones?.trim() || "—"}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="py-2 align-top">
-                                  {isEditing ? (
-                                    <div className="flex flex-wrap gap-1 items-start">
-                                      <button
-                                        type="button"
-                                        onClick={handleSaveProposalEdit}
-                                        disabled={servicesSaving}
-                                        className="rounded border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-800 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        {servicesSaving ? "Guardando…" : "Guardar"}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditingServiceId(null);
-                                          setEditingValues({ mes: 1, precio: "", alcance_editado: "", observaciones: "" });
-                                        }}
-                                        disabled={servicesSaving}
-                                        className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                                      >
-                                        Cancelar
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteProposal(row.id)}
-                                        disabled={deletingServiceId !== null}
-                                        className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        {deletingServiceId === row.id ? "Eliminando…" : "Eliminar"}
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-wrap gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditingServiceId(row.id);
-                                          setEditingValues({
-                                            mes: row.mes,
-                                            precio: row.precio != null ? String(row.precio) : "",
-                                            alcance_editado: row.alcance_editado?.trim() ?? "",
-                                            observaciones: row.observaciones?.trim() ?? "",
-                                          });
-                                        }}
-                                        className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                                      >
-                                        Editar
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteProposal(row.id)}
-                                        disabled={deletingServiceId !== null}
-                                        className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        {deletingServiceId === row.id ? "Eliminando…" : "Eliminar"}
-                                      </button>
-                                    </div>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <>
+                      <ProposalServicesTotalsSummary
+                        rows={leadServices}
+                        drafts={proposalRowDrafts}
+                        formatMoney={formatMoney}
+                      />
+                      <div className="space-y-5">
+                      {leadServices.map((row) => {
+                        const draft = proposalRowDrafts[row.id] ?? draftFromProposalRow(row);
+                        return (
+                          <ProposalServiceLineCard
+                            key={row.id}
+                            row={row}
+                            draft={draft}
+                            onDraftChange={(patch) =>
+                              setProposalRowDrafts((prev) => {
+                                const current = prev[row.id] ?? draftFromProposalRow(row);
+                                return { ...prev, [row.id]: { ...current, ...patch } };
+                              })
+                            }
+                            techOpen={!!proposalTechOpen[row.id]}
+                            onToggleTech={() =>
+                              setProposalTechOpen((prev) => ({ ...prev, [row.id]: !prev[row.id] }))
+                            }
+                            onSave={() => void saveProposalRow(row.id)}
+                            onDelete={() => void handleDeleteProposal(row.id)}
+                            servicesSaving={servicesSaving}
+                            deleting={deletingServiceId === row.id}
+                            formatMoney={formatMoney}
+                          />
+                        );
+                      })}
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -5204,7 +5327,9 @@ export default function LeadDetailPage() {
                   ) : (
                     <div className="mt-4 space-y-4">
                       {leadServices.map((row) => {
-                        const catalogService = servicesCatalog.find((c) => c.id === row.service_id);
+                        const catalogService = servicesCatalog.find(
+                          (c) => c.id === row.service_id || c.id === row.agency_service_id
+                        );
                         const copy = catalogService ? getServiceSalesCopy(catalogService, getLeadSignals(lead, leadServices)) : DEFAULT_SALES_COPY;
                         return (
                           <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">

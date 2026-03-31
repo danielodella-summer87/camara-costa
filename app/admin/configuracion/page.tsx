@@ -18,10 +18,38 @@ function ConfiguracionContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const tab = (searchParams.get("tab") as Tab) || "rubros";
+  const [activatingSetup, setActivatingSetup] = useState(false);
+  const [setupCreated, setSetupCreated] = useState<string[]>([]);
+  const [setupSkipped, setSetupSkipped] = useState<string[]>([]);
+  const [setupErr, setSetupErr] = useState<string | null>(null);
 
   const setTab = (newTab: Tab) => {
     router.push(`/admin/configuracion?tab=${newTab}`);
   };
+
+  async function activateMinimalSetup() {
+    setActivatingSetup(true);
+    setSetupCreated([]);
+    setSetupSkipped([]);
+    setSetupErr(null);
+    try {
+      const res = await fetch("/api/admin/setup/minimal-seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok === false) {
+        throw new Error(json?.error ?? "No se pudo ejecutar el setup mínimo.");
+      }
+      setSetupCreated(Array.isArray(json?.created) ? json.created.map(String) : []);
+      setSetupSkipped(Array.isArray(json?.skipped) ? json.skipped.map(String) : []);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "No se pudo ejecutar el setup mínimo.";
+      setSetupErr(msg);
+    } finally {
+      setActivatingSetup(false);
+    }
+  }
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "rubros", label: "Rubros" },
@@ -41,7 +69,33 @@ function ConfiguracionContent() {
               <p className="mt-1 text-sm text-slate-600">
                 Administrá los rubros, pipelines, estados, roles y comerciales del sistema.
               </p>
+              <p className="mt-2 text-xs text-slate-500">
+                Carga datos demo mínimos para activar la instancia.
+              </p>
+              {setupCreated.length > 0 ? (
+                <p className="mt-2 text-xs text-emerald-700">
+                  Creados: {setupCreated.join(" · ")}
+                </p>
+              ) : null}
+              {setupSkipped.length > 0 ? (
+                <p className="mt-1 text-xs text-slate-600">
+                  Omitidos: {setupSkipped.join(" · ")}
+                </p>
+              ) : null}
+              {setupErr ? <p className="mt-2 text-xs text-red-700">{setupErr}</p> : null}
             </div>
+            <button
+              type="button"
+              onClick={() => void activateMinimalSetup()}
+              disabled={activatingSetup}
+              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold text-white transition ${
+                activatingSetup
+                  ? "cursor-not-allowed bg-slate-400"
+                  : "bg-slate-900 hover:bg-slate-800"
+              }`}
+            >
+              {activatingSetup ? "Activando..." : "Activar datos de setup"}
+            </button>
           </div>
         </div>
 
@@ -81,6 +135,15 @@ function ConfiguracionContent() {
             <div className="text-sm font-semibold text-slate-900">Módulos y menú</div>
             <div className="mt-1 text-xs text-slate-600">
               Estado del menú lateral (activo, en preparación, oculto), iconos y etiquetas.
+            </div>
+          </Link>
+          <Link
+            href="/admin/configuracion/servicios"
+            className="rounded-2xl border bg-white p-4 hover:bg-slate-50 transition"
+          >
+            <div className="text-sm font-semibold text-slate-900">Servicios de la agencia</div>
+            <div className="mt-1 text-xs text-slate-600">
+              Catálogo maestro (precio, unidad, cantidad sugerida) usado al armar propuestas comerciales.
             </div>
           </Link>
         </div>

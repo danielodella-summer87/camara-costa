@@ -197,6 +197,10 @@ export function getLeadFlowSignals(
 
   const strategyApproved = isCommercialStrategyApproved(lead, documents);
 
+  const diagnosticDocUrl = typeof documents?.diagnostic === "string" ? documents.diagnostic.trim() : "";
+  const diagnosticFromDocuments =
+    Boolean(diagnosticDocUrl) && isOfficialCrmPersistedDocumentUrl(diagnosticDocUrl);
+
   // Una vez confirmada la propuesta económica, el siguiente paso es siempre generar el material final (Gamma/PDF).
   // No volver a mostrar "Acciones definidas" ni "Servicios": forzar acciones/servicios/propuesta = done.
   const accionesDone = hasProposalConfirmed ? true : strategyApproved ? true : accionesBase;
@@ -206,8 +210,8 @@ export function getLeadFlowSignals(
     lead: !!lead?.id,
     datos: datosCount >= 3,
     investigacion: rawReport.length > 50 || has("INVESTIGACION_DIGITAL") || has("REDES_SOCIALES"),
-    // vision_estrategica es contenido de estrategia, no de diagnóstico (evita “atascar” el flujo en diagnóstico).
-    diagnostico: has("FODA") || has("OPORTUNIDADES"),
+    // Documento diagnostic en lead_documents (p. ej. PDF Gamma o informe IA archivado como markdown) o tabs clásicos del informe.
+    diagnostico: diagnosticFromDocuments || has("FODA") || has("OPORTUNIDADES"),
     acciones: accionesDone,
     servicios: serviciosDoneFinal,
     propuesta: propuestaDoneFinal,

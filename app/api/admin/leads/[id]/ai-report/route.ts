@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
+import { randomUUID } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { updateLeadSafe } from "@/lib/leads/updateLeadSafe";
 import { getReportProfile } from "@/lib/ai/reportProfiles";
@@ -10,6 +11,15 @@ import {
   isMissingLeadsLinkedinPersonalColumn,
   leadsSelectWithLinkedinVariant,
 } from "@/lib/leads/linkedinLeadFields";
+import {
+  runLeadAiAnalysisControlled,
+  type ControlledPromptStepRecord,
+} from "@/lib/ai/runLeadAiAnalysisControlled";
+import type { LeadReportPromptShellCtx } from "@/lib/ai/leadReportPromptShell";
+import {
+  getStableArchivedDocumentUrlForType,
+  upsertLeadDocumentUrl,
+} from "@/lib/leads/leadDocuments";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -55,6 +65,12 @@ type LeadRow = {
   ai_context?: string | null;
   ai_report?: string | null;
   ai_report_updated_at?: string | null;
+  ai_generation_id?: string | null;
+  ai_status?: string | null;
+  ai_progress?: number | null;
+  ai_current_module?: string | null;
+  ai_started_at?: string | null;
+  ai_module_total?: number | null;
   ai_custom_prompt?: string | null;
   empresa_id?: string | null;
   initiative_kind?: string | null;
@@ -119,6 +135,15 @@ function extractUrls(text: string) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeLeadAiScore(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (Number.isNaN(n) || !isFinite(n)) return null;
+  const clamped = Math.max(0, Math.min(5, Math.round(n)));
+  if (!Number.isInteger(clamped) || clamped < 0 || clamped > 5) return null;
+  return clamped;
 }
 
 /**
@@ -521,10 +546,25 @@ type ActiveAIPromptRow = {
 
 type ProfileExecutionConfig = {
   basePrompt: string;
-  modules: Array<{ id: string; label: string; prompt: string }>;
+  modules: Array<{
+    id: string;
+    label: string;
+    prompt: string;
+    prompt_id: string;
+    execution_order: number;
+  }>;
   cierreOfertaPrincipal?: string | null;
   tipoOrganizacionVendedora?: string | null;
 };
+
+/** Alinea ids de reporte/config con ids del perfil (`toFlexibleModuleId` / TAB ids). */
+function normModuleIdForProfileMatch(id: string): string {
+  return String(id ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, "_")
+    .replace(/\s+/g, "_");
+}
 
 /** Módulos que reciben resumen de salidas previas (anti-redundancia en cadena). */
 const MODULE_IDS_WITH_ACCUMULATED_MEMORY = new Set([
@@ -669,18 +709,39 @@ function toFlexibleModuleId(name: string, id: string): string {
   return n || `prompt_${id.slice(0, 8)}`;
 }
 
+/** Misma semántica que CHECK en DB, tolerando mayúsculas/espacios en datos legados. */
+function isPromptStatusValidated(status: unknown): boolean {
+  return String(status ?? "").trim().toLowerCase() === "validated";
+}
+
+function iaPromptsDebug(label: string, payload: Record<string, unknown>) {
+  if (process.env.NODE_ENV === "production" && process.env.IA_PROMPTS_DEBUG !== "1") return;
+  console.log(`[IA PROMPTS DEBUG] ${label}`, payload);
+}
+
 async function getActiveAIPromptsFromDB(): Promise<ActiveAIPromptRow[]> {
   try {
     const sb = supabaseAdmin();
+    iaPromptsDebug("getActiveAIPromptsFromDB:query", {
+      table: "ai_prompts",
+      filter: "status ilike validated (case-insensitive)",
+    });
     const { data, error } = await sb
       .from("ai_prompts")
       .select("id,name,prompt_content,status")
-      .eq("status", "validated")
+      .ilike("status", "validated")
       .order("updated_at", { ascending: false });
+    iaPromptsDebug("getActiveAIPromptsFromDB:result", {
+      error: error?.message ?? null,
+      rowCount: Array.isArray(data) ? data.length : 0,
+      ids: Array.isArray(data) ? data.slice(0, 8).map((r: any) => r?.id) : [],
+    });
     if (error) return [];
     const rows = Array.isArray(data) ? data : [];
     return rows
-      .filter((r: any) => typeof r?.prompt_content === "string" && r.prompt_content.trim())
+      .filter(
+        (r: any) => isPromptStatusValidated(r?.status) && typeof r?.prompt_content === "string" && r.prompt_content.trim()
+      )
       .map((r: any) => ({
         id: String(r.id),
         name: String(r.name ?? "").trim() || "Prompt",
@@ -694,11 +755,22 @@ async function getActiveAIPromptsFromDB(): Promise<ActiveAIPromptRow[]> {
 async function getProfileExecutionConfig(profileId: string): Promise<ProfileExecutionConfig | null> {
   try {
     const sb = supabaseAdmin();
+    iaPromptsDebug("getProfileExecutionConfig:input", {
+      profile_id: profileId,
+      note: "No hay string de perfil tipo Easy/easy en el query; solo UUID de ai_analysis_profiles.",
+    });
+
     const { data: profile, error: profileError } = await sb
       .from("ai_analysis_profiles")
       .select("id,name,base_instructions,is_active,cierre_oferta_principal,tipo_organizacion_vendedora")
       .eq("id", profileId)
       .maybeSingle();
+
+    iaPromptsDebug("getProfileExecutionConfig:profileRow", {
+      error: profileError?.message ?? null,
+      profile_name: (profile as any)?.name ?? null,
+      is_active: (profile as any)?.is_active ?? null,
+    });
 
     if (profileError || !profile || profile.is_active !== true) return null;
 
@@ -719,22 +791,62 @@ async function getProfileExecutionConfig(profileId: string): Promise<ProfileExec
       .eq("enabled_by_default", true)
       .order("execution_order", { ascending: true });
 
+    iaPromptsDebug("getProfileExecutionConfig:profilePromptsQuery", {
+      error: promptsError?.message ?? null,
+      rawRowCount: Array.isArray(profilePrompts) ? profilePrompts.length : 0,
+    });
+
     if (promptsError) return null;
 
     const rows = Array.isArray(profilePrompts) ? profilePrompts : [];
+    const skipReasons: string[] = [];
     const modules = rows
       .map((row: any) => {
         const p = row?.ai_prompts;
-        if (!p || p.status !== "validated") return null;
+        const pid = row?.prompt_id ?? p?.id ?? "?";
+        if (!p) {
+          skipReasons.push(`prompt_id=${pid}: join ai_prompts vacío`);
+          return null;
+        }
+        if (!isPromptStatusValidated(p.status)) {
+          skipReasons.push(
+            `prompt_id=${pid} name=${String(p.name ?? "").slice(0, 40)}: status="${String(p.status)}" (requiere validated)`
+          );
+          return null;
+        }
         const promptText = typeof p.prompt_content === "string" ? p.prompt_content.trim() : "";
-        if (!promptText) return null;
+        if (!promptText) {
+          skipReasons.push(`prompt_id=${pid}: prompt_content vacío`);
+          return null;
+        }
+        const moduleId = toFlexibleModuleId(String(p.name ?? ""), String(p.id ?? row.prompt_id ?? ""));
+        const execOrderRaw = row?.execution_order;
+        const execution_order =
+          typeof execOrderRaw === "number" && Number.isFinite(execOrderRaw)
+            ? execOrderRaw
+            : parseInt(String(execOrderRaw ?? "0"), 10) || 0;
         return {
-          id: toFlexibleModuleId(String(p.name ?? ""), String(p.id ?? row.prompt_id ?? "")),
+          id: moduleId,
           label: String(p.name ?? "Prompt"),
           prompt: promptText,
+          prompt_id: String(p.id ?? row.prompt_id ?? ""),
+          execution_order,
         };
       })
-      .filter(Boolean) as Array<{ id: string; label: string; prompt: string }>;
+      .filter(Boolean) as Array<{
+        id: string;
+        label: string;
+        prompt: string;
+        prompt_id: string;
+        execution_order: number;
+      }>;
+
+    iaPromptsDebug("getProfileExecutionConfig:modulesResolved", {
+      count: modules.length,
+      moduleIds: modules.map((m) => m.id),
+      skipped: skipReasons.slice(0, 20),
+      skippedTotal: skipReasons.length,
+    });
 
     return {
       basePrompt: String(profile.base_instructions ?? "").trim(),
@@ -1379,13 +1491,24 @@ async function generateAiReportAI(
   customPrompts?: { base?: string; modules?: Record<string, string> },
   ctx?: ResolvedContext,
   moduleIdsToRun?: string[],
-  executionProfile?: ProfileExecutionConfig | null
+  executionProfile?: ProfileExecutionConfig | null,
+  onModuleProgress?: (info: {
+    moduleKey: string;
+    moduleLabel: string;
+    index: number;
+    total: number;
+    phase: "start" | "done";
+  }) => void | Promise<void>
 ): Promise<string> {
+  console.log("[AI] START generateAiReportAI", { leadId: lead.id });
+
   const apiKey = process.env.OPENAI_API_KEY;
   console.log("OPENAI_API_KEY presente:", Boolean(process.env.OPENAI_API_KEY));
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY no configurada");
   }
+
+  console.log("[AI] STEP 1 - preparing prompts");
 
   const ya_es_cliente_agencia = !!(lead as any)._ya_es_cliente_agencia;
   const contacts = (lead as any)._contacts ?? [];
@@ -1700,10 +1823,23 @@ Reglas finales:
   try {
     const moduleResults: string[] = [];
 
+    console.log("[AI] STEP 2 - calling OpenAI", { moduleCount: modules.length });
+
     // Generar cada módulo con una llamada separada a OpenAI
     for (let i = 0; i < modules.length; i++) {
       const module = modules[i];
+      const moduleKey = module.id;
       try {
+        if (onModuleProgress) {
+          await onModuleProgress({
+            moduleKey: module.id,
+            moduleLabel: String(module.label ?? module.id),
+            index: i,
+            total: modules.length,
+            phase: "start",
+          });
+        }
+        console.log("[AI] MODULE START", moduleKey);
         // Variables de cierre ({{...}}) desde perfil + frame extra si aplica
         let modulePromptOriginal = module.prompt;
         if (isCierreVentaModuleId(module.id)) {
@@ -1749,6 +1885,7 @@ Reglas finales:
           const moduleUserPrompt = extraInstruction
             ? `${baseModuleUserPrompt}\n\n**CORRECCIÓN OBLIGATORIA V2.3:**\n${extraInstruction}`
             : baseModuleUserPrompt;
+          console.log("[AI] OPENAI CALL START", { moduleKey: module.id });
           const response = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -1773,11 +1910,15 @@ Reglas finales:
           });
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            console.log("[AI] STEP 3 - parsing response", { moduleKey: module.id, ok: false });
+            console.log("[AI] OPENAI CALL END", { moduleKey: module.id, ok: false });
             throw new Error(`HTTP error módulo ${module.id}: ${JSON.stringify(errorData)}`);
           }
           const data = (await response.json()) as {
             choices?: Array<{ message?: { content?: string } }>;
           };
+          console.log("[AI] STEP 3 - parsing response", { moduleKey: module.id, ok: true });
+          console.log("[AI] OPENAI CALL END", { moduleKey: module.id, ok: true });
           return data?.choices?.[0]?.message?.content?.trim() ?? "";
         }
 
@@ -1786,6 +1927,7 @@ Reglas finales:
         if (!moduleContent) {
           console.warn(`[AI] Módulo ${module.id} devolvió contenido vacío`);
           moduleResults.push(`### TAB:${module.id}\n\nSin contenido generado.`);
+          console.log("[AI] MODULE DONE", moduleKey);
           continue;
         }
 
@@ -1801,6 +1943,7 @@ Reglas finales:
           const anchorStillMissing = !hasRequiredCierreOfferAnchor(moduleContent, executionProfile?.cierreOfertaPrincipal);
           if (anchorStillMissing) {
             moduleResults.push(`### TAB:${module.id}\n\n[INVALIDADO V2.3] El módulo no ancló el cierre a la oferta principal requerida.`);
+            console.log("[AI] MODULE DONE", moduleKey);
             continue;
           }
         }
@@ -1841,6 +1984,7 @@ Reglas finales:
             }
             if (maxAfter >= similarityThreshold) {
               moduleResults.push(`### TAB:${module.id}\n\n[INVALIDADO V2.3] Similitud excesiva con módulos previos (${maxAfter.toFixed(2)}).`);
+              console.log("[AI] MODULE DONE", moduleKey);
               continue;
             }
           }
@@ -1854,10 +1998,22 @@ Reglas finales:
 
         moduleResults.push(formattedContent);
         console.log(`[AI] Módulo ${module.id} generado: ${formattedContent.slice(0, 100)}...`);
+        console.log("[AI] MODULE DONE", moduleKey);
       } catch (moduleError: any) {
         console.error(`[AI] Error generando módulo ${module.id}:`, moduleError);
         // Agregar placeholder para este módulo
         moduleResults.push(`### TAB:${module.id}\n\nError generando este módulo: ${moduleError?.message ?? "Unknown error"}`);
+        console.log("[AI] MODULE DONE", moduleKey);
+      } finally {
+        if (onModuleProgress) {
+          await onModuleProgress({
+            moduleKey: module.id,
+            moduleLabel: String(module.label ?? module.id),
+            index: i,
+            total: modules.length,
+            phase: "done",
+          });
+        }
       }
     }
 
@@ -1875,8 +2031,11 @@ Reglas finales:
       ? `*Se aplicó personalización adicional: Sí*\n\n${finalReport}`
       : finalReport;
 
+    console.log("[AI] STEP 4 - saving report");
+    console.log("[AI] END generateAiReportAI", { leadId: lead.id });
     return finalReportWithNote;
   } catch (error: any) {
+    console.error("[AI] ERROR", error);
     throw new Error(`Error generando informe con IA: ${error?.message ?? "Unknown error"}`);
   }
 }
@@ -1946,6 +2105,11 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       return NextResponse.json({ data: null, error: "id requerido" } satisfies ApiResp<null>, { status: 400 });
     }
 
+    console.log("[IA CONTROLLED FLOW] request:start", {
+      leadId: id,
+      at: new Date().toISOString(),
+    });
+
     // Body opcional: puede incluir custom_prompt, personalization, force_regenerate, only_module y prompts personalizados
     const body = (await req.json().catch(() => null)) as
       | {
@@ -1955,6 +2119,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           force_regenerate?: boolean;
           only_module?: string | null;
           module_id?: string | null; // backward compatibility
+          /** Enviado por algún cliente por error; el route solo usa only_module / module_id. */
+          module?: string | null;
           profile?: string | null; // "comercial" | "tecnico"
           prompts?: {
             base?: string;
@@ -2019,20 +2185,62 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                              (typeof body?.custom_prompt === "string" ? body.custom_prompt.trim() : null);
 
     const profileIdForExecution = typeof body?.profile_id === "string" ? body.profile_id.trim() : "";
-    if (!profileIdForExecution) {
-      return NextResponse.json(
-        { data: null, error: "profile_id required" } satisfies ApiResp<null>,
-        { status: 400 }
-      );
+    /** Sin `profile_id`: modo simple (tipo prototipo estable) — generateAiReportAI sin executionProfile ni runner controlado. */
+    const isAdvancedEasyMode = profileIdForExecution.length > 0;
+
+    let executionProfile: ProfileExecutionConfig | null = null;
+    if (isAdvancedEasyMode) {
+      executionProfile = await getProfileExecutionConfig(profileIdForExecution);
+      if (!executionProfile) {
+        return NextResponse.json(
+          { data: null, error: "Perfil de análisis inválido o sin prompts activos" } satisfies ApiResp<null>,
+          { status: 400 }
+        );
+      }
     }
 
-    const executionProfile = await getProfileExecutionConfig(profileIdForExecution);
-    if (!executionProfile) {
-      return NextResponse.json(
-        { data: null, error: "Perfil de análisis inválido o sin prompts activos" } satisfies ApiResp<null>,
-        { status: 400 }
-      );
-    }
+    const envLeadAiControlled = process.env.LEAD_AI_CONTROLLED_FLOW;
+    const executionModulesCount = executionProfile?.modules?.length ?? 0;
+    const bodyModuleKeys =
+      body?.prompts?.modules && typeof body.prompts.modules === "object"
+        ? Object.keys(body.prompts.modules)
+        : [];
+    /** POST informe completo: controlled solo en modo avanzado, !only_module, env=1 y módulos en perfil. */
+    const fullGenerateControlledEligible =
+      isAdvancedEasyMode &&
+      !only_module &&
+      envLeadAiControlled === "1" &&
+      executionModulesCount > 0;
+
+    console.log("[IA CONTROLLED FLOW] pre-branch", {
+      api_mode: isAdvancedEasyMode ? "advanced" : "simple",
+      LEAD_AI_CONTROLLED_FLOW: envLeadAiControlled === undefined ? "(undefined)" : String(envLeadAiControlled),
+      only_module_resolved: only_module,
+      only_module_body: body?.only_module ?? null,
+      module_id_body: body?.module_id ?? null,
+      module_body_ignored_by_route: body?.module ?? null,
+      profile_id: profileIdForExecution || null,
+      executionProfile_modules_count: executionModulesCount,
+      force_regenerate: shouldRegenerate,
+      profile_ui: body?.profile ?? null,
+      prompts_modules_keys: bodyModuleKeys,
+      full_try_would_be: only_module
+        ? "skipped — only_module (rama parcial legacy)"
+        : !isAdvancedEasyMode
+          ? "simple — generateAiReportAI sin perfil"
+          : fullGenerateControlledEligible
+            ? "controlled"
+            : "legacy",
+      full_try_controlled_reason_if_legacy: only_module
+        ? "only_module presente"
+        : !isAdvancedEasyMode
+          ? "sin profile_id (modo simple)"
+          : envLeadAiControlled !== "1"
+            ? `LEAD_AI_CONTROLLED_FLOW !== "1" (actual: ${envLeadAiControlled === undefined ? "undefined" : JSON.stringify(envLeadAiControlled)})`
+            : executionModulesCount === 0
+              ? "executionProfile.modules.length === 0"
+              : "—",
+    });
 
     const profileId = String(body?.profile ?? "comercial").trim().toLowerCase();
     const reportProfile = getReportProfile(profileId);
@@ -2229,6 +2437,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     // Si hay only_module, generar solo ese módulo usando prompt recibido directamente
     if (only_module) {
+      console.log("[IA CONTROLLED FLOW] only_module:start", {
+        only_module,
+        profile_id: profileIdForExecution || null,
+        api_mode: isAdvancedEasyMode ? "advanced" : "simple",
+        note: "El runner controlado (prompt-a-prompt del perfil) no se usa en esta rama.",
+      });
       try {
         const parsedCustomPrompt = parseLeadCustomPrompt(leadRow.ai_custom_prompt);
         const requestedModuleKey = only_module;
@@ -2449,10 +2663,58 @@ ENTREGABLES:
       ? "🔄 FORCE REGENERATE: generando nuevo informe (force_regenerate=true)" 
       : "🆕 Generando nuevo informe (no hay informe previo)");
 
+    const generationId = randomUUID();
+    const acceptRes = await updateLeadSafe(
+      sb,
+      id,
+      {
+        ai_generation_id: generationId,
+        ai_status: "running",
+        ai_progress: 0,
+        ai_current_module: "Preparando…",
+        ai_started_at: nowIso(),
+      },
+      { force_unlink_entity: false }
+    );
+    if (acceptRes.error) throw acceptRes.error;
+
+    after(async () => {
+      const sbJob = supabaseAdmin();
+      const persistProgress = async (info: {
+        moduleKey: string;
+        moduleLabel: string;
+        index: number;
+        total: number;
+        phase: "start" | "done";
+      }) => {
+        const t = Math.max(1, info.total);
+        const progress =
+          info.phase === "start"
+            ? Math.round((info.index / t) * 100)
+            : Math.min(99, Math.round(((info.index + 1) / t) * 100));
+        const up = await updateLeadSafe(
+          sbJob,
+          id,
+          {
+            ai_progress: progress,
+            ai_current_module: info.moduleLabel,
+            ai_status: "running",
+            ai_module_total: info.total,
+          },
+          { force_unlink_entity: false }
+        );
+        if (up.error && process.env.NODE_ENV !== "production") {
+          console.warn("[AI async] progress update", up.error);
+        }
+      };
+
+      try {
     // Generar informe con IA, con fallback si falla
     let report: string;
     let aiContext: string;
     let generatedModuleIds: string[] = [];
+    /** Pasos del flujo controlado (solo si LEAD_AI_CONTROLLED_FLOW=1 y hay módulos de perfil). */
+    let controlledSteps: ControlledPromptStepRecord[] | undefined;
 
     try {
       const leadForAI = {
@@ -2464,59 +2726,175 @@ ENTREGABLES:
       (leadForAI as any)._contacts = contacts;
       (leadForAI as any)._ya_es_cliente_agencia = ya_es_cliente_agencia;
 
-      const availableModuleIds = Object.keys(effectivePrompts?.modules ?? {});
-      const availableByLower = new Map(availableModuleIds.map((k) => [k.toLowerCase(), k]));
-      let moduleIdsToGenerate = reportProfile.moduleIds
-        .map((id) => availableByLower.get(id.toLowerCase()))
-        .filter(Boolean) as string[];
-      const leadEmpresa = (leadRow as any)?.empresas as
-        | {
-            web?: string | null;
-            website?: string | null;
-            instagram?: string | null;
-            facebook?: string | null;
-            linkedin?: string | null;
+      const useControlledProfileFlow =
+        isAdvancedEasyMode &&
+        executionProfile !== null &&
+        process.env.LEAD_AI_CONTROLLED_FLOW === "1" &&
+        executionProfile.modules.length > 0;
+
+      const takingLabel = useControlledProfileFlow
+        ? "controlled"
+        : isAdvancedEasyMode
+          ? "legacy"
+          : "simple";
+      console.log(`[IA CONTROLLED FLOW] taking=${takingLabel}`, {
+        leadId: id,
+        profile_id: profileIdForExecution || null,
+        api_mode: isAdvancedEasyMode ? "advanced" : "simple",
+        executionProfile_modules: executionModulesCount,
+        LEAD_AI_CONTROLLED_FLOW: process.env.LEAD_AI_CONTROLLED_FLOW ?? null,
+      });
+
+      if (useControlledProfileFlow) {
+        const ep = executionProfile!;
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) throw new Error("OPENAI_API_KEY no configurada");
+        console.log("[IA CONTROLLED FLOW] before-runner", {
+          leadId: id,
+          profile_id: profileIdForExecution,
+          at: new Date().toISOString(),
+        });
+        const controlled = await runLeadAiAnalysisControlled({
+          apiKey,
+          lead: {
+            id: leadForAI.id,
+            custom_prompt: (leadForAI as { custom_prompt?: string | null }).custom_prompt ?? null,
+            empresas: (lead as any)?.empresas ?? null,
+          },
+          resolvedCtx: ctx as LeadReportPromptShellCtx,
+          contacts,
+          ya_es_cliente_agencia,
+          customPrompts: effectivePrompts ?? undefined,
+          executionProfile: {
+            basePrompt: ep.basePrompt,
+            modules: ep.modules.map((m) => ({
+              id: m.id,
+              label: m.label,
+              prompt: m.prompt,
+              prompt_id: m.prompt_id,
+              execution_order: m.execution_order,
+            })),
+            cierreOfertaPrincipal: ep.cierreOfertaPrincipal,
+            tipoOrganizacionVendedora: ep.tipoOrganizacionVendedora,
+          },
+          getPromptBase,
+          onModuleProgress: persistProgress,
+        });
+        console.log("[IA CONTROLLED FLOW] after-runner", {
+          leadId: id,
+          at: new Date().toISOString(),
+          reportChars: controlled.ai_report?.length ?? 0,
+          steps: controlled.steps?.length ?? 0,
+        });
+        report = controlled.ai_report;
+        controlledSteps = controlled.steps;
+        generatedModuleIds = ep.modules.map((m) => m.id);
+      } else {
+        console.log("[IA CONTROLLED FLOW] legacy:start", {
+          api_mode: isAdvancedEasyMode ? "advanced" : "simple",
+          reason: !isAdvancedEasyMode
+            ? "modo simple: generateAiReportAI sin executionProfile (sin profile_id)"
+            : process.env.LEAD_AI_CONTROLLED_FLOW !== "1"
+              ? `LEAD_AI_CONTROLLED_FLOW !== "1" (valor: ${process.env.LEAD_AI_CONTROLLED_FLOW === undefined ? "undefined" : JSON.stringify(process.env.LEAD_AI_CONTROLLED_FLOW)})`
+              : (executionProfile?.modules?.length ?? 0) === 0
+                ? "executionProfile.modules.length === 0"
+                : "legacy avanzado (runner controlado no aplica)",
+          executionProfile_modules_count: executionModulesCount,
+          profile_id: profileIdForExecution || null,
+        });
+        const availableModuleIds = Object.keys(effectivePrompts?.modules ?? {});
+        const availableByLower = new Map(availableModuleIds.map((k) => [k.toLowerCase(), k]));
+        let moduleIdsToGenerate = reportProfile.moduleIds
+          .map((id) => availableByLower.get(id.toLowerCase()))
+          .filter(Boolean) as string[];
+        const leadEmpresa = (leadRow as any)?.empresas as
+          | {
+              web?: string | null;
+              website?: string | null;
+              instagram?: string | null;
+              facebook?: string | null;
+              linkedin?: string | null;
+            }
+          | null
+          | undefined;
+        const hasWeb = Boolean(
+          leadEmpresa?.web ||
+            leadEmpresa?.website ||
+            (leadRow as any)?.website ||
+            leadRow?.website ||
+            leadEmpresa?.instagram ||
+            leadEmpresa?.facebook ||
+            leadEmpresa?.linkedin ||
+            leadRow?.linkedin_empresa ||
+            leadRow?.linkedin_director ||
+            leadRow?.linkedin_personal
+        );
+        const adHint = `${leadRow?.ai_context ?? ""} ${leadRow?.notas ?? ""} ${leadRow?.objetivos ?? ""}`.toLowerCase();
+        const hasPauta = Boolean(
+          (leadRow as any)?.pauta_publicitaria ||
+            (leadRow as any)?.ads ||
+            adHint.includes("ads") ||
+            adHint.includes("pauta") ||
+            adHint.includes("pixel") ||
+            adHint.includes("capi")
+        );
+        const shouldIncludeTech = hasWeb || hasPauta;
+        const filteredModuleIds = moduleIdsToGenerate.filter(
+          (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
+        );
+
+        const originalModules = filteredModuleIds;
+        let modulesToRun = originalModules;
+        let executionProfileForRun: ProfileExecutionConfig | null | undefined = executionProfile ?? undefined;
+
+        if (executionProfile && executionProfile.modules.length > 0) {
+          const profileModuleByNorm = new Map<string, ProfileExecutionConfig["modules"][number]>();
+          for (const m of executionProfile.modules) {
+            if (typeof m?.prompt !== "string" || !m.prompt.trim()) continue;
+            const k = normModuleIdForProfileMatch(m.id);
+            if (!profileModuleByNorm.has(k)) profileModuleByNorm.set(k, m);
           }
-        | null
-        | undefined;
-      const hasWeb = Boolean(
-        leadEmpresa?.web ||
-          leadEmpresa?.website ||
-          (leadRow as any)?.website ||
-          leadRow?.website ||
-          leadEmpresa?.instagram ||
-          leadEmpresa?.facebook ||
-          leadEmpresa?.linkedin ||
-          leadRow?.linkedin_empresa ||
-          leadRow?.linkedin_director ||
-          leadRow?.linkedin_personal
-      );
-      const adHint = `${leadRow?.ai_context ?? ""} ${leadRow?.notas ?? ""} ${leadRow?.objetivos ?? ""}`.toLowerCase();
-      const hasPauta = Boolean(
-        (leadRow as any)?.pauta_publicitaria ||
-        (leadRow as any)?.ads ||
-        adHint.includes("ads") ||
-        adHint.includes("pauta") ||
-        adHint.includes("pixel") ||
-        adHint.includes("capi")
-      );
-      const shouldIncludeTech = hasWeb || hasPauta;
-      const filteredModuleIds = moduleIdsToGenerate.filter(
-        (id) => shouldIncludeTech || !TECH_MODULE_IDS.includes(id as any)
-      );
-      generatedModuleIds = filteredModuleIds;
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[AI REPORT] modulesToRun", { shouldIncludeTech, hasWeb, hasPauta, count: filteredModuleIds.length, modulesToRun: filteredModuleIds });
+          modulesToRun = originalModules.filter((moduleId) =>
+            profileModuleByNorm.has(normModuleIdForProfileMatch(moduleId))
+          );
+          const reorderedModules = modulesToRun
+            .map((mid) => profileModuleByNorm.get(normModuleIdForProfileMatch(mid)))
+            .filter((x): x is ProfileExecutionConfig["modules"][number] => Boolean(x));
+          executionProfileForRun = { ...executionProfile, modules: reorderedModules };
+
+          console.log("[IA DEBUG SERVER] modules filtrados", {
+            totalOriginal: originalModules.length,
+            totalValidos: modulesToRun.length,
+            eliminados: originalModules.filter(
+              (m) => !profileModuleByNorm.has(normModuleIdForProfileMatch(m))
+            ),
+          });
+        }
+
+        generatedModuleIds = modulesToRun;
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[AI REPORT] modulesToRun", {
+            shouldIncludeTech,
+            hasWeb,
+            hasPauta,
+            count: modulesToRun.length,
+            modulesToRun,
+          });
+        }
+
+        console.log("[IA DEBUG SERVER] executionProfile", executionProfileForRun);
+        console.log("[IA DEBUG SERVER] modulesToRun", modulesToRun);
+
+        report = await generateAiReportAI(
+          leadForAI,
+          effectivePrompts ?? undefined,
+          ctx,
+          modulesToRun,
+          executionProfileForRun,
+          persistProgress
+        );
       }
 
-      report = await generateAiReportAI(
-        leadForAI,
-        effectivePrompts ?? undefined,
-        ctx,
-        filteredModuleIds,
-        executionProfile
-      );
-      // Construir contexto para guardar (usar contexto resuelto)
       aiContext = [
         `Nombre: ${ctx.nombre}`,
         `Origen: ${ctx.origen}`,
@@ -2529,7 +2907,11 @@ ENTREGABLES:
         `Oferta: ${ctx.oferta || "—"}`,
         `Notas: ${ctx.notas || "—"}`,
         cliente ? `Cliente: ${ctx.clienteHistorial || "—"}` : "",
-        `Generado con IA: ${new Date().toISOString()}`,
+        useControlledProfileFlow
+          ? `Flujo IA: controlado (LEAD_AI_CONTROLLED_FLOW). Generado: ${new Date().toISOString()}`
+          : !isAdvancedEasyMode
+            ? `Flujo IA: simple (sin profile_id). Generado: ${new Date().toISOString()}`
+            : `Generado con IA: ${new Date().toISOString()}`,
       ].filter(Boolean).join("\n");
     } catch (error: any) {
       // Fallback: generar informe técnico básico
@@ -2557,25 +2939,6 @@ ENTREGABLES:
         `Error IA: ${error?.message ?? "Unknown error"}`,
         `Generado con fallback: ${new Date().toISOString()}`,
       ].filter(Boolean).join("\n");
-    }
-
-    // Función para normalizar score (blindar contra valores inválidos)
-    // Asegura que siempre sea un entero entre 0-5 o null
-    function normalizeScore(raw: unknown): number | null {
-      if (raw === null || raw === undefined) return null;
-      
-      const n = Number(raw);
-      if (Number.isNaN(n) || !isFinite(n)) return null;
-      
-      // Forzar a entero y clamp a 0-5
-      const clamped = Math.max(0, Math.min(5, Math.round(n)));
-      
-      // Verificación final: debe ser entero entre 0-5
-      if (!Number.isInteger(clamped) || clamped < 0 || clamped > 5) {
-        return null;
-      }
-      
-      return clamped;
     }
 
     // Extraer score y categoría del informe IA
@@ -2608,7 +2971,7 @@ ENTREGABLES:
         // Aplicar clamp: Math.max(0, Math.min(5, score))
         const clamped = Math.max(0, Math.min(5, scoreValue));
         // Usar normalizeScore para validación final (asegura entero 0-5)
-        extractedScore = normalizeScore(clamped);
+        extractedScore = normalizeLeadAiScore(clamped);
         
         if (extractedScore !== null) {
           console.log(`✅ Score parseado: ${scoreValue}${scale === "10" ? "/10" : "/5"} → ${extractedScore}/5`);
@@ -2637,7 +3000,7 @@ ENTREGABLES:
 
     // Normalizar score antes de guardar (blindar contra valores inválidos)
     // Asegurar que sea un entero válido (0-5) o null
-    const normalizedScore = normalizeScore(extractedScore);
+    const normalizedScore = normalizeLeadAiScore(extractedScore);
     
     // Verificación final: score debe ser entero entre 0-5 o null
     // Si no se puede parsear, NO actualizar score (dejarlo null)
@@ -2663,6 +3026,9 @@ ENTREGABLES:
       ai_report: report, // report ya incluye la marca de debug (agregada en generateAiReportAI)
       ai_report_updated_at: nowIso(),
       updated_at: nowIso(),
+      ai_status: "completed",
+      ai_progress: 100,
+      ai_current_module: null,
       // Solo actualizar score si es válido (entero 0-5) o null
       // Si no se puede parsear, NO actualizar score (dejarlo null) y NO tirar error
       // Separar score y score_categoria para que puedan actualizarse independientemente
@@ -2672,42 +3038,67 @@ ENTREGABLES:
 
     // Usar helper seguro que preserva empresa_id
     // NOTA: patch puede incluir empresa_id si viene del body, pero normalmente no lo incluye
-    const updateResult = await updateLeadSafe(sb, id, patch, {
+    const updateResult = await updateLeadSafe(sbJob, id, patch, {
       force_unlink_entity: false, // Nunca desvincular al actualizar informe IA
     });
-    const updated = updateResult.data;
     const upErr = updateResult.error;
     if (upErr) throw upErr;
 
-    const row = (updated ?? null) as LeadRow | null;
+    const reportTrimmed = typeof report === "string" ? report.trim() : "";
+    if (reportTrimmed.length > 0) {
+      const existingDiagnostic = await getStableArchivedDocumentUrlForType(sbJob, id, "diagnostic");
+      if (!existingDiagnostic) {
+        const MAX_MARKDOWN_CHARS = 1_200_000;
+        const body =
+          reportTrimmed.length > MAX_MARKDOWN_CHARS
+            ? `${reportTrimmed.slice(0, MAX_MARKDOWN_CHARS)}\n\n_(Contenido truncado para almacenamiento en CRM.)_`
+            : reportTrimmed;
+        const diagnosticDataUrl = `data:text/markdown;charset=utf-8,${encodeURIComponent(body)}`;
+        const { error: diagDocErr } = await upsertLeadDocumentUrl(sbJob, id, "diagnostic", diagnosticDataUrl, null, {
+          source: "ai_report",
+          status: "archived",
+        });
+        if (diagDocErr) {
+          console.warn("[IA CONTROLLED FLOW] async-job:diagnostic-doc", { leadId: id, error: diagDocErr });
+        }
+      }
+    }
 
-    // Asegurar que siempre retornamos data.report con contenido (incluye marca de debug)
-    const finalReport = row?.ai_report ?? report;
+    console.log("[IA CONTROLLED FLOW] async-job:success", {
+      leadId: id,
+      at: new Date().toISOString(),
+      reportChars: report?.length ?? 0,
+    });
+      } catch (fatal: any) {
+        console.error("[IA CONTROLLED FLOW] async-job:fatal", fatal);
+        await updateLeadSafe(
+          sbJob,
+          id,
+          {
+            ai_status: "error",
+            ai_current_module: String(fatal?.message ?? "Error").slice(0, 400),
+          },
+          { force_unlink_entity: false }
+        );
+      }
+    });
 
     return NextResponse.json(
       {
-        data: row
-          ? {
-              id: row.id,
-              ai_context: row.ai_context ?? null,
-              report: finalReport,
-              ai_report: row.ai_report ?? null,
-              ai_report_updated_at: row.ai_report_updated_at ?? null,
-            }
-          : {
-              id: id,
-              ai_context: aiContext,
-              report: finalReport,
-              ai_report: finalReport,
-              ai_report_updated_at: nowIso(),
-            },
-        generated: generatedModuleIds,
-        profile: reportProfile.id,
+        data: {
+          generationId,
+          leadId: id,
+        },
+        async: true,
         error: null,
-      } satisfies ApiResp<any> & { generated?: string[]; profile?: string },
-      { status: 200 }
+      } satisfies ApiResp<{ generationId: string; leadId: string }> & { async: true },
+      { status: 202 }
     );
   } catch (e: any) {
+    console.log("[IA CONTROLLED FLOW] response:error", {
+      message: e?.message ?? String(e),
+      at: new Date().toISOString(),
+    });
     return NextResponse.json({ data: null, error: e?.message ?? "Error" } satisfies ApiResp<null>, { status: 500 });
   }
 }

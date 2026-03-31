@@ -12,6 +12,7 @@ import {
   type ProposalPayloadForGamma,
 } from "@/lib/ai/gammaPromptProfiles";
 import { buildProposalExportPayload } from "@/lib/leads/proposalExportPayload";
+import { LEAD_SERVICE_PROPOSALS_LIST_SELECT, mapLeadServiceProposalRows } from "@/lib/leads/mapLeadServiceProposalRows";
 
 export const dynamic = "force-dynamic";
 
@@ -72,27 +73,16 @@ export async function POST(
     const rubro = (empresa as any)?.rubros as { nombre?: string } | null;
     const proposalConfirmedAt = lead?.proposal_confirmed_at && String(lead.proposal_confirmed_at).trim() ? lead.proposal_confirmed_at : null;
 
-    let leadServices: Array<{ id: string; service_id: string; codigo?: string | null; nombre?: string | null; mes?: number; precio?: number | null; moneda?: string | null; alcance_editado?: string | null; observaciones?: string | null; billing_type?: string | null }> = [];
+    let leadServices = [] as ReturnType<typeof mapLeadServiceProposalRows>;
     try {
       const { data: svcRows } = await sb
         .from("lead_service_proposals")
-        .select("id,lead_id,service_id,mes,precio,moneda,alcance_editado,observaciones,orden,easy_services(codigo,nombre,billing_type)")
+        .select(LEAD_SERVICE_PROPOSALS_LIST_SELECT)
         .eq("lead_id", id)
         .order("mes", { ascending: true })
         .order("orden", { ascending: true });
       if (svcRows?.length) {
-        leadServices = (svcRows as any[]).map((r) => ({
-          id: r.id,
-          service_id: r.service_id,
-          codigo: r.easy_services?.codigo ?? null,
-          nombre: r.easy_services?.nombre ?? null,
-          mes: r.mes,
-          precio: r.precio,
-          moneda: r.moneda,
-          alcance_editado: r.alcance_editado,
-          observaciones: r.observaciones,
-          billing_type: r.easy_services?.billing_type ?? null,
-        }));
+        leadServices = mapLeadServiceProposalRows(svcRows);
       }
     } catch {
       // ignorar

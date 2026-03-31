@@ -48,6 +48,16 @@ export async function PATCH(
       precio?: number | null;
       alcance_editado?: string | null;
       observaciones?: string | null;
+      agency_snapshot?: {
+        service_id?: string;
+        name_snapshot?: string;
+        unit_price?: number;
+        quantity?: number;
+        total_price?: number;
+        unit?: string;
+        currency?: string;
+        notes?: string;
+      } | null;
     };
 
     const mes = typeof body?.mes === "number" ? body.mes : Number(body?.mes);
@@ -55,7 +65,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "mes debe ser un entero entre 1 y 24" }, { status: 400 });
     }
 
-    const precio = body?.precio != null ? Number(body.precio) : null;
+    let precio = body?.precio != null ? Number(body.precio) : null;
     const alcanceEditado = typeof body?.alcance_editado === "string" ? body.alcance_editado.trim() || null : null;
     const observaciones = typeof body?.observaciones === "string" ? body.observaciones.trim() || null : null;
 
@@ -63,7 +73,7 @@ export async function PATCH(
 
     const { data: existing, error: findErr } = await sb
       .from("lead_service_proposals")
-      .select("id")
+      .select("id,agency_service_id,proposal_line_snapshot")
       .eq("id", pId)
       .eq("lead_id", id)
       .maybeSingle();
@@ -75,6 +85,32 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: "Propuesta no encontrada" }, { status: 404 });
     }
 
+    let proposalLineSnapshot: Record<string, unknown> | null = null;
+    const agencyId = existing.agency_service_id as string | null;
+    if (agencyId && body.agency_snapshot && typeof body.agency_snapshot === "object") {
+      const a = body.agency_snapshot;
+      const unitPrice = Number(a.unit_price);
+      const quantity = Number(a.quantity);
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return NextResponse.json({ ok: false, error: "unit_price inválido" }, { status: 400 });
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        return NextResponse.json({ ok: false, error: "quantity debe ser > 0" }, { status: 400 });
+      }
+      const total = Number.isFinite(Number(a.total_price)) ? Number(a.total_price) : unitPrice * quantity;
+      proposalLineSnapshot = {
+        service_id: String(a.service_id ?? agencyId),
+        name_snapshot: typeof a.name_snapshot === "string" ? a.name_snapshot : "",
+        unit_price: unitPrice,
+        quantity,
+        total_price: total,
+        unit: typeof a.unit === "string" ? a.unit : "hour",
+        currency: typeof a.currency === "string" ? a.currency : "USD",
+        notes: typeof a.notes === "string" ? a.notes : "",
+      };
+      precio = total;
+    }
+
     const { data: row, error: updateErr } = await sb
       .from("lead_service_proposals")
       .update({
@@ -82,6 +118,7 @@ export async function PATCH(
         precio: precio ?? null,
         alcance_editado: alcanceEditado,
         observaciones,
+        ...(proposalLineSnapshot ? { proposal_line_snapshot: proposalLineSnapshot, moneda: String(proposalLineSnapshot.currency) } : {}),
       })
       .eq("id", pId)
       .eq("lead_id", id)

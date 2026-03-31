@@ -174,8 +174,13 @@ export function buildMonthlyTableFromDraft(
     totalsByMonth[m.key] = sum;
   }
   const grandTotal = Object.values(totalsByMonth).reduce((a, b) => a + b, 0);
-  const rows: ProposalExportRow[] = draft.rows.map((r) => {
-    const svc = leadServices.find((s) => s.id === r.proposalId || s.service_id === r.serviceId);
+    const rows: ProposalExportRow[] = draft.rows.map((r) => {
+    const svc = leadServices.find(
+      (s) =>
+        s.id === r.proposalId ||
+        (s.service_id && s.service_id === r.serviceId) ||
+        (s.agency_service_id && s.agency_service_id === r.serviceId)
+    );
     const rowTotal = Object.values(r.monthlyValues).reduce((a, b) => a + b, 0);
     return {
       proposalId: r.proposalId,
@@ -199,9 +204,10 @@ export function buildMonthlyTableFromLeadServices(
   const rows: ProposalExportRow[] = leadServices.map((s) => {
     const precio = Number(s.precio) || 0;
     grandTotal += precio;
+    const sid = safeStr(s.service_id) ?? safeStr(s.agency_service_id) ?? "";
     return {
       proposalId: s.id,
-      serviceId: s.service_id,
+      serviceId: sid,
       codigo: safeStr(s.codigo) ?? null,
       nombre: safeStr(s.nombre) ?? null,
       monthlyValues: { m1: precio },
@@ -265,7 +271,7 @@ export function buildProposalServices(
       : "—";
     return {
       proposalId: s.id,
-      serviceId: s.service_id,
+      serviceId: safeStr(s.service_id) ?? safeStr(s.agency_service_id) ?? "",
       codigo: safeStr(s.codigo) ?? null,
       nombre: safeStr(s.nombre) ?? null,
       billingType: safeStr(s.billing_type) ?? null,
@@ -289,7 +295,8 @@ export type BuildProposalPayloadLead = {
 /** Servicio de propuesta (lead_service_proposals + catálogo). */
 export type BuildProposalPayloadService = {
   id: string;
-  service_id: string;
+  service_id?: string | null;
+  agency_service_id?: string | null;
   codigo?: string | null;
   nombre?: string | null;
   mes?: number;

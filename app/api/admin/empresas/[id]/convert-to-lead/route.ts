@@ -30,6 +30,16 @@ function trimStr(v: unknown): string | null {
   return s.length ? s : null;
 }
 
+/** Valores alineados al CHECK `empresas_estado_revision_check` (p. ej. instancia EASY). */
+const ESTADOS_EMPRESA = {
+  NUEVA: "nueva",
+  IMPORTADA: "importada",
+  EN_REVISION: "en_revision",
+  APROBADA: "aprobada",
+  RECHAZADA: "rechazada",
+  CONVERTIDA: "convertida",
+} as const;
+
 function isMissingColumnError(message: string | undefined, table: string, column: string): boolean {
   const msg = (message ?? "").toLowerCase();
   return msg.includes(`could not find the '${column.toLowerCase()}' column of '${table.toLowerCase()}'`);
@@ -307,7 +317,7 @@ export async function POST(
       .from("empresas")
       .update({
         converted_lead_id: newLeadId,
-        estado_revision: "convertida_a_lead",
+        estado_revision: ESTADOS_EMPRESA.CONVERTIDA,
       })
       .eq("id", empresaId);
 

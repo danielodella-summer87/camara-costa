@@ -14,6 +14,7 @@ type LeadServiceRow = {
   moneda: string | null;
   alcance_editado: string | null;
   observaciones: string | null;
+  billing_type?: string | null;
 };
 
 type Props = {
@@ -200,6 +201,22 @@ export function Leads87ProposalWorkspace({
     proposalReviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  const phaseSummary = useMemo(() => {
+    const labels = {
+      "Diagnóstico y Base": 0,
+      Implementación: 0,
+      "Optimización y Crecimiento": 0,
+    } as Record<string, number>;
+    for (const r of rows) {
+      const bt = String(r.billing_type ?? "").toLowerCase();
+      const m = Number(r.mes) || 1;
+      const phase =
+        bt === "one_time" && m === 1 ? "Diagnóstico y Base" : bt === "monthly" ? "Optimización y Crecimiento" : "Implementación";
+      labels[phase] += 1;
+    }
+    return labels;
+  }, [rows]);
+
   return (
     <div id="leads87-proposal-flow" className="space-y-4">
       {commercialStrategyApproved ? (
@@ -245,17 +262,89 @@ export function Leads87ProposalWorkspace({
         </div>
       )}
 
+      {hasDoc ? (
+        <div id="leads87-proposal-review" ref={proposalReviewRef} className="space-y-4 scroll-mt-4">
+          {rows.length > 0 ? (
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Servicios incluidos (estructura actual)
+              </h3>
+              <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white">
+                <table className="min-w-full text-left text-xs text-slate-700">
+                  <thead className="sticky top-0 bg-slate-100 font-medium text-slate-600">
+                    <tr>
+                      <th className="px-2 py-1.5">Código</th>
+                      <th className="px-2 py-1.5">Servicio</th>
+                      <th className="px-2 py-1.5">Mes</th>
+                      <th className="px-2 py-1.5">Precio</th>
+                      <th className="px-2 py-1.5">Notas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.id} className="border-t border-slate-100">
+                        <td className="px-2 py-1.5">{r.codigo ?? "—"}</td>
+                        <td className="px-2 py-1.5">{r.nombre ?? "—"}</td>
+                        <td className="px-2 py-1.5">{r.mes}</td>
+                        <td className="px-2 py-1.5">
+                          {r.precio != null ? r.precio : "—"} {r.moneda?.trim() ?? ""}
+                        </td>
+                        <td className="px-2 py-1.5 text-slate-600">
+                          {[r.alcance_editado, r.observaciones].filter(Boolean).join(" · ") || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {inlineMarkdown ? (
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumen / narrativa del borrador</h3>
+              <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-slate-50/80 p-3">
+                <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-800">{inlineMarkdown}</pre>
+              </div>
+            </div>
+          ) : null}
+
+          {!inlineMarkdown && isHttpLike ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <p className="font-medium text-slate-800">Documento externo</p>
+              <p className="mt-1 text-xs text-slate-600">
+                La propuesta está guardada como enlace. Usá el paso 2/3 más abajo para abrirla si el enlace es válido.
+              </p>
+            </div>
+          ) : null}
+
+          {rows.length > 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fases de la propuesta</h3>
+              <p className="mt-2 space-y-1 text-sm text-slate-700">
+                {Object.entries(phaseSummary).map(([phase, n]) => (
+                  <span key={phase} className="block">
+                    <span className="font-medium text-slate-800">{phase}:</span> {n} servicio(s)
+                  </span>
+                ))}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {hasDoc && phase === "CREATED_REVIEW_PENDING" && !proposalReviewed && onMarkProposalReviewed ? (
         <div className="rounded-lg border-2 border-slate-200 bg-slate-50/90 p-4">
           <p className="text-sm font-semibold text-slate-900">Revisión de la propuesta — tres pasos en orden</p>
           <p className="mt-1 text-xs text-slate-600">
-            Solo el paso 3/3 cierra esta etapa y habilita la presentación comercial (paso 6).
+            Solo el paso 3/3 cierra esta etapa y habilita la presentación comercial (paso 6). El contenido del borrador quedó
+            arriba para revisarlo antes de confirmar.
           </p>
           <ol className="mt-4 list-none space-y-4 p-0">
             <li className="rounded-lg border border-slate-200 bg-white p-3">
               <p className="text-sm font-semibold text-slate-800">1/3 Revisar contenido en esta pantalla</p>
               <p className="mt-1 text-xs text-slate-600">
-                Validá la tabla de servicios y el resumen del borrador más abajo antes de abrir el archivo o confirmar.
+                Validá la tabla de servicios, la narrativa del borrador y las fases antes de abrir el archivo o confirmar.
               </p>
               <button
                 type="button"
@@ -315,64 +404,6 @@ export function Leads87ProposalWorkspace({
               {creating ? "Regenerando borrador…" : "Regenerar borrador (opcional)"}
             </button>
           </div>
-        </div>
-      ) : null}
-
-      {hasDoc ? (
-        <div id="leads87-proposal-review" ref={proposalReviewRef} className="space-y-4 scroll-mt-4">
-          {rows.length > 0 ? (
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Servicios incluidos (estructura actual)
-              </h3>
-              <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white">
-                <table className="min-w-full text-left text-xs text-slate-700">
-                  <thead className="sticky top-0 bg-slate-100 font-medium text-slate-600">
-                    <tr>
-                      <th className="px-2 py-1.5">Código</th>
-                      <th className="px-2 py-1.5">Servicio</th>
-                      <th className="px-2 py-1.5">Mes</th>
-                      <th className="px-2 py-1.5">Precio</th>
-                      <th className="px-2 py-1.5">Notas</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r) => (
-                      <tr key={r.id} className="border-t border-slate-100">
-                        <td className="px-2 py-1.5">{r.codigo ?? "—"}</td>
-                        <td className="px-2 py-1.5">{r.nombre ?? "—"}</td>
-                        <td className="px-2 py-1.5">{r.mes}</td>
-                        <td className="px-2 py-1.5">
-                          {r.precio != null ? r.precio : "—"} {r.moneda?.trim() ?? ""}
-                        </td>
-                        <td className="px-2 py-1.5 text-slate-600">
-                          {[r.alcance_editado, r.observaciones].filter(Boolean).join(" · ") || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
-
-          {inlineMarkdown ? (
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumen / narrativa del borrador</h3>
-              <div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-slate-50/80 p-3">
-                <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-800">{inlineMarkdown}</pre>
-              </div>
-            </div>
-          ) : null}
-
-          {!inlineMarkdown && isHttpLike ? (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              <p className="font-medium text-slate-800">Documento externo</p>
-              <p className="mt-1 text-xs text-slate-600">
-                La propuesta está guardada como enlace. Usá el paso 2/3 arriba para abrirla si el enlace es válido.
-              </p>
-            </div>
-          ) : null}
         </div>
       ) : null}
 

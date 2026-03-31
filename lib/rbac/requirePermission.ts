@@ -27,8 +27,12 @@ function getCookieFromHeader(cookieHeader: string | null, name: string) {
   return null;
 }
 
-export async function requirePermission(req: Request, permissionKey: string) {
-  const key = PERMISSION_ALIASES[permissionKey] ?? permissionKey;
+function resolvePermissionKey(permissionKey: string): string {
+  return PERMISSION_ALIASES[permissionKey] ?? permissionKey;
+}
+
+/** Usuario activo y claves de permiso efectivas del rol (sin comprobar una clave concreta). */
+async function loadUserWithPermissionKeys(req: Request): Promise<{ user: AppUser; keys: string[] } | null> {
   const sb = supabaseAdmin();
   if (!sb) return null;
 
@@ -75,7 +79,24 @@ export async function requirePermission(req: Request, permissionKey: string) {
 
   const keys = extractPermissionKeys(perms);
 
-  if (!keys.includes(key)) return null;
+  return { user: user as AppUser, keys };
+}
 
-  return user as AppUser;
+export async function requirePermission(req: Request, permissionKey: string) {
+  const ctx = await loadUserWithPermissionKeys(req);
+  if (!ctx) return null;
+  const key = resolvePermissionKey(permissionKey);
+  if (!ctx.keys.includes(key)) return null;
+  return ctx.user;
+}
+
+/**
+ * Autoriza si el usuario tiene al menos uno de los permisos indicados (tras aplicar alias).
+ */
+export async function requireAnyPermission(req: Request, permissionKeys: readonly string[]) {
+  const ctx = await loadUserWithPermissionKeys(req);
+  if (!ctx) return null;
+  const resolved = permissionKeys.map((k) => resolvePermissionKey(k));
+  if (!resolved.some((k) => ctx.keys.includes(k))) return null;
+  return ctx.user;
 }

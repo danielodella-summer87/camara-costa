@@ -34,6 +34,12 @@ type LeadMini = {
   notas?: string | null;
   ai_report?: string | null;
   ai_custom_prompt?: string | null;
+  ai_generation_id?: string | null;
+  ai_status?: string | null;
+  ai_progress?: number | null;
+  ai_current_module?: string | null;
+  ai_started_at?: string | null;
+  ai_module_total?: number | null;
 };
 
 type AiResp = {
@@ -71,6 +77,9 @@ type AnalysisProfileOption = {
 };
 
 const LEADS87_PRIMARY_PROFILE_NAME = "Agencia de Marketing / MODO EASY";
+
+/** Temporal: permite generar IA con solo `profile_id` aunque falte `config.ai_prompts_v1` con módulos. */
+const BYPASS_CONFIG_CHECK = true;
 
 function hasNonEmptyModuleValues(modules: Record<string, string> | undefined | null): boolean {
   if (!modules || typeof modules !== "object") return false;
@@ -415,7 +424,10 @@ export type AnalysisLifecyclePhase = "NOT_STARTED" | "PROCESSING" | "COMPLETED";
 
 function initialPhaseFromLead(lead: LeadMini | null | undefined): AnalysisLifecyclePhase {
   const r = (lead as any)?.ai_report ?? "";
-  return typeof r === "string" && r.trim() ? "COMPLETED" : "NOT_STARTED";
+  if (typeof r === "string" && r.trim()) return "COMPLETED";
+  const st = String((lead as any)?.ai_status ?? "").toLowerCase();
+  if (st === "running" || st === "pending") return "PROCESSING";
+  return "NOT_STARTED";
 }
 
 export function AiLeadReport({
@@ -567,6 +579,10 @@ export function AiLeadReport({
   const [gammaError, setGammaError] = useState<string | null>(null);
   const [gammaGenerationId, setGammaGenerationId] = useState<string | null>(null);
   const [analysisStartedAt, setAnalysisStartedAt] = useState<number | null>(null);
+  /** ETA devuelta por GET …/ai-report/status (segundos). */
+  const [serverEtaSeconds, setServerEtaSeconds] = useState<number | null>(null);
+  const aiReportPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const aiReportResumeKeyRef = useRef<string>("");
   const moduleRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const modulePanelRef = useRef<HTMLDivElement | null>(null);
@@ -581,6 +597,137 @@ export function AiLeadReport({
     const totalEstimated = elapsed / (analysisPercent / 100);
     return Math.max(1, Math.round(totalEstimated - elapsed));
   }, [isProcessingPhase, analysisStartedAt, analysisPercent]);
+
+  const analysisEtaSeconds = useMemo(() => {
+    if (serverEtaSeconds != null && serverEtaSeconds > 0) return serverEtaSeconds;
+    return analysisEstimatedRemaining;
+  }, [serverEtaSeconds, analysisEstimatedRemaining]);
+
+  const stopAiReportPolling = useCallback(() => {
+    if (aiReportPollRef.current) {
+      clearInterval(aiReportPollRef.current);
+      aiReportPollRef.current = null;
+    }
+  }, []);
+
+  const pollAiReportUntilDone = useCallback(
+    async (generationId?: string | null) => {
+      if (!leadId?.trim()) return;
+      stopAiReportPolling();
+
+      const runTick = async () => {
+        const q = generationId
+          ? `?generationId=${encodeURIComponent(generationId)}`
+          : "";
+        const res = await fetch(`/api/admin/leads/${leadId}/ai-report/status${q}`, {
+          cache: "no-store",
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          status?: string;
+          progress?: number;
+          currentModule?: string;
+          estimatedTime?: number | null;
+          totalModules?: number | null;
+          error?: string;
+        };
+        if (!res.ok) {
+          if (json?.error) setError(json.error);
+          return;
+        }
+        const total = json.totalModules;
+        if (typeof total === "number" && total > 0) setAnalysisTotalModules(total);
+        const p = Math.min(100, Math.max(0, Math.round(Number(json.progress) ?? 0)));
+        setAnalysisProgress(p);
+        setAnalysisCurrentModule(json.currentModule?.trim() || "En progreso…");
+        setServerEtaSeconds(
+          typeof json.estimatedTime === "number" && json.estimatedTime >= 0 ? json.estimatedTime : null
+        );
+
+        if (json.status === "completed") {
+          stopAiReportPolling();
+          setAiLoading(false);
+          setGenerationProfileActive(null);
+          setAnalysisStartedAt(null);
+          setServerEtaSeconds(null);
+          setAnalysisProgress(100);
+          setAnalysisCurrentModule(moduleCompleteLabel);
+          try {
+            const rr = await fetch(`/api/admin/leads/${leadId}/ai-report`, { cache: "no-store" });
+            const rj = (await rr.json().catch(() => ({}))) as {
+              data?: { report?: string | null; ai_report?: string | null };
+            };
+            const txt = rj?.data?.report ?? rj?.data?.ai_report ?? "";
+            if (typeof txt === "string" && txt.trim()) setReport(txt);
+          } catch {
+            /* ignore */
+          }
+          setStatus("done");
+          setAnalysisPhase("COMPLETED");
+          setReportExpanded(true);
+          setAiDoneMsg("✅ Informe IA completo.");
+          onReportGenerated?.();
+          return;
+        }
+
+        if (json.status === "error") {
+          stopAiReportPolling();
+          setAiLoading(false);
+          setGenerationProfileActive(null);
+          setAnalysisStartedAt(null);
+          setServerEtaSeconds(null);
+          setError(json.currentModule || "Error en la generación del informe IA");
+          setStatus("idle");
+          const hadReport = String(lead?.ai_report ?? "").trim().length > 0;
+          setAnalysisPhase(hadReport ? "COMPLETED" : "NOT_STARTED");
+        }
+      };
+
+      await runTick();
+      aiReportPollRef.current = setInterval(runTick, 1500);
+    },
+    [leadId, lead?.ai_report, moduleCompleteLabel, onReportGenerated, stopAiReportPolling]
+  );
+
+  useEffect(() => {
+    return () => stopAiReportPolling();
+  }, [stopAiReportPolling]);
+
+  /** Recarga con generación en curso: reanudar polling desde BD. */
+  useEffect(() => {
+    const st = String(lead?.ai_status ?? "").toLowerCase();
+    const hasRep = String(lead?.ai_report ?? "").trim().length > 0;
+    if (!leadId?.trim() || hasRep || (st !== "running" && st !== "pending")) {
+      aiReportResumeKeyRef.current = "";
+      return;
+    }
+    const key = `${leadId}:${String(lead?.ai_generation_id ?? "")}:${st}`;
+    if (aiReportResumeKeyRef.current === key) return;
+    aiReportResumeKeyRef.current = key;
+    setAnalysisPhase("PROCESSING");
+    setAiLoading(true);
+    setGenerationProfileActive(reportProfile);
+    setAnalysisStartedAt(
+      lead?.ai_started_at ? Date.parse(String(lead.ai_started_at)) || Date.now() : Date.now()
+    );
+    if (typeof lead?.ai_module_total === "number" && lead.ai_module_total > 0) {
+      setAnalysisTotalModules(lead.ai_module_total);
+    }
+    const pr = Math.min(100, Math.max(0, Math.round(Number(lead?.ai_progress) || 0)));
+    setAnalysisProgress(pr);
+    setAnalysisCurrentModule(String(lead?.ai_current_module ?? "").trim() || "En progreso…");
+    void pollAiReportUntilDone(lead?.ai_generation_id ?? null);
+  }, [
+    leadId,
+    lead?.ai_status,
+    lead?.ai_report,
+    lead?.ai_generation_id,
+    lead?.ai_started_at,
+    lead?.ai_progress,
+    lead?.ai_current_module,
+    lead?.ai_module_total,
+    reportProfile,
+    pollAiReportUntilDone,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1040,13 +1187,15 @@ export function AiLeadReport({
     return () => cancelAnimationFrame(t);
   }, [isProcessingPhase, executionScrollRef]);
 
-  /** Sincronizar COMPLETED desde el lead salvo durante PROCESSING. */
+  /** Sincronizar fase desde el lead; si ya hay informe, siempre COMPLETED. */
   useEffect(() => {
     setAnalysisPhase((prev) => {
+      const next = initialPhaseFromLead(lead);
+      if (next === "COMPLETED") return "COMPLETED";
       if (prev === "PROCESSING") return prev;
-      return initialPhaseFromLead(lead);
+      return next;
     });
-  }, [leadId, (lead as any)?.ai_report]);
+  }, [leadId, lead?.ai_report, lead?.ai_status]);
 
   // Inicializar report desde el lead cuando se carga o cambia
   useEffect(() => {
@@ -1269,14 +1418,34 @@ export function AiLeadReport({
   ): Promise<{ ok: boolean; report?: string; error?: string }> => {
     if (!leadId?.trim()) return { ok: false, error: "Sin leadId" };
 
-    const promptsData = await resolveIaPromptsForExecution();
-    if (!promptsData || !hasNonEmptyModuleValues(promptsData.prompts.modules)) {
+    const promptsDataRaw = await resolveIaPromptsForExecution();
+    const hasServerModules =
+      !!promptsDataRaw?.prompts?.modules && hasNonEmptyModuleValues(promptsDataRaw.prompts.modules);
+
+    if (!hasServerModules && !BYPASS_CONFIG_CHECK) {
       return {
         ok: false,
         error:
           "No hay prompts de módulos en el servidor. Guardá la configuración en Admin → Configuración → IA y reintentá.",
       };
     }
+
+    if (!hasServerModules && BYPASS_CONFIG_CHECK) {
+      console.log("[IA DEBUG UI] usando profile_id sin config", {
+        profile_id: selectedProfileId,
+        bypass: BYPASS_CONFIG_CHECK,
+      });
+    }
+
+    const promptsData: ClientAiPromptsBundle = hasServerModules
+      ? promptsDataRaw!
+      : {
+          prompts: {
+            base: promptsDataRaw?.prompts?.base,
+            modules: {},
+          },
+          meta: promptsDataRaw?.meta ?? { updated_at: {} },
+        };
 
     const customPromptValue = typeof moduleCustomPromptOverride === "string"
       ? (moduleCustomPromptOverride.trim() || null)
@@ -1296,6 +1465,11 @@ export function AiLeadReport({
       },
       prompts_meta: promptsData.meta,
     };
+
+    {
+      const { profile_id, prompts, prompts_meta } = body;
+      console.log("[IA DEBUG UI] payload", { profile_id, prompts, prompts_meta });
+    }
 
     if (process.env.NODE_ENV !== "production") {
       const activeTabConfig = visibleTabs.find((t) => t.tabId === tabId) ?? TABS_CONFIG.find((t) => t.tabId === tabId);
@@ -1361,10 +1535,6 @@ export function AiLeadReport({
 
   const runFullAiGeneration = async () => {
     if (!leadId?.trim()) return;
-    if (!selectedProfileId) {
-      alert("Selecciona un perfil de análisis");
-      return;
-    }
 
     const rollbackNotStarted = () => {
       setAnalysisPhase("NOT_STARTED");
@@ -1394,8 +1564,12 @@ export function AiLeadReport({
       return;
     }
 
-    const promptsData = await resolveIaPromptsForExecution();
-    if (!promptsData?.prompts?.modules || !hasNonEmptyModuleValues(promptsData.prompts.modules)) {
+    /** Contrato mínimo → API en modo simple (sin profile_id): generateAiReportAI sin perfil de análisis. `force_regenerate: false` reutiliza informe si ya existe. */
+    const promptsDataRaw = await resolveIaPromptsForExecution();
+    const hasServerModules =
+      !!promptsDataRaw?.prompts?.modules && hasNonEmptyModuleValues(promptsDataRaw.prompts.modules);
+
+    if (!hasServerModules && !BYPASS_CONFIG_CHECK) {
       setError(
         "No hay prompts de módulos en el servidor. Guardá la configuración en Admin → Configuración → IA (persistida en base de datos) y recargá esta página."
       );
@@ -1403,97 +1577,95 @@ export function AiLeadReport({
       return;
     }
 
-    const profile = getReportProfile(reportProfile);
-    // Orden del catálogo + perfil; solo módulos con prompt no vacío en la config del servidor (no depende de visibleTabs ni de localStorage).
-    const tabsWithPrompts = TABS_CONFIG.filter(
-      (tab) =>
-        profile.moduleIds.includes(tab.tabId) &&
-        getModulePromptForTab(tab.tabId, promptsData.prompts.modules).trim().length > 0
-    );
-    let moduleIdsToRun = tabsWithPrompts.map((t) => t.tabId);
-    const emp = (lead as any)?.empresas;
-    const hasWeb = Boolean(
-      lead?.website || emp?.web || emp?.website || emp?.instagram || emp?.facebook ||
-      (lead as any)?.linkedin_empresa ||
-      (lead as any)?.linkedin_personal ||
-      (lead as any)?.linkedin_director
-    );
-    const adHint = `${lead?.objetivos ?? ""} ${lead?.notas ?? ""} ${(lead as any)?.ai_context ?? ""}`.toLowerCase();
-    const hasPauta = adHint.includes("ads") || adHint.includes("pauta") || adHint.includes("pixel") || adHint.includes("capi");
-    const shouldIncludeTech = hasWeb || hasPauta;
-    const filteredIds = moduleIdsToRun.filter((id) => {
-      const normalized = id.toLowerCase();
-      return shouldIncludeTech || !TECH_MODULE_IDS.includes(normalized as any);
-    });
-
-    const uiModuleOrder = filteredIds
-      .map((id) => tabsWithPrompts.find((t) => t.tabId === id))
-      .filter(Boolean) as typeof TABS_CONFIG;
-    if (uiModuleOrder.length === 0) {
-      setError("Ningún módulo para generar. Revisá la config IA.");
-      rollbackNotStarted();
-      return;
+    const personalizationText = aiPromptExtra?.trim() || null;
+    const fullReportBody: Record<string, unknown> = {
+      force_regenerate: false,
+      profile: reportProfile,
+    };
+    if (personalizationText) {
+      fullReportBody.personalization = personalizationText;
+      fullReportBody.custom_prompt = personalizationText;
     }
 
-    setModuleStatus(() => {
-      const next: Record<string, "idle" | "running" | "done" | "error"> = {};
-      filteredIds.forEach((id) => (next[id] = "idle"));
-      return next;
+    setModuleStatus({});
+    setAnalysisCurrentModule("Generando informe completo…");
+    setAnalysisTotalModules(1);
+    setAnalysisProgress(5);
+
+    console.log("[IA CONTROLLED FLOW UI] full-report:start", {
+      endpoint: `/api/admin/leads/${leadId}/ai-report`,
+      api_body_mode: "simple",
+      profile_ui: reportProfile,
+      profile_id_in_body: false,
+      force_regenerate: false,
+      has_personalization: !!personalizationText,
+      only_module_in_body: false,
     });
 
-    const totalModules = uiModuleOrder.length;
-    setAnalysisStartedAt(Date.now());
-    setAnalysisTotalModules(totalModules);
-    setAnalysisProgress(0);
-    setAnalysisCurrentModule(uiModuleOrder[0]?.label ?? "Preparando…");
-
-    const firstTab = uiModuleOrder[0];
-    setActiveReportTab(firstTab.id);
-
-    let currentReport = report;
-    for (let i = 0; i < uiModuleOrder.length; i++) {
-      const tab = uiModuleOrder[i];
-      setAnalysisCurrentModule(tab.label);
-      setAnalysisProgress(totalModules > 0 ? Math.round((i / totalModules) * 100) : 0);
-      setModuleStatus((s) => ({ ...s, [tab.tabId]: "running" }));
-      setActiveReportTab(tab.id);
-      // Importante: en corrida completa, cada módulo usa su propio prompt (sin heredar prompt activo global).
-      const result = await regenerateSingleModule(tab.tabId, null);
-      if (result.ok && result.report) {
-        currentReport = result.report;
-        setReport(currentReport);
-        setModuleStatus((s) => ({ ...s, [tab.tabId]: "done" }));
-      } else {
-        setModuleStatus((s) => ({ ...s, [tab.tabId]: "error" }));
-        if (result.error) setError(result.error);
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/ai-report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fullReportBody),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Error generando informe IA");
       }
-      setAnalysisProgress(totalModules > 0 ? Math.round(((i + 1) / totalModules) * 100) : 0);
-    }
+      const data = (await res.json()) as {
+        data?: { report?: string; ai_report?: string | null };
+        report?: string;
+        generated?: string[];
+      };
+      const updatedReport = String(
+        data.data?.report ?? data.data?.ai_report ?? data.report ?? ""
+      );
+      setReport(updatedReport);
 
-    const visionInProfile = uiModuleOrder.some(
-      (tab) => tab.tabId.toLowerCase() === VISION_TAB_ID.toLowerCase()
-    );
-    if (visionInProfile) {
-      setActiveReportTab(VISION_TAB_ID);
-    } else if (uiModuleOrder.length > 0) {
-      setActiveReportTab(uiModuleOrder[uiModuleOrder.length - 1].id);
-    }
-    /** Foco en el bloque de ejecución / resultado, no en «Módulos del análisis». */
-    requestAnimationFrame(() => {
-      executionScrollRef?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+      const generated = data.generated;
+      if (Array.isArray(generated) && generated.length > 0) {
+        setModuleStatus((s) => {
+          const next = { ...s };
+          generated.forEach((id) => {
+            next[id] = "done";
+          });
+          return next;
+        });
+      }
 
-    setAnalysisProgress(100);
-    setAnalysisCurrentModule(moduleCompleteLabel);
-    setAiDoneMsg("✅ Informe IA completo.");
-    setStatus("done");
-    setAnalysisPhase("COMPLETED");
-    setGenerationProfileActive(null);
-    setAiLoading(false);
-    setAnalysisStartedAt(null);
-    onReportGenerated?.();
-    if (!guidedStep1Mode) {
-      setReportExpanded(true);
+      const profileDef = getReportProfile(reportProfile);
+      const visionInProfile = profileDef.moduleIds.some(
+        (id) => id.toLowerCase() === VISION_TAB_ID.toLowerCase()
+      );
+      if (visionInProfile) {
+        setActiveReportTab(VISION_TAB_ID);
+      } else {
+        const firstModuleId = profileDef.moduleIds[0];
+        const firstTab = TABS_CONFIG.find((t) => t.tabId === firstModuleId);
+        if (firstTab) setActiveReportTab(firstTab.id);
+      }
+
+      requestAnimationFrame(() => {
+        executionScrollRef?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+
+      setAnalysisProgress(100);
+      setAnalysisCurrentModule(moduleCompleteLabel);
+      setAiDoneMsg("✅ Informe IA completo.");
+      setStatus("done");
+      setAnalysisPhase("COMPLETED");
+      onReportGenerated?.();
+      if (!guidedStep1Mode) {
+        setReportExpanded(true);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Error generando informe IA";
+      setError(msg);
+      rollbackNotStarted();
+    } finally {
+      setGenerationProfileActive(null);
+      setAiLoading(false);
+      setAnalysisStartedAt(null);
     }
   };
 
@@ -1514,6 +1686,7 @@ export function AiLeadReport({
     setAnalysisCurrentModule("Generando informe completo…");
     onBeginAnalysisGeneration?.();
 
+    let acceptedAsyncJob = false;
     try {
       setError(null);
       setStatus("generating");
@@ -1543,9 +1716,25 @@ export function AiLeadReport({
       };
 
       const serverPrompts = await resolveIaPromptsForExecution();
-      if (serverPrompts && hasNonEmptyModuleValues(serverPrompts.prompts.modules)) {
+      const hasServerModules =
+        !!serverPrompts?.prompts?.modules && hasNonEmptyModuleValues(serverPrompts.prompts.modules);
+
+      if (BYPASS_CONFIG_CHECK && !hasServerModules) {
+        console.log("[IA DEBUG UI] usando profile_id sin config", {
+          profile_id: selectedProfileId,
+          bypass: BYPASS_CONFIG_CHECK,
+        });
+      }
+
+      if (serverPrompts && hasServerModules) {
         body.prompts = serverPrompts.prompts as AiPromptsPayload;
       }
+
+      console.log("[IA DEBUG UI] payload", {
+        profile_id: body.profile_id,
+        prompts: body.prompts,
+        prompts_meta: serverPrompts?.meta,
+      });
 
       console.log("[AI] llamando endpoint", `/api/admin/leads/${leadId}/ai-report`);
       
@@ -1558,6 +1747,21 @@ export function AiLeadReport({
       });
 
       console.log("[AI] fetch enviado", res.status);
+
+      if (res.status === 202) {
+        const data = (await res.json().catch(() => ({}))) as {
+          data?: { generationId?: string; leadId?: string };
+          error?: string | null;
+        };
+        if (data?.error) throw new Error(data.error);
+        const genId = data?.data?.generationId ?? null;
+        setServerEtaSeconds(null);
+        setAnalysisTotalModules(0);
+        aiReportResumeKeyRef.current = `${leadId}:${String(genId ?? "")}:running`;
+        acceptedAsyncJob = true;
+        void pollAiReportUntilDone(genId);
+        return;
+      }
 
       if (!res.ok) {
         const text = await res.text();
@@ -1578,9 +1782,11 @@ export function AiLeadReport({
       const hadReportFromLead = String((lead as any)?.ai_report ?? "").trim().length > 0;
       setAnalysisPhase(hadReportFromLead ? "COMPLETED" : "NOT_STARTED");
     } finally {
-      setAiLoading(false);
-      setGenerationProfileActive(null);
-      setAnalysisStartedAt(null);
+      if (!acceptedAsyncJob) {
+        setAiLoading(false);
+        setGenerationProfileActive(null);
+        setAnalysisStartedAt(null);
+      }
     }
   };
 
@@ -1716,9 +1922,9 @@ export function AiLeadReport({
               <h3 className="text-base font-semibold tracking-tight text-slate-900">
                 {generationProfileActive === "tecnico" ? ui.genTech : ui.genCommercial}
               </h3>
-              <p className="mt-1 text-sm text-slate-600">Esto puede tardar unos segundos</p>
+              <p className="mt-1 text-sm text-slate-600">Generación en segundo plano; podés recargar la página sin perder el avance.</p>
               <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
-                {analysisTotalModules <= 0 ? (
+                {analysisTotalModules <= 0 && analysisPercent <= 0 ? (
                   <div className="h-full w-2/5 animate-pulse rounded-full bg-blue-500" />
                 ) : (
                   <div
@@ -1732,16 +1938,16 @@ export function AiLeadReport({
                   />
                 )}
               </div>
-              {analysisTotalModules > 0 && (
+              {(analysisTotalModules > 0 || analysisPercent > 0) && (
                 <p className="mt-2 text-xs font-semibold text-slate-700">{analysisPercent}% completado</p>
               )}
               {analysisCurrentModule && analysisPercent < 100 && (
                 <p className="mt-1.5 text-xs font-medium text-slate-700">Módulo actual: {analysisCurrentModule}</p>
               )}
-              {analysisTotalModules > 0 && analysisPercent < 100 && (
+              {analysisPercent < 100 && (
                 <p className="mt-1 text-xs text-slate-500">
-                  {analysisEstimatedRemaining != null
-                    ? `Tiempo estimado restante: ${formatTime(analysisEstimatedRemaining)}`
+                  {analysisEtaSeconds != null && analysisEtaSeconds > 0
+                    ? `Tiempo estimado restante: ${formatTime(analysisEtaSeconds)}`
                     : "Calculando tiempo estimado…"}
                 </p>
               )}
@@ -1803,7 +2009,7 @@ export function AiLeadReport({
                 <button
                   type="button"
                   onClick={runFullAiGeneration}
-                  disabled={loadingProfiles || !selectedProfileId}
+                  disabled={loadingProfiles}
                   className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Analizar
@@ -1814,7 +2020,7 @@ export function AiLeadReport({
             <button
               type="button"
               onClick={runFullAiGeneration}
-              disabled={loadingProfiles || !selectedProfileId}
+              disabled={loadingProfiles}
               className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Analizar
