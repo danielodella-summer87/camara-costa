@@ -23,8 +23,10 @@ export default function EmpresasPage() {
                   (solo en esta pantalla).
                 </li>
                 <li>
-                  En cada fila hay un único botón verde <strong className="font-medium text-slate-800">Convertir a Lead</strong>
-                  , más <strong className="font-medium text-slate-800">Descartar</strong> y{" "}
+                  En cada fila hay un único botón verde{" "}
+                  <strong className="font-medium text-slate-800">Convertir a Lead</strong>, más{" "}
+                  <strong className="font-medium text-slate-800">Descartar</strong>,{" "}
+                  <strong className="font-medium text-slate-800">Editar</strong> (datos básicos en modal) y{" "}
                   <strong className="font-medium text-slate-800">Detalle</strong>.
                 </li>
                 <li>

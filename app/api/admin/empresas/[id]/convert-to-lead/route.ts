@@ -4,6 +4,10 @@ import {
   findActiveLeadIdForInitiative,
   getAllowMultipleLeadsPerInitiative,
 } from "@/lib/leads/initiativeLeadPolicy";
+import {
+  ESTADO_REVISION_TRAS_CONVERTIR_A_LEAD,
+  normalizeEstadoRevisionLectura,
+} from "@/lib/crm/iniciativaEstadoRevision";
 
 export const dynamic = "force-dynamic";
 
@@ -29,16 +33,6 @@ function trimStr(v: unknown): string | null {
   const s = v.trim();
   return s.length ? s : null;
 }
-
-/** Valores alineados al CHECK `empresas_estado_revision_check` (p. ej. instancia EASY). */
-const ESTADOS_EMPRESA = {
-  NUEVA: "nueva",
-  IMPORTADA: "importada",
-  EN_REVISION: "en_revision",
-  APROBADA: "aprobada",
-  RECHAZADA: "rechazada",
-  CONVERTIDA: "convertida",
-} as const;
 
 function isMissingColumnError(message: string | undefined, table: string, column: string): boolean {
   const msg = (message ?? "").toLowerCase();
@@ -170,8 +164,7 @@ export async function POST(
       );
     }
 
-    const rev = (empresa.estado_revision ?? "").trim().toLowerCase();
-    if (rev === "descartada") {
+    if (normalizeEstadoRevisionLectura(empresa.estado_revision) === "descartado") {
       return NextResponse.json(
         { error: "No se puede convertir una iniciativa descartada." },
         { status: 400 }
@@ -317,7 +310,7 @@ export async function POST(
       .from("empresas")
       .update({
         converted_lead_id: newLeadId,
-        estado_revision: ESTADOS_EMPRESA.CONVERTIDA,
+        estado_revision: ESTADO_REVISION_TRAS_CONVERTIR_A_LEAD,
       })
       .eq("id", empresaId);
 

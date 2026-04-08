@@ -5,6 +5,7 @@ import {
   isStartupInitiativeKind,
   normalizeInitiativeKind,
 } from "@/lib/crm/initiativeKind";
+import { normalizeEstadoRevisionLectura } from "@/lib/crm/iniciativaEstadoRevision";
 
 export const dynamic = "force-dynamic";
 
@@ -136,7 +137,7 @@ function normalizeEmpresaRow(row: any) {
     created_at: row.created_at ?? null,
     updated_at: row.updated_at ?? null,
 
-    estado_revision: row.estado_revision ?? null,
+    estado_revision: normalizeEstadoRevisionLectura(row.estado_revision),
     fuente_remota: row.fuente_remota ?? null,
     score_preliminar: row.score_preliminar ?? null,
     converted_lead_id: row.converted_lead_id ?? null,

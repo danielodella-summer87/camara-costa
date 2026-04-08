@@ -5,6 +5,7 @@ import {
   isStartupInitiativeKind,
   normalizeInitiativeKind,
 } from "@/lib/crm/initiativeKind";
+import { normalizeEstadoRevisionLectura } from "@/lib/crm/iniciativaEstadoRevision";
 
 function supabaseAdmin() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -97,6 +98,10 @@ export async function GET(req: Request, ctx: Ctx) {
       );
     }
 
+    (data as { estado_revision?: string | null }).estado_revision = normalizeEstadoRevisionLectura(
+      (data as { estado_revision?: string | null }).estado_revision
+    );
+
     // Si tiene import_batch_id, traer los datos del batch
     if (data.import_batch_id) {
       const { data: batchData, error: batchError } = await supabase
@@ -121,15 +126,6 @@ export async function GET(req: Request, ctx: Ctx) {
     );
   }
 }
-
-const ESTADO_REVISION_ALLOWED = new Set([
-  "nueva",
-  "importada",
-  "en_revision",
-  "validada",
-  "descartada",
-  "convertida_a_lead",
-]);
 
 type EmpresaPatchInput = {
   nombre?: string;
@@ -227,13 +223,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     if (body.estado_revision !== undefined) {
       const er = cleanStr(body.estado_revision);
-      if (er && !ESTADO_REVISION_ALLOWED.has(er)) {
-        return NextResponse.json(
-          { data: null, error: "estado_revision no válido" },
-          { status: 400, headers: { "Cache-Control": "no-store" } }
-        );
-      }
-      update.estado_revision = er;
+      update.estado_revision = er === null ? null : normalizeEstadoRevisionLectura(er);
     }
     if (body.fuente_remota !== undefined) {
       update.fuente_remota = cleanStr(body.fuente_remota);

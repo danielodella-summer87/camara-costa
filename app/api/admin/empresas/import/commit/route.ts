@@ -269,7 +269,7 @@ export async function POST(req: NextRequest) {
         web: normalizeWebsite(row.web),
         instagram: cleanStr(row.instagram),
         import_batch_id: batch.id,
-        estado_revision: "importada",
+        estado_revision: "nuevo",
         fuente_remota: fuenteRemotaImport,
       });
     });

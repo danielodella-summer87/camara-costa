@@ -5,9 +5,12 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import RubroSelect from "../RubroSelect";
 import {
-  ESTADOS_REVISION_INICIATIVA,
-  badgeClassEstadoRevision,
+  EMPRESAS_ESTADO_REVISION_VALIDOS,
+  badgeClassEstadoRevisionVisible,
+  coerceEstadoRevisionParaEscritura,
   labelEstadoRevisionIniciativa,
+  labelEstadoRevisionIniciativaVisible,
+  normalizeEstadoRevisionLectura,
 } from "@/lib/crm/iniciativaEstadoRevision";
 import { linkedinExternalHref } from "@/lib/social/linkedinUrl";
 import {
@@ -251,7 +254,7 @@ export default function EmpresaDetailPage() {
         | typeof INITIATIVE_KIND_STANDARD
         | typeof INITIATIVE_KIND_STARTUP,
       project_description: empresa.project_description ?? "",
-      estado_revision: (empresa.estado_revision ?? "en_revision") as Empresa["estado_revision"],
+      estado_revision: coerceEstadoRevisionParaEscritura(empresa.estado_revision) as Empresa["estado_revision"],
       fuente_remota: empresa.fuente_remota ?? "",
       score_preliminar:
         empresa.score_preliminar != null && !Number.isNaN(empresa.score_preliminar)
@@ -291,7 +294,10 @@ export default function EmpresaDetailPage() {
       descripcion: normalizeStr(draft.descripcion),
       initiative_kind: kind,
       project_description: kind === INITIATIVE_KIND_STARTUP ? projRaw || null : normalizeStr(draft.project_description as unknown as string),
-      estado_revision: typeof draft.estado_revision === "string" ? draft.estado_revision : undefined,
+      estado_revision:
+        typeof draft.estado_revision === "string"
+          ? normalizeEstadoRevisionLectura(draft.estado_revision)
+          : undefined,
       fuente_remota: normalizeStr(draft.fuente_remota as unknown as string),
       score_preliminar: (() => {
         const v = draft.score_preliminar as number | string | null | undefined;
@@ -405,9 +411,9 @@ export default function EmpresaDetailPage() {
   }
 
   const disabled = loading || mutating;
-  const revision = (empresa?.estado_revision ?? "").trim().toLowerCase();
-  const cannotConvertToLead = revision === "descartada" || revision === "convertida_a_lead";
   const convertedLeadId = empresa?.converted_lead_id?.trim() || null;
+  const revisionNorm = empresa ? normalizeEstadoRevisionLectura(empresa.estado_revision) : "nuevo";
+  const cannotConvertToLead = revisionNorm === "descartado" || Boolean(convertedLeadId);
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6">
@@ -423,9 +429,9 @@ export default function EmpresaDetailPage() {
             {empresa && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span
-                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${badgeClassEstadoRevision(empresa.estado_revision)}`}
+                  className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${badgeClassEstadoRevisionVisible(empresa.estado_revision, empresa.converted_lead_id)}`}
                 >
-                  {labelEstadoRevisionIniciativa(empresa.estado_revision)}
+                  {labelEstadoRevisionIniciativaVisible(empresa.estado_revision, empresa.converted_lead_id)}
                 </span>
                 {empresa.fuente_remota?.trim() ? (
                   <span className="text-xs text-slate-500">Fuente: {empresa.fuente_remota.trim()}</span>
@@ -474,9 +480,9 @@ export default function EmpresaDetailPage() {
                       disabled={disabled || !empresa || cannotConvertToLead}
                       title={
                         cannotConvertToLead
-                          ? revision === "descartada"
+                          ? revisionNorm === "descartado"
                             ? "Iniciativa descartada: no se puede convertir a lead."
-                            : "Ya convertida a lead: usá «Abrir lead vinculado»."
+                            : "Ya hay lead vinculado: usá «Abrir lead vinculado»."
                           : "Crear lead comercial con snapshot de esta iniciativa"
                       }
                     >
@@ -626,7 +632,7 @@ export default function EmpresaDetailPage() {
                   <Field label="Dirección" value={empresa.direccion ?? "—"} />
                   <Field
                     label="Estado de revisión"
-                    value={labelEstadoRevisionIniciativa(empresa.estado_revision)}
+                    value={labelEstadoRevisionIniciativaVisible(empresa.estado_revision, empresa.converted_lead_id)}
                   />
                   <Field label="Fuente remota" value={empresa.fuente_remota?.trim() || "—"} />
                   <Field
@@ -746,28 +752,22 @@ export default function EmpresaDetailPage() {
                   <div className="rounded-xl border p-4 md:col-span-2">
                     <div className="text-xs font-semibold text-slate-600 mb-2">Estado de revisión</div>
                     <select
-                      value={(draft.estado_revision as string) ?? "en_revision"}
+                      value={coerceEstadoRevisionParaEscritura(draft.estado_revision as string | null | undefined)}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, estado_revision: e.target.value }))
                       }
-                      disabled={disabled || revision === "convertida_a_lead"}
+                      disabled={disabled || Boolean(convertedLeadId)}
                       className="w-full max-w-md rounded-xl border px-3 py-2 text-sm disabled:opacity-50"
                     >
-                      {ESTADOS_REVISION_INICIATIVA.map((k) => (
-                        <option
-                          key={k}
-                          value={k}
-                          disabled={
-                            k === "convertida_a_lead" && revision !== "convertida_a_lead"
-                          }
-                        >
+                      {EMPRESAS_ESTADO_REVISION_VALIDOS.map((k) => (
+                        <option key={k} value={k}>
                           {labelEstadoRevisionIniciativa(k)}
                         </option>
                       ))}
                     </select>
-                    {revision === "convertida_a_lead" ? (
+                    {convertedLeadId ? (
                       <p className="mt-1 text-xs text-slate-500">
-                        Convertida a lead: el estado queda fijado salvo corrección en base de datos.
+                        Vinculada a un lead: el estado de revisión queda fijado.
                       </p>
                     ) : null}
                   </div>

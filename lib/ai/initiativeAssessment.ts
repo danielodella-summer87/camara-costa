@@ -65,9 +65,10 @@ function hasContexto(r: InitiativeAssessmentInput): boolean {
 function estadoCerrado(
   r: InitiativeAssessmentInput
 ): "convertida" | "descartada" | null {
+  if (trim(r.converted_lead_id)) return "convertida";
   const k = trim(r.estado_revision).toLowerCase();
-  if (k === "descartada") return "descartada";
-  if (k === "convertida_a_lead" || trim(r.converted_lead_id)) return "convertida";
+  if (k === "descartada" || k === "descartado") return "descartada";
+  if (k === "convertida_a_lead" || k === "convertida") return "convertida";
   return null;
 }
 

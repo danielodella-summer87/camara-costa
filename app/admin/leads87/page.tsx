@@ -478,29 +478,22 @@ function leadLabel(l: LeadOption): string {
 
 /** Siguiente acción recomendada para un lead (solo con datos del listado). */
 function getNextAction(l: LeadOption): { action: string; href: string } {
-  const estado = getLeadEstadoVisual(l);
   const { stage } = getLeadFlowSnapshot(l);
   const baseHref = `/admin/leads87/${encodeURIComponent(l.id)}`;
-
-  if (estado === "bloqueado") {
-    return { action: "Resolver bloqueo", href: baseHref };
+  switch (stage) {
+    case "diagnostico":
+      return { action: "Generar estrategia", href: baseHref };
+    case "estrategia":
+      return { action: "Definir servicios", href: baseHref };
+    case "servicios":
+      return { action: "Armar propuesta", href: baseHref };
+    case "propuesta":
+      return { action: "Preparar presentación", href: baseHref };
+    case "presentacion":
+      return { action: "Cerrar negocio", href: baseHref };
+    default:
+      return { action: "Continuar proceso", href: baseHref };
   }
-  if (stage === "lead" || stage === "investigacion") {
-    return { action: "Completar investigación", href: baseHref };
-  }
-  if (stage === "diagnostico") {
-    return { action: "Completar diagnóstico", href: baseHref };
-  }
-  if (stage === "estrategia") {
-    return { action: "Completar estrategia", href: baseHref };
-  }
-  if (stage === "servicios") {
-    return { action: "Definir estructura de servicios", href: baseHref };
-  }
-  if (stage === "propuesta" || stage === "presentacion" || stage === "cierre") {
-    return { action: "Continuar propuesta / presentación", href: baseHref };
-  }
-  return { action: "Continuar proceso", href: baseHref };
 }
 
 function NextActionPanel({

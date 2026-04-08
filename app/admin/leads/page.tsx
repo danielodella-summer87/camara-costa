@@ -7,8 +7,8 @@ import { PageContainer } from "@/components/layout/PageContainer";
 import { usePermissions } from "@/lib/rbac/usePermissions";
 import { getLeadFlowSteps, getCurrentFlowStep, getLeadFlowProgressPercent, getLeadNextAction, LEAD_FLOW_LABELS } from "@/lib/leads/leadFlow";
 import {
-  badgeClassEstadoRevision,
-  labelEstadoRevisionIniciativa,
+  badgeClassEstadoRevisionVisible,
+  labelEstadoRevisionIniciativaVisible,
 } from "@/lib/crm/iniciativaEstadoRevision";
 
 type Lead = {
@@ -335,9 +335,9 @@ function IniciativaSelectorModal({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="font-semibold text-slate-900">{e.nombre ?? "—"}</div>
                     <span
-                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badgeClassEstadoRevision(e.estado_revision)}`}
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badgeClassEstadoRevisionVisible(e.estado_revision, e.converted_lead_id)}`}
                     >
-                      {labelEstadoRevisionIniciativa(e.estado_revision)}
+                      {labelEstadoRevisionIniciativaVisible(e.estado_revision, e.converted_lead_id)}
                     </span>
                   </div>
                   <div className="mt-1 text-sm text-slate-600">

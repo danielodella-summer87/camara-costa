@@ -3,14 +3,22 @@
  * La prioridad comercial asistida vive en `lib/ai/initiativeAssessment.ts`.
  */
 
+import { normalizeEstadoRevisionLectura } from "@/lib/crm/iniciativaEstadoRevision";
+
 export type DecisionBucket = "nuevo" | "revisado" | "convertido" | "descartado";
 
 /** Agrupa `estado_revision` del backend en 4 estados visuales para decisión comercial. */
-export function decisionBucketFromEstado(estado_revision: string | null | undefined): DecisionBucket {
-  const k = (estado_revision ?? "").trim().toLowerCase();
-  if (k === "convertida_a_lead") return "convertido";
-  if (k === "descartada") return "descartado";
-  if (k === "en_revision" || k === "validada") return "revisado";
+export function decisionBucketFromEstado(
+  estado_revision: string | null | undefined,
+  converted_lead_id?: string | null
+): DecisionBucket {
+  const raw = (estado_revision ?? "").trim().toLowerCase();
+  if (converted_lead_id?.trim() || raw === "convertida_a_lead") {
+    return "convertido";
+  }
+  const k = normalizeEstadoRevisionLectura(estado_revision);
+  if (k === "descartado") return "descartado";
+  if (k === "revisado") return "revisado";
   return "nuevo";
 }
 
@@ -43,19 +51,22 @@ export type FiltroIniciativaBucket = "" | "nuevos" | "revisados" | "convertidos"
 
 export function matchesFiltroBucket(
   estado_revision: string | null | undefined,
-  filtro: FiltroIniciativaBucket
+  filtro: FiltroIniciativaBucket,
+  converted_lead_id?: string | null
 ): boolean {
   if (!filtro) return true;
-  const k = (estado_revision ?? "").trim().toLowerCase();
+  const raw = (estado_revision ?? "").trim().toLowerCase();
+  const tieneLead = Boolean(converted_lead_id?.trim()) || raw === "convertida_a_lead";
+  const k = normalizeEstadoRevisionLectura(estado_revision);
   switch (filtro) {
     case "nuevos":
-      return k === "nueva" || k === "importada" || k === "";
+      return k === "nuevo" && !tieneLead;
     case "revisados":
-      return k === "en_revision" || k === "validada";
+      return k === "revisado" && !tieneLead;
     case "convertidos":
-      return k === "convertida_a_lead";
+      return tieneLead;
     case "descartados":
-      return k === "descartada";
+      return k === "descartado";
     default:
       return true;
   }

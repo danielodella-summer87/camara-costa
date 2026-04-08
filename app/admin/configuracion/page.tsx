@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { PageContainer } from "@/components/layout/PageContainer";
 import RubrosTab from "./components/RubrosTab";
@@ -19,6 +19,8 @@ function ConfiguracionContent() {
   const router = useRouter();
   const tab = (searchParams.get("tab") as Tab) || "rubros";
   const [activatingSetup, setActivatingSetup] = useState(false);
+  const [setupCompleted, setSetupCompleted] = useState<boolean>(false);
+  const [setupStatusLoaded, setSetupStatusLoaded] = useState(false);
   const [setupCreated, setSetupCreated] = useState<string[]>([]);
   const [setupSkipped, setSetupSkipped] = useState<string[]>([]);
   const [setupErr, setSetupErr] = useState<string | null>(null);
@@ -26,6 +28,22 @@ function ConfiguracionContent() {
   const setTab = (newTab: Tab) => {
     router.push(`/admin/configuracion?tab=${newTab}`);
   };
+
+  async function loadSetupStatus() {
+    try {
+      const res = await fetch("/api/admin/setup/minimal-seed", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json?.ok === true) {
+        setSetupCompleted(Boolean(json?.setup_completed));
+      }
+    } finally {
+      setSetupStatusLoaded(true);
+    }
+  }
+
+  useEffect(() => {
+    void loadSetupStatus();
+  }, []);
 
   async function activateMinimalSetup() {
     setActivatingSetup(true);
@@ -43,6 +61,7 @@ function ConfiguracionContent() {
       }
       setSetupCreated(Array.isArray(json?.created) ? json.created.map(String) : []);
       setSetupSkipped(Array.isArray(json?.skipped) ? json.skipped.map(String) : []);
+      setSetupCompleted(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "No se pudo ejecutar el setup mínimo.";
       setSetupErr(msg);
@@ -84,18 +103,20 @@ function ConfiguracionContent() {
               ) : null}
               {setupErr ? <p className="mt-2 text-xs text-red-700">{setupErr}</p> : null}
             </div>
-            <button
-              type="button"
-              onClick={() => void activateMinimalSetup()}
-              disabled={activatingSetup}
-              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold text-white transition ${
-                activatingSetup
-                  ? "cursor-not-allowed bg-slate-400"
-                  : "bg-slate-900 hover:bg-slate-800"
-              }`}
-            >
-              {activatingSetup ? "Activando..." : "Activar datos de setup"}
-            </button>
+            {setupStatusLoaded && !setupCompleted ? (
+              <button
+                type="button"
+                onClick={() => void activateMinimalSetup()}
+                disabled={activatingSetup}
+                className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold text-white transition ${
+                  activatingSetup
+                    ? "cursor-not-allowed bg-slate-400"
+                    : "bg-slate-900 hover:bg-slate-800"
+                }`}
+              >
+                {activatingSetup ? "Activando..." : "Activar datos de setup"}
+              </button>
+            ) : null}
           </div>
         </div>
 

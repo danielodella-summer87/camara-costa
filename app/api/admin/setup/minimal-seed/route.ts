@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { requirePermission } from "@/lib/rbac/requirePermission";
+import { requireAnyPermission } from "@/lib/rbac/requirePermission";
+import { getInternalUserIdFromRequest } from "@/lib/auth/server";
 
 export const dynamic = "force-dynamic";
 
@@ -9,11 +10,6 @@ function supabaseAdmin() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   if (!url || !key) throw new Error("Faltan env de Supabase");
   return createClient(url, key, { auth: { persistSession: false } });
-}
-
-async function allowDevOrRequire(req: NextRequest, perm: string) {
-  if (process.env.NODE_ENV !== "production") return { id: "dev" };
-  return await requirePermission(req, perm);
 }
 
 type SeedStatus = "created" | "existing";
@@ -212,12 +208,66 @@ async function getOrCreateRole(sb: ReturnType<typeof supabaseAdmin>): Promise<Se
   return { table: "agency_roles", id: String(ins.data.id), status: "created" };
 }
 
-export async function POST(req: NextRequest) {
-  const user = await allowDevOrRequire(req, "config.update");
-  if (!user) return NextResponse.json({ ok: false, error: "No autorizado" }, { status: 403 });
+async function loadSetupCompleted(sb: ReturnType<typeof supabaseAdmin>): Promise<boolean> {
+  const cfg = await sb
+    .from("public_config")
+    .select("value")
+    .eq("key", "setup_completed")
+    .maybeSingle();
+  if (cfg.error) throw new Error(`public_config: ${cfg.error.message}`);
+  return String(cfg.data?.value ?? "").trim().toLowerCase() === "true";
+}
 
+async function markSetupCompleted(sb: ReturnType<typeof supabaseAdmin>): Promise<void> {
+  const upsert = await sb
+    .from("public_config")
+    .upsert({ key: "setup_completed", value: "true" }, { onConflict: "key" });
+  if (upsert.error) throw new Error(`public_config upsert: ${upsert.error.message}`);
+}
+
+async function requireSetupAccess(req: NextRequest) {
+  const userId = await getInternalUserIdFromRequest();
+  if (!userId) {
+    return { ok: false as const, status: 401 as const, error: "No autenticado" };
+  }
+
+  const allowed = await requireAnyPermission(req, ["config.update", "config.admin"]);
+  if (!allowed) {
+    return { ok: false as const, status: 403 as const, error: "No autorizado" };
+  }
+  return { ok: true as const };
+}
+
+export async function GET(req: NextRequest) {
   try {
     const sb = supabaseAdmin();
+    const auth = await requireSetupAccess(req);
+    if (!auth.ok) return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+
+    const setupCompleted = await loadSetupCompleted(sb);
+    return NextResponse.json({ ok: true, setup_completed: setupCompleted });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Error";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const sb = supabaseAdmin();
+    const auth = await requireSetupAccess(req);
+    if (!auth.ok) return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+
+    const alreadyCompleted = await loadSetupCompleted(sb);
+    if (alreadyCompleted) {
+      return NextResponse.json({
+        ok: true,
+        message: "Setup ya ejecutado",
+        created: [],
+        skipped: ["setup_completed ya estaba en true"],
+      });
+    }
+
     const touched: SeedItem[] = [];
 
     const rubro = await getOrCreateRubro(sb);
@@ -262,8 +312,11 @@ export async function POST(req: NextRequest) {
       .filter((t) => t.status === "existing")
       .map((t) => `${labelByTable[t.table] ?? `${t.table} demo`} ya existía`);
 
+    await markSetupCompleted(sb);
+
     return NextResponse.json({
       ok: true,
+      message: "Setup mínimo ejecutado",
       created,
       skipped,
       touched,

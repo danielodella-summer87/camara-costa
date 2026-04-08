@@ -19,6 +19,10 @@ import {
   matchesFiltroBucket,
   type FiltroIniciativaBucket,
 } from "./iniciativaListUi";
+import { normalizeEstadoRevisionLectura } from "@/lib/crm/iniciativaEstadoRevision";
+import EditarIniciativaModal, {
+  type IniciativaBasicSavePayload,
+} from "@/components/iniciativas/editar-iniciativa-modal";
 
 type Empresa = {
   id: string;
@@ -30,6 +34,7 @@ type Empresa = {
   telefono: string | null;
   email: string | null;
   web: string | null;
+  contacto_nombre?: string | null;
   instagram?: string | null;
   celular?: string | null;
   contacto_email?: string | null;
@@ -68,7 +73,7 @@ const FILTRO_CHIPS: { id: FiltroIniciativaBucket; label: string }[] = [
 ];
 
 const GRID_HEAD =
-  "grid grid-cols-[minmax(148px,1fr)_minmax(200px,1.05fr)_96px_minmax(92px,0.8fr)_76px_minmax(228px,1fr)] gap-x-2";
+  "grid grid-cols-[minmax(148px,1fr)_minmax(200px,1.05fr)_96px_minmax(92px,0.8fr)_76px_minmax(280px,1fr)] gap-x-2";
 
 export default function EmpresasTable() {
   const router = useRouter();
@@ -83,6 +88,8 @@ export default function EmpresasTable() {
 
   const [editingRubroForId, setEditingRubroForId] = useState<string | null>(null);
   const [pendingRubroId, setPendingRubroId] = useState<string | null>(null);
+  const [editModalEmpresa, setEditModalEmpresa] = useState<Empresa | null>(null);
+  const [editModalSaving, setEditModalSaving] = useState(false);
 
   const rubroNombreToIdRef = useRef<Map<string, string> | null>(null);
   const rubroMapLoadingRef = useRef<Promise<Map<string, string>> | null>(null);
@@ -185,12 +192,54 @@ export default function EmpresasTable() {
     }
   }
 
+  async function saveIniciativaBasica(id: string, payload: IniciativaBasicSavePayload) {
+    setError(null);
+    setEditModalSaving(true);
+    try {
+      const res = await fetch(`/api/admin/iniciativas/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+        body: JSON.stringify({
+          nombre: payload.nombre,
+          web: payload.web,
+          contacto_nombre: payload.contacto_nombre,
+          email: payload.email,
+          telefono: payload.telefono,
+          rubro_id: payload.rubro_id,
+          descripcion: payload.descripcion,
+        }),
+      });
+      const json = (await res.json()) as EmpresaApiResponse;
+      if (!res.ok) throw new Error(json?.error ?? "Error guardando cambios");
+
+      const updated = json?.data ?? null;
+      if (!updated) throw new Error("No se recibió la iniciativa actualizada");
+
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === id ? { ...r, ...updated, rubro_id: (updated as any).rubro_id ?? null } : r
+        )
+      );
+      flash("Cambios guardados.");
+      setEditModalEmpresa(null);
+    } catch (e: any) {
+      setError(e?.message ?? "Error guardando cambios");
+      throw e;
+    } finally {
+      setEditModalSaving(false);
+    }
+  }
+
   async function descartarFila(id: string) {
     if (!window.confirm("¿Descartar esta iniciativa? Podés volver a abrirla desde Detalle si hace falta.")) {
       return;
     }
     try {
-      await patchEmpresa(id, { estado_revision: "descartada" });
+      await patchEmpresa(id, { estado_revision: "descartado" });
       flash("Iniciativa marcada como descartada.");
     } catch {
       /* error en patchEmpresa */
@@ -249,9 +298,8 @@ export default function EmpresasTable() {
     let convertidas = 0;
     let descartadas = 0;
     for (const e of rows) {
-      const k = (e.estado_revision ?? "").trim().toLowerCase();
       if (esConvertidaVisualmente(e.estado_revision, e.converted_lead_id)) convertidas += 1;
-      if (k === "descartada") descartadas += 1;
+      if (normalizeEstadoRevisionLectura(e.estado_revision) === "descartado") descartadas += 1;
     }
     return { total, convertidas, descartadas };
   }, [rows]);
@@ -260,11 +308,13 @@ export default function EmpresasTable() {
     const term = q.trim().toLowerCase();
     let list = [...rows];
 
-    list = list.filter((e) => matchesFiltroBucket(e.estado_revision, filtroBucket));
+    list = list.filter((e) => matchesFiltroBucket(e.estado_revision, filtroBucket, e.converted_lead_id));
 
     if (term.length) {
       list = list.filter((e) => {
-        const bucketLabel = labelDecisionBucket(decisionBucketFromEstado(e.estado_revision)).toLowerCase();
+        const bucketLabel = labelDecisionBucket(
+          decisionBucketFromEstado(e.estado_revision, e.converted_lead_id)
+        ).toLowerCase();
         const haystack = [
           e.nombre ?? "",
           e.rubro ?? "",
@@ -340,6 +390,18 @@ export default function EmpresasTable() {
 
   return (
     <div className="rounded-2xl border bg-white p-6">
+      <EditarIniciativaModal
+        iniciativa={editModalEmpresa}
+        onClose={() => {
+          if (!editModalSaving) setEditModalEmpresa(null);
+        }}
+        onSave={async (payload) => {
+          const row = editModalEmpresa;
+          if (!row) return;
+          await saveIniciativaBasica(row.id, payload);
+        }}
+        saving={editModalSaving}
+      />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-slate-900">Bandeja de decisión</h2>
@@ -429,7 +491,7 @@ export default function EmpresasTable() {
       </div>
 
       <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
-        <div className="min-w-[940px]">
+        <div className="min-w-[1000px]">
           <div className={`${GRID_HEAD} bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600`}>
             <div>Iniciativa</div>
             <div>
@@ -457,15 +519,12 @@ export default function EmpresasTable() {
               {empresasFiltradas.map((e) => {
                 const busy = mutatingId === e.id;
                 const isEditingRubro = editingRubroForId === e.id;
-                const revision = (e.estado_revision ?? "").trim().toLowerCase();
+                const revisionNorm = normalizeEstadoRevisionLectura(e.estado_revision);
                 const tieneLead = Boolean(e.converted_lead_id?.trim());
-                const puedeConvertir =
-                  revision !== "descartada" &&
-                  revision !== "convertida_a_lead" &&
-                  !tieneLead;
-                const puedeDescartar =
-                  revision !== "descartada" && revision !== "convertida_a_lead" && !tieneLead;
-                const bucket = decisionBucketFromEstado(e.estado_revision);
+                const descartada = revisionNorm === "descartado";
+                const puedeConvertir = !descartada && !tieneLead;
+                const puedeDescartar = !descartada && !tieneLead;
+                const bucket = decisionBucketFromEstado(e.estado_revision, e.converted_lead_id);
                 const ia = getInitiativeAiAssessment(e);
 
                 return (
@@ -602,6 +661,18 @@ export default function EmpresasTable() {
                         </button>
                       ) : null}
 
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelEditRubro();
+                          setEditModalEmpresa(e);
+                        }}
+                        disabled={busy || loading || editModalSaving}
+                        className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Editar
+                      </button>
+
                       <Link
                         href={`/admin/empresas/${e.id}`}
                         className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -618,7 +689,9 @@ export default function EmpresasTable() {
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        El rubro se guarda al confirmar con OK. Convertir abre el lead en LEADS87 cuando la operación es correcta.
+        El rubro en columna se guarda con OK. <strong className="font-medium text-slate-600">Editar</strong> abre un
+        modal con datos básicos (un solo botón verde al guardar). Convertir abre el lead en LEADS87 cuando la operación
+        es correcta.
       </p>
     </div>
   );
